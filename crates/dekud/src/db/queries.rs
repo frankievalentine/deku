@@ -697,7 +697,7 @@ pub async fn add_ssh_key(
     )
     .execute(pool)
     .await
-    .map_err(|e| DekuError::Database(e.to_string()))?;
+    .map_err(DekuError::Database)?;
 
     Ok(SshKey {
         id,
@@ -713,12 +713,12 @@ pub async fn list_ssh_keys(pool: &SqlitePool) -> Result<Vec<SshKey>> {
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| DekuError::Database(e.to_string()))?;
+    .map_err(DekuError::Database)?;
 
     Ok(rows
         .into_iter()
         .map(|r| SshKey {
-            id: r.id,
+            id: r.id.unwrap_or_default(),
             name: r.name,
             public_key: r.public_key,
             fingerprint: r.fingerprint,
@@ -736,10 +736,10 @@ pub async fn find_ssh_key_by_fingerprint(
     )
     .fetch_optional(pool)
     .await
-    .map_err(|e| DekuError::Database(e.to_string()))?;
+    .map_err(DekuError::Database)?;
 
     Ok(row.map(|r| SshKey {
-        id: r.id,
+        id: r.id.unwrap_or_default(),
         name: r.name,
         public_key: r.public_key,
         fingerprint: r.fingerprint,
@@ -750,7 +750,7 @@ pub async fn remove_ssh_key(pool: &SqlitePool, name: &str) -> Result<()> {
     sqlx::query!(r#"DELETE FROM ssh_keys WHERE name = ?1"#, name)
         .execute(pool)
         .await
-        .map_err(|e| DekuError::Database(e.to_string()))?;
+        .map_err(DekuError::Database)?;
     Ok(())
 }
 

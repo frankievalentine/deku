@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO ssh_keys (id, name, public_key, fingerprint) VALUES (?1, ?2, ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "75bba20691e813e28034b254b4ff71bcca9e54d33bb5a78ae758e0150204d6d6"
+}

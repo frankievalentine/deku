@@ -36,6 +36,7 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub events: EventSender,
     pub docker: DockerClient,
+    pub plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
 }
 
 impl AppState {
@@ -44,12 +45,14 @@ impl AppState {
         pool: SqlitePool,
         events: EventSender,
         docker: DockerClient,
+        plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     ) -> Arc<Self> {
         Arc::new(Self {
             config,
             pool,
             events,
             docker,
+            plugins,
         })
     }
 }
@@ -95,6 +98,14 @@ fn build_router(state: SharedState) -> Router {
         // Routing table
         .route("/api/routing", get(list_routing))
         .route("/api/routing/{name}", post(update_routing))
+        // SSH keys
+        .route("/api/ssh-keys", get(list_ssh_keys).post(add_ssh_key))
+        .route("/api/ssh-keys/{name}", delete(remove_ssh_key))
+        // Plugins
+        .route("/api/plugins", get(list_plugins).post(install_plugin))
+        .route("/api/plugins/{name}", delete(uninstall_plugin))
+        // Archive deploy
+        .route("/api/apps/{name}/deploy/archive", post(deploy_archive))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
@@ -905,4 +916,228 @@ async fn build_routing_table(
     }
 
     Ok(table)
+}
+
+// ── SSH Keys ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct AddSshKeyBody {
+    name: String,
+    public_key: String,
+}
+
+async fn list_ssh_keys(State(state): State<SharedState>) -> impl IntoResponse {
+    match queries::list_ssh_keys(&state.pool).await {
+        Ok(keys) => {
+            let json: Vec<_> = keys
+                .iter()
+                .map(|k| {
+                    serde_json::json!({
+                        "id": k.id,
+                        "name": k.name,
+                        "fingerprint": k.fingerprint,
+                    })
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!(json))).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn add_ssh_key(
+    State(state): State<SharedState>,
+    Json(body): Json<AddSshKeyBody>,
+) -> impl IntoResponse {
+    use russh::keys::ssh_key::{HashAlg, PublicKey};
+
+    let parsed = match PublicKey::from_openssh(&body.public_key) {
+        Ok(k) => k,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid public key: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let fingerprint = parsed.fingerprint(HashAlg::Sha256).to_string();
+
+    match queries::add_ssh_key(&state.pool, &body.name, &body.public_key, &fingerprint).await {
+        Ok(key) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": key.id,
+                "name": key.name,
+                "fingerprint": key.fingerprint,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn remove_ssh_key(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match queries::remove_ssh_key(&state.pool, &name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => not_found(e).into_response(),
+    }
+}
+
+// ── Plugins ───────────────────────────────────────────────────────────────────
+
+async fn list_plugins(State(state): State<SharedState>) -> impl IntoResponse {
+    let plugins = state.plugins.list_plugins().await;
+    let json: Vec<_> = plugins
+        .iter()
+        .map(|(name, version, path)| {
+            serde_json::json!({
+                "name": name,
+                "version": version,
+                "path": path.display().to_string(),
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(serde_json::json!(json))).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallPluginBody {
+    path: String,
+}
+
+async fn install_plugin(
+    State(state): State<SharedState>,
+    Json(body): Json<InstallPluginBody>,
+) -> impl IntoResponse {
+    let path = std::path::Path::new(&body.path);
+    match state.plugins.load_plugin(path).await {
+        Ok(name) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "name": name })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn uninstall_plugin(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match state.plugins.unload_plugin(&name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => not_found(e).into_response(),
+    }
+}
+
+// ── Archive deploy ────────────────────────────────────────────────────────────
+
+fn write_temp_archive(bytes: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    let mut tmp = tempfile::NamedTempFile::new()?;
+    tmp.write_all(bytes)?;
+    let (_, path) = tmp.keep().map_err(|e| e.error)?;
+    Ok(path)
+}
+
+#[derive(Debug, Deserialize)]
+struct ArchiveDeployQuery {
+    builder: Option<String>,
+}
+
+async fn deploy_archive(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Query(params): Query<ArchiveDeployQuery>,
+    mut multipart: axum::extract::Multipart,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(a) => a,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    if app.locked {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "app is locked" })),
+        )
+            .into_response();
+    }
+
+    // Read archive bytes from multipart field named "archive"
+    let mut archive_bytes: Option<Vec<u8>> = None;
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) if field.name() == Some("archive") => {
+                match field.bytes().await {
+                    Ok(b) => {
+                        archive_bytes = Some(b.to_vec());
+                        break;
+                    }
+                    Err(e) => return internal_error(e).into_response(),
+                }
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) => break,
+            Err(e) => return internal_error(e).into_response(),
+        }
+    }
+
+    let bytes = match archive_bytes {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "missing 'archive' field in multipart body" })),
+            )
+                .into_response();
+        }
+    };
+
+    let tmp_path = match write_temp_archive(&bytes) {
+        Ok(p) => p,
+        Err(e) => return internal_error(e).into_response(),
+    };
+    let path_str = tmp_path.to_string_lossy().to_string();
+
+    let req = DeployRequest {
+        app_id: app.id.clone(),
+        app_name: name.clone(),
+        source: DeploySource::Archive { path: path_str.clone() },
+        force_builder: params.builder,
+    };
+
+    let pool = state.pool.clone();
+    let docker = state.docker.clone();
+    let events = state.events.clone();
+    let cfg = state.config.clone();
+    let app_id = app.id.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = crate::deploy::run_deploy(&pool, &docker, &events, &cfg, req).await {
+            tracing::error!(app = %app_id, "archive deploy failed: {e}");
+        }
+        let _ = std::fs::remove_file(&path_str);
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "message": "deploy started", "app": name })),
+    )
+        .into_response()
 }

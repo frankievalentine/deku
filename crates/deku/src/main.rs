@@ -14,6 +14,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// First-run setup wizard
+    Setup,
     /// Application management
     Apps(commands::apps::AppsArgs),
     /// Configuration variables
@@ -35,9 +37,15 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Commands::Setup = cli.command {
+        return commands::setup::run();
+    }
+
     let client = client::DekuClient::new()?;
 
     match cli.command {
+        Commands::Setup => unreachable!(),
         Commands::Apps(args) => commands::apps::run(args, &client).await,
         Commands::Config(args) => commands::config::run(args, &client).await,
         Commands::Deploy(args) => commands::deploy::run(args, &client).await,

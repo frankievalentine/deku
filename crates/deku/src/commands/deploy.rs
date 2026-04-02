@@ -40,7 +40,7 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
         DeployCommands::Run { app, path, image, builder } => {
             if let Some(img) = image {
                 println!("Deploying image '{img}' to app '{app}'...");
-                let mut body = serde_json::json!({ "image": img });
+                let mut body = serde_json::json!({ "source": "image", "image": img });
                 if let Some(b) = builder {
                     body["builder"] = serde_json::Value::String(b);
                 }
@@ -94,7 +94,7 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
         DeployCommands::Rollback { app, to } => {
             let mut body = serde_json::json!({});
             if let Some(id) = to {
-                body["to_deployment_id"] = serde_json::Value::String(id);
+                body["deployment_id"] = serde_json::Value::String(id);
             }
             let resp = client.post(&format!("/api/apps/{app}/rollback"), body).await?;
             let deploy_id = resp["deploy_id"].as_str().unwrap_or("?");

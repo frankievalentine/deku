@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use russh::keys::ssh_key::PublicKey;
 use russh::server::{Auth, Msg, Server as RusshServer, Session};
-use russh::{Channel, ChannelId};
+use russh::{Channel, ChannelReadHalf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::api::SharedState;
@@ -48,7 +48,7 @@ async fn load_or_generate_host_key(data_dir: &std::path::Path) -> Result<russh::
 
     tokio::fs::create_dir_all(data_dir).await?;
     let pem = key
-        .to_openssh(russh::keys::ssh_key::pem::LineEnding::LF)
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
         .map_err(|e| anyhow::anyhow!("failed to serialize host key: {e}"))?;
     tokio::fs::write(&key_path, pem.as_bytes()).await?;
 
@@ -103,12 +103,14 @@ impl russh::server::Handler for SshHandler {
                 tracing::warn!(%fingerprint, "SSH key rejected: not found");
                 Ok(Auth::Reject {
                     proceed_with_methods: None,
+                    partial_success: false,
                 })
             }
             Err(e) => {
                 tracing::error!("DB error during SSH auth: {e}");
                 Ok(Auth::Reject {
                     proceed_with_methods: None,
+                    partial_success: false,
                 })
             }
         }
@@ -130,20 +132,19 @@ async fn handle_channel(mut channel: Channel<Msg>, state: SharedState) {
         if let russh::ChannelMsg::Exec { command, .. } = msg {
             let cmd = String::from_utf8_lossy(&command).to_string();
             tracing::info!(cmd = %cmd, "SSH exec");
-            let exit_code = run_git_command(&mut channel, &state, &cmd).await;
-            let _ = channel.exit_status(exit_code).await;
-            let _ = channel.close().await;
+            run_git_command(channel, &state, &cmd).await;
             return;
         }
     }
 }
 
-async fn run_git_command(channel: &mut Channel<Msg>, state: &SharedState, cmd: &str) -> u32 {
+async fn run_git_command(channel: Channel<Msg>, state: &SharedState, cmd: &str) {
     let app_name = match parse_git_receive_pack(cmd) {
         Some(n) => n,
         None => {
-            send_stderr(channel, b"deku: unsupported command\n").await;
-            return 1;
+            tracing::warn!("SSH: unsupported command: {cmd}");
+            let _ = channel.close().await;
+            return;
         }
     };
 
@@ -153,18 +154,18 @@ async fn run_git_command(channel: &mut Channel<Msg>, state: &SharedState, cmd: &
     let app = match queries::get_app_by_name(pool, &app_name).await {
         Ok(app) => app,
         Err(e) => {
-            let msg = format!("deku: app '{app_name}' not found: {e}\n");
-            send_stderr(channel, msg.as_bytes()).await;
-            return 1;
+            tracing::warn!("SSH: app '{app_name}' not found: {e}");
+            let _ = channel.close().await;
+            return;
         }
     };
 
     let git_dir = cfg.data_dir.join("git-repos").join(format!("{app_name}.git"));
     if !git_dir.exists() {
         if let Err(e) = init_bare_repo(&git_dir).await {
-            let msg = format!("deku: failed to init git repo: {e}\n");
-            send_stderr(channel, msg.as_bytes()).await;
-            return 1;
+            tracing::error!("SSH: failed to init git repo: {e}");
+            let _ = channel.close().await;
+            return;
         }
     }
 
@@ -177,33 +178,27 @@ async fn run_git_command(channel: &mut Channel<Msg>, state: &SharedState, cmd: &
     {
         Ok(c) => c,
         Err(e) => {
-            let msg = format!("deku: failed to spawn git-receive-pack: {e}\n");
-            send_stderr(channel, msg.as_bytes()).await;
-            return 1;
+            tracing::error!("SSH: failed to spawn git-receive-pack: {e}");
+            let _ = channel.close().await;
+            return;
         }
     };
 
-    let mut child_stdin = child.stdin.take().expect("stdin");
+    let child_stdin = child.stdin.take().expect("stdin");
     let mut child_stdout = child.stdout.take().expect("stdout");
     let mut child_stderr = child.stderr.take().expect("stderr");
 
-    let mut ssh_reader = channel.make_reader();
-    let stdin_task = tokio::spawn(async move {
-        let mut buf = vec![0u8; 8192];
-        loop {
-            match ssh_reader.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if child_stdin.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = child_stdin.shutdown().await;
-    });
+    // Split channel so the read half can be owned by a spawned task
+    let (read_half, write_half) = channel.split();
 
-    let mut ssh_writer = channel.make_writer();
+    // writer handles are 'static (don't borrow write_half)
+    let mut ssh_writer = write_half.make_writer();
+    let mut ssh_stderr_writer = write_half.make_writer_ext(Some(1));
+
+    // ssh → child stdin: spawn with owned read_half
+    let stdin_task = tokio::spawn(pipe_read_to_write(read_half, child_stdin));
+
+    // child stdout → ssh
     let stdout_task = tokio::spawn(async move {
         let mut buf = vec![0u8; 8192];
         loop {
@@ -218,14 +213,14 @@ async fn run_git_command(channel: &mut Channel<Msg>, state: &SharedState, cmd: &
         }
     });
 
-    let mut ssh_stderr = channel.make_writer_ext(Some(1));
+    // child stderr → ssh extended data (stream 1)
     let stderr_task = tokio::spawn(async move {
         let mut buf = vec![0u8; 8192];
         loop {
             match child_stderr.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if ssh_stderr.write_all(&buf[..n]).await.is_err() {
+                    if ssh_stderr_writer.write_all(&buf[..n]).await.is_err() {
                         break;
                     }
                 }
@@ -243,11 +238,31 @@ async fn run_git_command(channel: &mut Channel<Msg>, state: &SharedState, cmd: &
 
     let _ = tokio::join!(stdin_task, stdout_task, stderr_task);
 
+    let _ = write_half.exit_status(exit_status).await;
+    let _ = write_half.close().await;
+
     if exit_status == 0 {
         trigger_deploy_from_git(state, &app, git_dir);
     }
+}
 
-    exit_status
+async fn pipe_read_to_write(
+    mut read_half: ChannelReadHalf,
+    mut writer: tokio::process::ChildStdin,
+) {
+    let mut buf = vec![0u8; 8192];
+    let mut reader = read_half.make_reader();
+    loop {
+        match reader.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if writer.write_all(&buf[..n]).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    let _ = writer.shutdown().await;
 }
 
 fn trigger_deploy_from_git(
@@ -329,9 +344,4 @@ async fn init_bare_repo(path: &PathBuf) -> Result<()> {
         return Err(anyhow::anyhow!("git init --bare failed"));
     }
     Ok(())
-}
-
-async fn send_stderr(channel: &mut Channel<Msg>, msg: &[u8]) {
-    let mut w = channel.make_writer_ext(Some(1));
-    let _ = w.write_all(msg).await;
 }
