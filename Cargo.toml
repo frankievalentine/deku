@@ -30,18 +30,32 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
-bollard = "0.18"
-russh = "0.46"
-cliclack = "0.3"
+reqwest = { version = "0.13", features = ["json", "stream"] }
+bollard = "0.20"
+russh = "0.59"
+cliclack = "0.5"
 handlebars = "6"
 config = "0.15"
-toml = "0.8"
+toml = "1"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 tokio-stream = "0.1"
 futures = "0.3"
-libloading = "0.8"
+libloading = "0.9"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+pedantic = "warn"
+# Too noisy / conflicts with our naming conventions
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Useful casts are fine in systems code
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
 
 [profile.release]
 opt-level = 3
