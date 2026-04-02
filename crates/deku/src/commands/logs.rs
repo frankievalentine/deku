@@ -1,6 +1,6 @@
+use crate::client::DekuClient;
 use anyhow::Result;
 use clap::Args;
-use crate::client::DekuClient;
 
 #[derive(Debug, Args)]
 pub struct LogsArgs {
@@ -8,7 +8,12 @@ pub struct LogsArgs {
     app: String,
     #[arg(short, long, help = "Follow log output")]
     follow: bool,
-    #[arg(short = 'n', long, help = "Number of lines to show", default_value = "100")]
+    #[arg(
+        short = 'n',
+        long,
+        help = "Number of lines to show",
+        default_value = "100"
+    )]
     lines: u32,
 }
 

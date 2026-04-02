@@ -1,6 +1,6 @@
+use crate::client::DekuClient;
 use anyhow::Result;
 use clap::Args;
-use crate::client::DekuClient;
 
 #[derive(Debug, Args)]
 pub struct DomainsArgs {

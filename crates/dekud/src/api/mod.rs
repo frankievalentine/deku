@@ -1,12 +1,6 @@
 use std::future::IntoFuture;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UnixListener};
@@ -30,7 +24,11 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: DekuConfig, pool: SqlitePool, events: EventSender) -> Arc<Self> {
-        Arc::new(Self { config, pool, events })
+        Arc::new(Self {
+            config,
+            pool,
+            events,
+        })
     }
 }
 
@@ -40,7 +38,7 @@ pub async fn serve(state: SharedState) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(health_check))
         .route("/api/apps", get(list_apps).post(create_app))
-        .route("/api/apps/:name", get(get_app).delete(delete_app))
+        .route("/api/apps/{name}", get(get_app).delete(delete_app))
         .route("/api/events", get(list_events))
         .with_state(state.clone())
         .layer(TraceLayer::new_for_http());

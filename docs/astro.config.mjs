@@ -6,9 +6,9 @@ export default defineConfig({
     starlight({
       title: 'Deku',
       description: 'A modern, lightweight self-hosted PaaS',
-      social: {
-        github: 'https://github.com/your-org/deku',
-      },
+      social: [
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/your-org/deku' },
+      ],
       sidebar: [
         { label: 'Getting Started', items: [
           { label: 'Introduction', link: '/docs/introduction/' },

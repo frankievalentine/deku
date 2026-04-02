@@ -37,7 +37,9 @@ pub async fn run(args: AppsArgs, client: &DekuClient) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         AppsCommands::Create { name } => {
-            let data = client.post("/api/apps", serde_json::json!({ "name": name })).await?;
+            let data = client
+                .post("/api/apps", serde_json::json!({ "name": name }))
+                .await?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         AppsCommands::Destroy { name } => {
