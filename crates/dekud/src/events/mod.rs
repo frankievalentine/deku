@@ -1,13 +1,14 @@
+use chrono::Utc;
 use deku_core::types::Event;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use chrono::Utc;
 
 pub type EventSender = Arc<EventBus>;
 
 #[derive(Debug, Clone)]
 pub struct EventBus {
+    #[allow(dead_code)]
     tx: broadcast::Sender<Event>,
 }
 
@@ -17,11 +18,18 @@ impl EventBus {
         Arc::new(Self { tx })
     }
 
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.tx.subscribe()
     }
 
-    pub fn emit(&self, app_id: Option<String>, event_type: impl Into<String>, payload: Option<serde_json::Value>) {
+    #[allow(dead_code)]
+    pub fn emit(
+        &self,
+        app_id: Option<String>,
+        event_type: impl Into<String>,
+        payload: Option<serde_json::Value>,
+    ) {
         let event = Event {
             id: Uuid::new_v4().to_string(),
             app_id,
@@ -29,7 +37,6 @@ impl EventBus {
             payload: payload.map(|p| p.to_string()),
             created_at: Utc::now(),
         };
-        // Ignore send errors (no subscribers is fine)
         let _ = self.tx.send(event);
     }
 }

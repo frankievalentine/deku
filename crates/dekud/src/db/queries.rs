@@ -1,8 +1,6 @@
+use deku_core::error::{DekuError, Result};
 use deku_core::types::{App, AppStatus, NewApp};
 use sqlx::SqlitePool;
-use uuid::Uuid;
-use chrono::Utc;
-use deku_core::error::{DekuError, Result};
 
 pub async fn create_app(pool: &SqlitePool, new_app: &NewApp) -> Result<App> {
     let app = App::new(&new_app.name);
@@ -25,8 +23,12 @@ pub async fn create_app(pool: &SqlitePool, new_app: &NewApp) -> Result<App> {
 pub async fn get_app(pool: &SqlitePool, name: &str) -> Result<App> {
     sqlx::query_as!(
         App,
-        r#"SELECT id, name, created_at as "created_at: _",
-           locked, status as "status: AppStatus"
+        r#"SELECT
+            id       as "id!",
+            name     as "name!",
+            created_at as "created_at!: _",
+            locked   as "locked!",
+            status   as "status!: AppStatus"
            FROM apps WHERE name = ?1"#,
         name
     )
@@ -38,8 +40,12 @@ pub async fn get_app(pool: &SqlitePool, name: &str) -> Result<App> {
 pub async fn list_apps(pool: &SqlitePool) -> Result<Vec<App>> {
     let apps = sqlx::query_as!(
         App,
-        r#"SELECT id, name, created_at as "created_at: _",
-           locked, status as "status: AppStatus"
+        r#"SELECT
+            id       as "id!",
+            name     as "name!",
+            created_at as "created_at!: _",
+            locked   as "locked!",
+            status   as "status!: AppStatus"
            FROM apps ORDER BY name"#,
     )
     .fetch_all(pool)

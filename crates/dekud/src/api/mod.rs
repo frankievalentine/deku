@@ -1,8 +1,10 @@
+use std::future::IntoFuture;
+
 use axum::{
     extract::State,
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::get,
     Json, Router,
 };
 use sqlx::SqlitePool;
@@ -12,8 +14,8 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use crate::config::DekuConfig;
-use crate::events::EventSender;
 use crate::db::queries;
+use crate::events::EventSender;
 use deku_core::types::NewApp;
 
 pub mod auth;
@@ -22,6 +24,7 @@ pub mod auth;
 pub struct AppState {
     pub config: DekuConfig,
     pub pool: SqlitePool,
+    #[allow(dead_code)]
     pub events: EventSender,
 }
 
@@ -131,6 +134,6 @@ async fn delete_app(
     }
 }
 
-async fn list_events(State(state): State<SharedState>) -> impl IntoResponse {
+async fn list_events(_state: State<SharedState>) -> impl IntoResponse {
     Json(serde_json::json!({ "events": [] }))
 }

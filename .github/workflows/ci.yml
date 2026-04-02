@@ -10,6 +10,8 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    env:
+      SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable

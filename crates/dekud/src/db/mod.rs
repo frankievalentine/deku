@@ -1,6 +1,5 @@
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-use std::path::Path;
 
 use crate::config::DekuConfig;
 

@@ -1,5 +1,6 @@
 // Builder trait and implementations.
 // Full implementation in Milestone 3.
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 use deku_core::error::Result;

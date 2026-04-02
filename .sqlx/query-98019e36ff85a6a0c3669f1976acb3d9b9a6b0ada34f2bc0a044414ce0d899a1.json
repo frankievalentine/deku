@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO apps (id, name, created_at, locked, status)\n           VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "98019e36ff85a6a0c3669f1976acb3d9b9a6b0ada34f2bc0a044414ce0d899a1"
+}
