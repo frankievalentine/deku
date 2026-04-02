@@ -1,0 +1,15 @@
+[Unit]
+Description=Deku PaaS Daemon
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dekud
+Restart=always
+RestartSec=5
+User=root
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

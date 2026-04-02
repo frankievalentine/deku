@@ -1,0 +1,11 @@
+[package]
+name = "deku-plugin-sdk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+deku-core = { path = "../deku-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"

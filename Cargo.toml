@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/deku",
+    "crates/dekud",
+    "crates/deku-core",
+    "crates/deku-plugin-sdk",
+    "plugins/deku-plugin-postgres",
+    "plugins/deku-plugin-redis",
+    "plugins/deku-plugin-mysql",
+    "plugins/deku-plugin-letsencrypt",
+    "plugins/deku-plugin-checks",
+    "plugins/deku-plugin-storage",
+    "plugins/deku-plugin-network",
+    "plugins/deku-plugin-cron",
+    "plugins/deku-plugin-git",
+    "plugins/deku-plugin-domains",
+]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "uuid", "chrono"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+bollard = "0.18"
+russh = "0.46"
+cliclack = "0.3"
+handlebars = "6"
+config = "0.15"
+toml = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+tokio-stream = "0.1"
+futures = "0.3"
+libloading = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

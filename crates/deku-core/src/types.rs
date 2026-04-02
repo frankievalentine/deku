@@ -1,0 +1,206 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct App {
+    pub id: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub locked: bool,
+    pub status: AppStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT")]
+#[serde(rename_all = "snake_case")]
+pub enum AppStatus {
+    Created,
+    Deployed,
+    Stopped,
+    Error,
+}
+
+impl std::fmt::Display for AppStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Created => write!(f, "created"),
+            Self::Deployed => write!(f, "deployed"),
+            Self::Stopped => write!(f, "stopped"),
+            Self::Error => write!(f, "error"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Deployment {
+    pub id: String,
+    pub app_id: String,
+    pub status: DeployStatus,
+    pub builder: BuilderType,
+    pub image_tag: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT")]
+#[serde(rename_all = "snake_case")]
+pub enum DeployStatus {
+    Pending,
+    Building,
+    Built,
+    Deploying,
+    HealthChecking,
+    Live,
+    Failed,
+    RolledBack,
+}
+
+impl std::fmt::Display for DeployStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::Building => "building",
+            Self::Built => "built",
+            Self::Deploying => "deploying",
+            Self::HealthChecking => "health_checking",
+            Self::Live => "live",
+            Self::Failed => "failed",
+            Self::RolledBack => "rolled_back",
+        };
+        write!(f, "{s}")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT")]
+#[serde(rename_all = "snake_case")]
+pub enum BuilderType {
+    Dockerfile,
+    Nixpacks,
+    Pack,
+    Image,
+    Archive,
+    Compose,
+}
+
+impl std::fmt::Display for BuilderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Dockerfile => "dockerfile",
+            Self::Nixpacks => "nixpacks",
+            Self::Pack => "pack",
+            Self::Image => "image",
+            Self::Archive => "archive",
+            Self::Compose => "compose",
+        };
+        write!(f, "{s}")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ConfigVar {
+    pub app_id: String,
+    pub key: String,
+    pub value: String,
+    pub is_global: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Domain {
+    pub id: String,
+    pub app_id: String,
+    pub domain: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PortMapping {
+    pub id: String,
+    pub app_id: String,
+    pub host_port: i64,
+    pub container_port: i64,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct StorageMount {
+    pub id: String,
+    pub app_id: String,
+    pub host_path: String,
+    pub container_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ResourceLimit {
+    pub app_id: String,
+    pub process_type: String,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    pub memory_swap: Option<String>,
+    pub network: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SshKey {
+    pub id: String,
+    pub name: String,
+    pub public_key: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Event {
+    pub id: String,
+    pub app_id: Option<String>,
+    pub event_type: String,
+    pub payload: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ProcessScale {
+    pub app_id: String,
+    pub process_type: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DockerOption {
+    pub id: String,
+    pub app_id: String,
+    pub phase: String,
+    pub option: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AppNetwork {
+    pub app_id: String,
+    pub network_id: String,
+    pub attach_phase: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewApp {
+    pub name: String,
+}
+
+impl App {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            created_at: Utc::now(),
+            locked: false,
+            status: AppStatus::Created,
+        }
+    }
+}
