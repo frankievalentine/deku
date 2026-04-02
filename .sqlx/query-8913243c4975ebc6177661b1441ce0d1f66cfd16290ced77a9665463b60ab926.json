@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            id            as \"id!\",\n            app_id        as \"app_id!\",\n            status        as \"status!: DeployStatus\",\n            builder       as \"builder!: BuilderType\",\n            image_tag     as \"image_tag\",\n            created_at    as \"created_at!: _\",\n            finished_at   as \"finished_at: _\"\n           FROM deployments\n           WHERE app_id = ?1 AND id != ?2 AND status = 'live'\n           ORDER BY created_at DESC\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "status!: DeployStatus",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "builder!: BuilderType",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_tag",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: _",
+        "ordinal": 5,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "finished_at: _",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "8913243c4975ebc6177661b1441ce0d1f66cfd16290ced77a9665463b60ab926"
+}

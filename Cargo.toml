@@ -30,7 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.13", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream", "multipart"] }
 bollard = "0.20"
 russh = "0.59"
 cliclack = "0.5"
@@ -39,7 +39,7 @@ config = "0.15"
 toml = "1"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 libloading = "0.9"
 

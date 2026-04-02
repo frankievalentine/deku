@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            id            as \"id!\",\n            app_id        as \"app_id!\",\n            deployment_id as \"deployment_id!\",\n            process_type  as \"process_type!\",\n            status        as \"status!\",\n            host_port     as \"host_port\",\n            created_at    as \"created_at!: _\"\n           FROM containers\n           WHERE deployment_id = ?1 AND status = 'running'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "deployment_id!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "process_type!",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "status!",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "host_port",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at!: _",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e323761a90acd54ad72cf3ad048f066681801590211005d919a737400f7663f1"
+}

@@ -193,6 +193,82 @@ pub struct NewApp {
     pub name: String,
 }
 
+/// Optional project-level configuration file (`deku.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DekuToml {
+    pub build: Option<DekuBuildConfig>,
+    pub deploy: Option<DekuDeployConfig>,
+    pub processes: Option<std::collections::HashMap<String, u32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DekuBuildConfig {
+    /// dockerfile | nixpacks | pack | image | compose | auto
+    pub builder: Option<String>,
+    pub dockerfile: Option<String>,
+    pub context: Option<String>,
+    pub args: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DekuDeployConfig {
+    /// HTTP path for health checks
+    pub healthcheck: Option<String>,
+    /// Override auto-detected container port
+    pub port: Option<u16>,
+    /// Seconds to wait before running health checks
+    pub wait: Option<u64>,
+    /// Timeout per health check attempt (seconds)
+    pub timeout: Option<u64>,
+    /// Maximum health check attempts before rollback
+    pub attempts: Option<u32>,
+    /// Seconds to wait before retiring old containers
+    pub retire: Option<u64>,
+}
+
+/// A parsed Procfile entry.
+#[derive(Debug, Clone)]
+pub struct ProcfileEntry {
+    pub process_type: String,
+    pub command: String,
+}
+
+/// Parses a Procfile from its raw text content.
+pub fn parse_procfile(content: &str) -> Vec<ProcfileEntry> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (proc_type, cmd) = line.split_once(':')?;
+            Some(ProcfileEntry {
+                process_type: proc_type.trim().to_string(),
+                command: cmd.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+/// A running (or previously running) container managed by Deku.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ContainerRecord {
+    pub id: String,
+    pub app_id: String,
+    pub deployment_id: String,
+    pub process_type: String,
+    pub status: String,
+    pub host_port: Option<i64>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Upstream {
+    pub host: String,
+    pub port: u16,
+}
+
 impl App {
     pub fn new(name: impl Into<String>) -> Self {
         Self {

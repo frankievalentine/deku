@@ -14,7 +14,6 @@ mod ssh;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Logging is initialised in config before anything else
     config::init_logging()?;
     info!("dekud starting");
 
@@ -22,8 +21,11 @@ async fn main() -> Result<()> {
     let pool = db::connect(&cfg).await?;
     db::migrate(&pool).await?;
 
-    let event_bus = events::EventBus::new();
-    let state = api::AppState::new(cfg.clone(), pool, event_bus);
+    let docker = container::connect()?;
+    info!("connected to docker daemon");
+
+    let event_bus = events::EventBus::new(pool.clone());
+    let state = api::AppState::new(cfg.clone(), pool, event_bus, docker);
 
     tokio::try_join!(api::serve(state.clone()), ssh::serve(state.clone()),)?;
 

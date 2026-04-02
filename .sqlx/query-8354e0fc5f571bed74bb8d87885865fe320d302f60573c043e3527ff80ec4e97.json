@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            app_id    as \"app_id!\",\n            key       as \"key!\",\n            value     as \"value!\",\n            is_global as \"is_global!\"\n           FROM config_vars\n           WHERE app_id = ?1 OR is_global = TRUE\n           ORDER BY key",
+  "describe": {
+    "columns": [
+      {
+        "name": "app_id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "key!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "value!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_global!",
+        "ordinal": 3,
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8354e0fc5f571bed74bb8d87885865fe320d302f60573c043e3527ff80ec4e97"
+}

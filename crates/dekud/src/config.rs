@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DekuConfig {
@@ -19,6 +20,11 @@ pub struct DekuConfig {
     pub global_domain: Option<String>,
     #[serde(default = "default_container_backend")]
     pub container_backend: String,
+    /// HMAC secret used to sign CLI auth tokens. Generated on first startup.
+    pub auth_secret: Option<String>,
+    /// Directory where Angie per-app config fragments are written.
+    #[serde(default = "default_angie_conf_dir")]
+    pub angie_conf_dir: PathBuf,
 }
 
 fn default_data_dir() -> PathBuf {
@@ -47,6 +53,10 @@ fn default_container_backend() -> String {
     "docker".to_string()
 }
 
+fn default_angie_conf_dir() -> PathBuf {
+    PathBuf::from("/etc/angie/conf.d/deku")
+}
+
 impl Default for DekuConfig {
     fn default() -> Self {
         Self {
@@ -57,20 +67,42 @@ impl Default for DekuConfig {
             ssh_port: default_ssh_port(),
             global_domain: None,
             container_backend: default_container_backend(),
+            auth_secret: None,
+            angie_conf_dir: default_angie_conf_dir(),
         }
     }
+}
+
+fn generate_secret() -> String {
+    // Two UUIDs concatenated = 256 bits of randomness
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+pub fn save(cfg: &DekuConfig) -> Result<()> {
+    std::fs::create_dir_all(&cfg.data_dir)?;
+    let config_path = cfg.data_dir.join("config.toml");
+    let contents = toml::to_string_pretty(cfg)?;
+    std::fs::write(config_path, contents)?;
+    Ok(())
 }
 
 pub fn load() -> Result<DekuConfig> {
     let config_path = default_data_dir().join("config.toml");
 
-    if config_path.exists() {
+    let mut cfg = if config_path.exists() {
         let contents = std::fs::read_to_string(&config_path)?;
-        let cfg: DekuConfig = toml::from_str(&contents)?;
-        Ok(cfg)
+        toml::from_str(&contents)?
     } else {
-        Ok(DekuConfig::default())
+        DekuConfig::default()
+    };
+
+    // Generate auth secret if missing and persist it
+    if cfg.auth_secret.is_none() {
+        cfg.auth_secret = Some(generate_secret());
+        save(&cfg)?;
     }
+
+    Ok(cfg)
 }
 
 pub fn init_logging() -> Result<()> {

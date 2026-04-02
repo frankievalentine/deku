@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n            id       as \"id!\",\n            name     as \"name!\",\n            created_at as \"created_at!: _\",\n            locked   as \"locked!\",\n            status   as \"status!: AppStatus\"\n           FROM apps WHERE name = ?1",
+  "query": "SELECT\n            id         as \"id!\",\n            name       as \"name!\",\n            created_at as \"created_at!: _\",\n            locked     as \"locked!\",\n            status     as \"status!: AppStatus\"\n           FROM apps ORDER BY name",
   "describe": {
     "columns": [
       {
@@ -30,7 +30,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       true,
@@ -40,5 +40,5 @@
       false
     ]
   },
-  "hash": "1c1c7e53a5f2c4bd377a33eb2868358879467bb1327312b8fd523729d3210a56"
+  "hash": "ddd74baa76d96a369f1ef08ddb44d33a8810c04fb40dcc49004dacf6b6d2ddd0"
 }

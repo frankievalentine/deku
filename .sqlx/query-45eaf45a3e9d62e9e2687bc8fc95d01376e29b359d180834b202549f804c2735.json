@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO config_vars (app_id, key, value, is_global)\n           VALUES (?1, ?2, ?3, ?4)\n           ON CONFLICT(app_id, key) DO UPDATE SET value = excluded.value, is_global = excluded.is_global",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "45eaf45a3e9d62e9e2687bc8fc95d01376e29b359d180834b202549f804c2735"
+}

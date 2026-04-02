@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            app_id       as \"app_id!\",\n            process_type as \"process_type!\",\n            cpu          as \"cpu\",\n            memory       as \"memory\",\n            memory_swap  as \"memory_swap\",\n            network      as \"network\"\n           FROM resource_limits\n           WHERE app_id = ?1 AND process_type = '_all_'",
+  "describe": {
+    "columns": [
+      {
+        "name": "app_id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "process_type!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "cpu",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "memory",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "memory_swap",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "network",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "2ebdc5872fb03caada55eee43ad54786a34dbaa8eccee4a810515b6db3c37b24"
+}

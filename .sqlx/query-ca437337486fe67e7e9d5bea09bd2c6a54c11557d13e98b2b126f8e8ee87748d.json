@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            id             as \"id!\",\n            app_id         as \"app_id!\",\n            host_port      as \"host_port!\",\n            container_port as \"container_port!\",\n            protocol       as \"protocol!\"\n           FROM port_mappings WHERE app_id = ?1 ORDER BY host_port",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "host_port!",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "container_port!",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "protocol!",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ca437337486fe67e7e9d5bea09bd2c6a54c11557d13e98b2b126f8e8ee87748d"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM port_mappings WHERE app_id = ?1 AND container_port = ?2 AND protocol = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "f96b8cfc67615e2a748eaa2c02b2d7d3f557294d37ffda4fff1bdc5b7c00e9fc"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO containers (id, app_id, deployment_id, process_type, status, host_port, created_at)\n           VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "f9261283d6650db101bd354fa74041043f5affff5f76827266b105fcaaa2e5db"
+}

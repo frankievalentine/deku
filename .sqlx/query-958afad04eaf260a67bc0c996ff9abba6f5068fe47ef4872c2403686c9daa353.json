@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO process_scale (app_id, process_type, count)\n           VALUES (?1, ?2, ?3)\n           ON CONFLICT(app_id, process_type) DO UPDATE SET count = excluded.count",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "958afad04eaf260a67bc0c996ff9abba6f5068fe47ef4872c2403686c9daa353"
+}

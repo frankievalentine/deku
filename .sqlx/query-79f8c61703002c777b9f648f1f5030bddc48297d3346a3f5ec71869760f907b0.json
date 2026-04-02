@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM config_vars WHERE app_id = ?1 AND key = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "79f8c61703002c777b9f648f1f5030bddc48297d3346a3f5ec71869760f907b0"
+}

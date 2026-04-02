@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            id             as \"id!\",\n            app_id         as \"app_id!\",\n            host_path      as \"host_path!\",\n            container_path as \"container_path!\"\n           FROM storage_mounts WHERE app_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "host_path!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "container_path!",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f059b56c80b5bb95f47f5c42b464e8e41cdd435f547ee5e28c5390947f809b8c"
+}

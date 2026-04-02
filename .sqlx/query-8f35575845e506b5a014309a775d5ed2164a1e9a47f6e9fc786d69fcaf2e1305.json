@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO port_mappings (id, app_id, host_port, container_port, protocol)\n           VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "8f35575845e506b5a014309a775d5ed2164a1e9a47f6e9fc786d69fcaf2e1305"
+}

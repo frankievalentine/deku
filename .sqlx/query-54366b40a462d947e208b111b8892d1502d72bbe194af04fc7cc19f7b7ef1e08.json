@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT process_type as \"process_type!\", count as \"count!\"\n           FROM process_scale WHERE app_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "process_type!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "count!",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "54366b40a462d947e208b111b8892d1502d72bbe194af04fc7cc19f7b7ef1e08"
+}
