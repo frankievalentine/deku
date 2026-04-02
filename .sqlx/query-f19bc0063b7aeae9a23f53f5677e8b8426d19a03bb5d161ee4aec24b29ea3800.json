@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!\", app_id as \"app_id!\", schedule as \"schedule!\",\n              command as \"command!\", created_at as \"created_at!: chrono::DateTime<chrono::Utc>\"\n           FROM cron_entries WHERE app_id = ?1 ORDER BY created_at",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "schedule!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "command!",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: chrono::DateTime<chrono::Utc>",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f19bc0063b7aeae9a23f53f5677e8b8426d19a03bb5d161ee4aec24b29ea3800"
+}

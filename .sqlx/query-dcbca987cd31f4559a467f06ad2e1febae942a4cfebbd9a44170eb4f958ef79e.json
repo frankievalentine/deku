@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM networks WHERE name = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "dcbca987cd31f4559a467f06ad2e1febae942a4cfebbd9a44170eb4f958ef79e"
+}

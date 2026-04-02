@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO storage_mounts (id, app_id, host_path, container_path)\n           VALUES (?1, ?2, ?3, ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "a69628fe1a0144c6d2c3d22a390fd1888cc74a8c66ae5be3dec9fda0385495fa"
+}

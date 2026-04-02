@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM storage_mounts WHERE app_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "03cd19460c7fd170b605b5b3d293ffb48bbdf441972a98b71956b477a55e3b96"
+}

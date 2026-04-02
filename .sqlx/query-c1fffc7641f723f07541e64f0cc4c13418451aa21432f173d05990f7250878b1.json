@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO app_networks (app_id, network_id, attach_phase)\n           VALUES (?1, ?2, ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c1fffc7641f723f07541e64f0cc4c13418451aa21432f173d05990f7250878b1"
+}

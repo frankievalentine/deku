@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM service_links WHERE service_id = ?1 AND app_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0a1487b5a59df3aff0f3def9d532f2e9d14c495649827809e5af7b36066013f9"
+}

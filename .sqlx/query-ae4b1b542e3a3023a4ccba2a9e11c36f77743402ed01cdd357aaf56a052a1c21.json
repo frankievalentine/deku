@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!\", service_id as \"service_id!\", app_id as \"app_id!\", env_key as \"env_key!\"\n           FROM service_links WHERE service_id = ?1 AND app_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "service_id!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "env_key!",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ae4b1b542e3a3023a4ccba2a9e11c36f77743402ed01cdd357aaf56a052a1c21"
+}

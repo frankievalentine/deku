@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM app_networks WHERE app_id = ?1 AND network_id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ede3d6c1a6e62dc18c5e8a58a58015a0adf5965639d59055bda85d32107d5447"
+}

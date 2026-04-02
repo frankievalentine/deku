@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO services (id, name, plugin, container_id, status, config, created_at)\n           VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "8f71d81fffe2af916503d5920b008167a5a6041273c769d8e566982de8aa6fb5"
+}

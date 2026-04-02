@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT n.id as \"id!\", n.name as \"name!\", n.created_at as \"created_at!: chrono::DateTime<chrono::Utc>\"\n           FROM networks n\n           JOIN app_networks an ON an.network_id = n.id\n           WHERE an.app_id = ?1\n           ORDER BY n.name",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: chrono::DateTime<chrono::Utc>",
+        "ordinal": 2,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "1546a0cca6998c566724e5c4a43a01a360e741ab220101bcc5d1fb520e5be3ae"
+}

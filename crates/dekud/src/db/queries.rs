@@ -13,13 +13,14 @@ pub async fn create_app(pool: &SqlitePool, new_app: &NewApp) -> Result<App> {
     let app = App::new(&new_app.name);
 
     sqlx::query!(
-        r#"INSERT INTO apps (id, name, created_at, locked, status)
-           VALUES (?1, ?2, ?3, ?4, ?5)"#,
+        r#"INSERT INTO apps (id, name, created_at, locked, status, tls_enabled)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
         app.id,
         app.name,
         app.created_at,
         app.locked,
         app.status,
+        app.tls_enabled,
     )
     .execute(pool)
     .await?;
@@ -31,11 +32,12 @@ pub async fn get_app(pool: &SqlitePool, name: &str) -> Result<App> {
     sqlx::query_as!(
         App,
         r#"SELECT
-            id         as "id!",
-            name       as "name!",
-            created_at as "created_at!: _",
-            locked     as "locked!",
-            status     as "status!: AppStatus"
+            id          as "id!",
+            name        as "name!",
+            created_at  as "created_at!: _",
+            locked      as "locked!: bool",
+            status      as "status!: AppStatus",
+            tls_enabled as "tls_enabled!: bool"
            FROM apps WHERE name = ?1"#,
         name
     )
@@ -48,11 +50,12 @@ pub async fn get_app_by_id(pool: &SqlitePool, id: &str) -> Result<App> {
     sqlx::query_as!(
         App,
         r#"SELECT
-            id         as "id!",
-            name       as "name!",
-            created_at as "created_at!: _",
-            locked     as "locked!",
-            status     as "status!: AppStatus"
+            id          as "id!",
+            name        as "name!",
+            created_at  as "created_at!: _",
+            locked      as "locked!: bool",
+            status      as "status!: AppStatus",
+            tls_enabled as "tls_enabled!: bool"
            FROM apps WHERE id = ?1"#,
         id
     )
@@ -65,11 +68,12 @@ pub async fn list_apps(pool: &SqlitePool) -> Result<Vec<App>> {
     let apps = sqlx::query_as!(
         App,
         r#"SELECT
-            id         as "id!",
-            name       as "name!",
-            created_at as "created_at!: _",
-            locked     as "locked!",
-            status     as "status!: AppStatus"
+            id          as "id!",
+            name        as "name!",
+            created_at  as "created_at!: _",
+            locked      as "locked!: bool",
+            status      as "status!: AppStatus",
+            tls_enabled as "tls_enabled!: bool"
            FROM apps ORDER BY name"#,
     )
     .fetch_all(pool)
@@ -770,5 +774,443 @@ pub async fn set_process_scale(
     )
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+// ── Storage mounts (write) ────────────────────────────────────────────────────
+
+pub async fn add_storage_mount(
+    pool: &SqlitePool,
+    app_id: &str,
+    host_path: &str,
+    container_path: &str,
+) -> Result<StorageMount> {
+    let row = StorageMount {
+        id: Uuid::new_v4().to_string(),
+        app_id: app_id.to_string(),
+        host_path: host_path.to_string(),
+        container_path: container_path.to_string(),
+    };
+    sqlx::query!(
+        r#"INSERT INTO storage_mounts (id, app_id, host_path, container_path)
+           VALUES (?1, ?2, ?3, ?4)"#,
+        row.id,
+        row.app_id,
+        row.host_path,
+        row.container_path,
+    )
+    .execute(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn remove_storage_mount(
+    pool: &SqlitePool,
+    app_id: &str,
+    mount_id: &str,
+) -> Result<()> {
+    let result = sqlx::query!(
+        "DELETE FROM storage_mounts WHERE app_id = ?1 AND id = ?2",
+        app_id,
+        mount_id
+    )
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(DekuError::Internal(format!("storage mount '{mount_id}' not found")));
+    }
+    Ok(())
+}
+
+// ── Services ──────────────────────────────────────────────────────────────────
+
+pub struct Service {
+    pub id: String,
+    pub name: String,
+    pub plugin: String,
+    pub container_id: Option<String>,
+    pub status: String,
+    pub config: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub struct ServiceLink {
+    pub id: String,
+    pub service_id: String,
+    pub app_id: String,
+    pub env_key: String,
+}
+
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub struct CronEntry {
+    pub id: String,
+    pub app_id: String,
+    pub schedule: String,
+    pub command: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn create_service(
+    pool: &SqlitePool,
+    name: &str,
+    plugin: &str,
+    container_id: Option<&str>,
+    config: &str,
+) -> Result<Service> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    sqlx::query!(
+        r#"INSERT INTO services (id, name, plugin, container_id, status, config, created_at)
+           VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6)"#,
+        id,
+        name,
+        plugin,
+        container_id,
+        config,
+        now,
+    )
+    .execute(pool)
+    .await?;
+    Ok(Service {
+        id,
+        name: name.to_string(),
+        plugin: plugin.to_string(),
+        container_id: container_id.map(str::to_string),
+        status: "running".to_string(),
+        config: config.to_string(),
+        created_at: now,
+    })
+}
+
+pub async fn get_service(pool: &SqlitePool, name: &str) -> Result<Service> {
+    let row = sqlx::query!(
+        r#"SELECT id as "id!", name as "name!", plugin as "plugin!",
+              container_id, status as "status!", config as "config!",
+              created_at as "created_at!: chrono::DateTime<chrono::Utc>"
+           FROM services WHERE name = ?1"#,
+        name
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| DekuError::Database(sqlx::Error::RowNotFound))?;
+    Ok(Service {
+        id: row.id,
+        name: row.name,
+        plugin: row.plugin,
+        container_id: row.container_id,
+        status: row.status,
+        config: row.config,
+        created_at: row.created_at,
+    })
+}
+
+pub async fn list_services(pool: &SqlitePool, plugin: &str) -> Result<Vec<Service>> {
+    let rows = sqlx::query!(
+        r#"SELECT id as "id!", name as "name!", plugin as "plugin!",
+              container_id, status as "status!", config as "config!",
+              created_at as "created_at!: chrono::DateTime<chrono::Utc>"
+           FROM services WHERE plugin = ?1 ORDER BY name"#,
+        plugin
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Service {
+            id: r.id,
+            name: r.name,
+            plugin: r.plugin,
+            container_id: r.container_id,
+            status: r.status,
+            config: r.config,
+            created_at: r.created_at,
+        })
+        .collect())
+}
+
+pub async fn update_service_status(
+    pool: &SqlitePool,
+    service_id: &str,
+    container_id: &str,
+    status: &str,
+) -> Result<()> {
+    sqlx::query!(
+        "UPDATE services SET container_id = ?1, status = ?2 WHERE id = ?3",
+        container_id,
+        status,
+        service_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_service(pool: &SqlitePool, name: &str) -> Result<Vec<ServiceLink>> {
+    let svc = get_service(pool, name).await?;
+    let links = list_service_links(pool, &svc.id).await?;
+    sqlx::query!("DELETE FROM services WHERE id = ?1", svc.id)
+        .execute(pool)
+        .await?;
+    Ok(links)
+}
+
+pub async fn link_service(
+    pool: &SqlitePool,
+    service_id: &str,
+    app_id: &str,
+    env_key: &str,
+) -> Result<ServiceLink> {
+    let id = Uuid::new_v4().to_string();
+    sqlx::query!(
+        r#"INSERT INTO service_links (id, service_id, app_id, env_key)
+           VALUES (?1, ?2, ?3, ?4)"#,
+        id,
+        service_id,
+        app_id,
+        env_key,
+    )
+    .execute(pool)
+    .await?;
+    Ok(ServiceLink {
+        id,
+        service_id: service_id.to_string(),
+        app_id: app_id.to_string(),
+        env_key: env_key.to_string(),
+    })
+}
+
+pub async fn get_service_link(
+    pool: &SqlitePool,
+    service_id: &str,
+    app_id: &str,
+) -> Result<Option<ServiceLink>> {
+    let row = sqlx::query!(
+        r#"SELECT id as "id!", service_id as "service_id!", app_id as "app_id!", env_key as "env_key!"
+           FROM service_links WHERE service_id = ?1 AND app_id = ?2"#,
+        service_id,
+        app_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| ServiceLink {
+        id: r.id,
+        service_id: r.service_id,
+        app_id: r.app_id,
+        env_key: r.env_key,
+    }))
+}
+
+pub async fn list_service_links(pool: &SqlitePool, service_id: &str) -> Result<Vec<ServiceLink>> {
+    let rows = sqlx::query!(
+        r#"SELECT id as "id!", service_id as "service_id!", app_id as "app_id!", env_key as "env_key!"
+           FROM service_links WHERE service_id = ?1"#,
+        service_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ServiceLink {
+            id: r.id,
+            service_id: r.service_id,
+            app_id: r.app_id,
+            env_key: r.env_key,
+        })
+        .collect())
+}
+
+pub async fn unlink_service(pool: &SqlitePool, service_id: &str, app_id: &str) -> Result<()> {
+    sqlx::query!(
+        "DELETE FROM service_links WHERE service_id = ?1 AND app_id = ?2",
+        service_id,
+        app_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ── Networks ──────────────────────────────────────────────────────────────────
+
+pub async fn create_network(pool: &SqlitePool, name: &str) -> Result<Network> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    sqlx::query!(
+        r#"INSERT INTO networks (id, name, created_at) VALUES (?1, ?2, ?3)"#,
+        id,
+        name,
+        now,
+    )
+    .execute(pool)
+    .await?;
+    Ok(Network { id, name: name.to_string(), created_at: now })
+}
+
+pub async fn get_network(pool: &SqlitePool, name: &str) -> Result<Network> {
+    let row = sqlx::query!(
+        r#"SELECT id as "id!", name as "name!", created_at as "created_at!: chrono::DateTime<chrono::Utc>"
+           FROM networks WHERE name = ?1"#,
+        name
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| DekuError::Internal(format!("network '{name}' not found")))?;
+    Ok(Network { id: row.id, name: row.name, created_at: row.created_at })
+}
+
+pub async fn list_networks(pool: &SqlitePool) -> Result<Vec<Network>> {
+    let rows = sqlx::query!(
+        r#"SELECT id as "id!", name as "name!", created_at as "created_at!: chrono::DateTime<chrono::Utc>"
+           FROM networks ORDER BY name"#
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Network { id: r.id, name: r.name, created_at: r.created_at })
+        .collect())
+}
+
+pub async fn delete_network(pool: &SqlitePool, name: &str) -> Result<()> {
+    let result = sqlx::query!("DELETE FROM networks WHERE name = ?1", name)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(DekuError::Internal(format!("network '{name}' not found")));
+    }
+    Ok(())
+}
+
+pub async fn attach_app_to_network(
+    pool: &SqlitePool,
+    app_id: &str,
+    network_id: &str,
+    attach_phase: &str,
+) -> Result<()> {
+    sqlx::query!(
+        r#"INSERT OR IGNORE INTO app_networks (app_id, network_id, attach_phase)
+           VALUES (?1, ?2, ?3)"#,
+        app_id,
+        network_id,
+        attach_phase,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn detach_app_from_network(
+    pool: &SqlitePool,
+    app_id: &str,
+    network_id: &str,
+) -> Result<()> {
+    sqlx::query!(
+        "DELETE FROM app_networks WHERE app_id = ?1 AND network_id = ?2",
+        app_id,
+        network_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_app_networks(pool: &SqlitePool, app_id: &str) -> Result<Vec<Network>> {
+    let rows = sqlx::query!(
+        r#"SELECT n.id as "id!", n.name as "name!", n.created_at as "created_at!: chrono::DateTime<chrono::Utc>"
+           FROM networks n
+           JOIN app_networks an ON an.network_id = n.id
+           WHERE an.app_id = ?1
+           ORDER BY n.name"#,
+        app_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Network { id: r.id, name: r.name, created_at: r.created_at })
+        .collect())
+}
+
+// ── TLS ───────────────────────────────────────────────────────────────────────
+
+pub async fn set_app_tls(pool: &SqlitePool, app_id: &str, enabled: bool) -> Result<()> {
+    let tls = enabled as i64;
+    sqlx::query!(
+        "UPDATE apps SET tls_enabled = ?1 WHERE id = ?2",
+        tls,
+        app_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ── Cron entries ──────────────────────────────────────────────────────────────
+
+pub async fn list_cron_entries(pool: &SqlitePool, app_id: &str) -> Result<Vec<CronEntry>> {
+    let rows = sqlx::query!(
+        r#"SELECT id as "id!", app_id as "app_id!", schedule as "schedule!",
+              command as "command!", created_at as "created_at!: chrono::DateTime<chrono::Utc>"
+           FROM cron_entries WHERE app_id = ?1 ORDER BY created_at"#,
+        app_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| CronEntry {
+            id: r.id,
+            app_id: r.app_id,
+            schedule: r.schedule,
+            command: r.command,
+            created_at: r.created_at,
+        })
+        .collect())
+}
+
+pub async fn add_cron_entry(
+    pool: &SqlitePool,
+    app_id: &str,
+    schedule: &str,
+    command: &str,
+) -> Result<CronEntry> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    sqlx::query!(
+        r#"INSERT INTO cron_entries (id, app_id, schedule, command, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)"#,
+        id,
+        app_id,
+        schedule,
+        command,
+        now,
+    )
+    .execute(pool)
+    .await?;
+    Ok(CronEntry {
+        id,
+        app_id: app_id.to_string(),
+        schedule: schedule.to_string(),
+        command: command.to_string(),
+        created_at: now,
+    })
+}
+
+pub async fn remove_cron_entry(pool: &SqlitePool, app_id: &str, entry_id: &str) -> Result<()> {
+    let result = sqlx::query!(
+        "DELETE FROM cron_entries WHERE app_id = ?1 AND id = ?2",
+        app_id,
+        entry_id
+    )
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(DekuError::Internal(format!("cron entry '{entry_id}' not found")));
+    }
     Ok(())
 }

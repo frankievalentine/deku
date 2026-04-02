@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n            id         as \"id!\",\n            name       as \"name!\",\n            created_at as \"created_at!: _\",\n            locked     as \"locked!\",\n            status     as \"status!: AppStatus\"\n           FROM apps WHERE name = ?1",
+  "query": "SELECT\n            id          as \"id!\",\n            name        as \"name!\",\n            created_at  as \"created_at!: _\",\n            locked      as \"locked!: bool\",\n            status      as \"status!: AppStatus\",\n            tls_enabled as \"tls_enabled!: bool\"\n           FROM apps WHERE id = ?1",
   "describe": {
     "columns": [
       {
@@ -19,7 +19,7 @@
         "type_info": "Datetime"
       },
       {
-        "name": "locked!",
+        "name": "locked!: bool",
         "ordinal": 3,
         "type_info": "Bool"
       },
@@ -27,6 +27,11 @@
         "name": "status!: AppStatus",
         "ordinal": 4,
         "type_info": "Text"
+      },
+      {
+        "name": "tls_enabled!: bool",
+        "ordinal": 5,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -37,8 +42,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "ce1a4f74ef6cc795b788a159088b66cc759831fd2cad9a66c3b30dce1866e1a7"
+  "hash": "901d614fc83ddbdeb639e8d53ea560d2b809915e8d81712637639dab8cf4868f"
 }

@@ -952,72 +952,81 @@ dependencies = [
 name = "deku-plugin-checks"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-cron"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-domains"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-git"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-letsencrypt"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-mysql"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-network"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-postgres"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
 name = "deku-plugin-redis"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -1035,8 +1044,9 @@ dependencies = [
 name = "deku-plugin-storage"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "deku-plugin-sdk",
- "serde",
+ "tracing",
 ]
 
 [[package]]

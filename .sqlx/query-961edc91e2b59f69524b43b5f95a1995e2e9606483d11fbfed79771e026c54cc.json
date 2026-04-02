@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!\", name as \"name!\", plugin as \"plugin!\",\n              container_id, status as \"status!\", config as \"config!\",\n              created_at as \"created_at!: chrono::DateTime<chrono::Utc>\"\n           FROM services WHERE name = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "plugin!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "container_id",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "status!",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "config!",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: chrono::DateTime<chrono::Utc>",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "961edc91e2b59f69524b43b5f95a1995e2e9606483d11fbfed79771e026c54cc"
+}

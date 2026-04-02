@@ -9,6 +9,7 @@ pub struct App {
     pub created_at: DateTime<Utc>,
     pub locked: bool,
     pub status: AppStatus,
+    pub tls_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
@@ -277,6 +278,7 @@ impl App {
             created_at: Utc::now(),
             locked: false,
             status: AppStatus::Created,
+            tls_enabled: false,
         }
     }
 }

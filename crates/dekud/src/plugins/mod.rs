@@ -12,33 +12,10 @@ use deku_plugin_sdk::context::{AppContext, BuildContext, DeployContext};
 use deku_plugin_sdk::hooks::{
     AppCreateHook, AppDestroyHook, PostBuildHook, PostDeployHook, PreBuildHook, PreDeployHook,
 };
+pub use deku_plugin_sdk::PluginDescriptor;
 
 /// Symbol exported by each plugin shared library.
 type PluginCreateFn = unsafe fn() -> *mut dyn PluginDescriptor;
-
-pub trait PluginDescriptor: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn version(&self) -> &'static str;
-
-    fn pre_build(&self) -> Option<Box<dyn PreBuildHook>> {
-        None
-    }
-    fn post_build(&self) -> Option<Box<dyn PostBuildHook>> {
-        None
-    }
-    fn pre_deploy(&self) -> Option<Box<dyn PreDeployHook>> {
-        None
-    }
-    fn post_deploy(&self) -> Option<Box<dyn PostDeployHook>> {
-        None
-    }
-    fn app_create(&self) -> Option<Box<dyn AppCreateHook>> {
-        None
-    }
-    fn app_destroy(&self) -> Option<Box<dyn AppDestroyHook>> {
-        None
-    }
-}
 
 struct LoadedPlugin {
     descriptor: Box<dyn PluginDescriptor>,

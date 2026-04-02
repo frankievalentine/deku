@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM cron_entries WHERE app_id = ?1 AND id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "003a94ce39b7f11a63fa8e192d86d768b9fb4ac478d99573f0145ae63ef95f1b"
+}

@@ -10,6 +10,7 @@ mod deploy;
 mod events;
 mod plugins;
 mod proxy;
+mod services;
 mod ssh;
 
 #[tokio::main]

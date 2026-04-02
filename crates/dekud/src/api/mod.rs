@@ -29,6 +29,7 @@ use crate::events::EventSender;
 use deku_core::types::{NewApp, Upstream};
 
 pub mod auth;
+mod services;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -106,6 +107,37 @@ fn build_router(state: SharedState) -> Router {
         .route("/api/plugins/{name}", delete(uninstall_plugin))
         // Archive deploy
         .route("/api/apps/{name}/deploy/archive", post(deploy_archive))
+        // Postgres
+        .route("/api/postgres/services", get(services::pg_list).post(services::pg_create))
+        .route("/api/postgres/services/{name}", get(services::pg_info).delete(services::pg_destroy))
+        .route("/api/postgres/services/{name}/link/{app}", post(services::pg_link).delete(services::pg_unlink))
+        .route("/api/postgres/services/{name}/logs", get(services::pg_logs))
+        // Redis
+        .route("/api/redis/services", get(services::rd_list).post(services::rd_create))
+        .route("/api/redis/services/{name}", get(services::rd_info).delete(services::rd_destroy))
+        .route("/api/redis/services/{name}/link/{app}", post(services::rd_link).delete(services::rd_unlink))
+        .route("/api/redis/services/{name}/logs", get(services::rd_logs))
+        // MySQL
+        .route("/api/mysql/services", get(services::my_list).post(services::my_create))
+        .route("/api/mysql/services/{name}", get(services::my_info).delete(services::my_destroy))
+        .route("/api/mysql/services/{name}/link/{app}", post(services::my_link).delete(services::my_unlink))
+        .route("/api/mysql/services/{name}/logs", get(services::my_logs))
+        // Letsencrypt
+        .route("/api/letsencrypt/enable/{app}", post(services::le_enable))
+        .route("/api/letsencrypt/disable/{app}", post(services::le_disable))
+        .route("/api/letsencrypt/config", post(services::le_config))
+        // Networks
+        .route("/api/networks", get(services::net_list).post(services::net_create))
+        .route("/api/networks/{name}", delete(services::net_destroy))
+        .route("/api/apps/{app}/networks", get(services::net_list_for_app))
+        .route("/api/apps/{app}/networks/{network}", post(services::net_attach).delete(services::net_detach))
+        // Storage
+        .route("/api/apps/{app}/storage", get(services::storage_list).post(services::storage_add))
+        .route("/api/apps/{app}/storage/ensure", post(services::storage_ensure))
+        .route("/api/apps/{app}/storage/{id}", delete(services::storage_remove))
+        // Cron
+        .route("/api/apps/{app}/cron", get(services::cron_list).post(services::cron_add))
+        .route("/api/apps/{app}/cron/{id}", delete(services::cron_remove))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
@@ -520,6 +552,11 @@ async fn update_routing(
 /// Rewrite the Angie config for an app after domain/port changes.
 /// Errors are logged but not propagated — config writes should not fail user-facing ops.
 async fn rewrite_and_reload(state: &AppState, app_id: &str, app_name: &str) {
+    let tls = match queries::get_app_by_id(&state.pool, app_id).await {
+        Ok(app) => app.tls_enabled,
+        Err(_) => false,
+    };
+
     let domains = match queries::list_domain_names(&state.pool, app_id).await {
         Ok(d) => d,
         Err(e) => {
@@ -549,7 +586,7 @@ async fn rewrite_and_reload(state: &AppState, app_id: &str, app_name: &str) {
         .collect();
 
     if let Err(e) =
-        crate::proxy::write_app_config(&state.config.angie_conf_dir, app_name, &domains, &upstreams, false)
+        crate::proxy::write_app_config(&state.config.angie_conf_dir, app_name, &domains, &upstreams, tls)
     {
         tracing::error!("failed to write angie config: {e}");
         return;

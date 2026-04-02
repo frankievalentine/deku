@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO cron_entries (id, app_id, schedule, command, created_at)\n           VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "3345916e210d0b343068d9e9a48df924eb696d58a1f8c1cc03b59c2008eb9796"
+}
