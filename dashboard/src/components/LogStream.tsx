@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { appEventStreamUrl, fetchLogs, getToken, type EventRecord } from '../lib/api';
+import { type EventRecord, appEventStreamUrl, fetchLogs, getToken } from '../lib/api';
 
 interface LogStreamProps {
   appName: string;
@@ -94,7 +94,7 @@ export default function LogStream({ appName }: LogStreamProps) {
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'auto' });
     }
-  }, [entries, autoScroll]);
+  }, [autoScroll]);
 
   function handleScroll() {
     if (!containerRef.current) return;

@@ -330,7 +330,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
               <tr>
                 <th>Name</th>
                 <th>State</th>
-                <th></th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -446,7 +446,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                 <tr>
                   <th>Host path</th>
                   <th>Container path</th>
-                  <th></th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -526,7 +526,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
               <tr>
                 <th>Schedule</th>
                 <th>Command</th>
-                <th></th>
+                <th />
               </tr>
             </thead>
             <tbody>

@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { createApp, deleteApp, fetchApps, getToken, type App } from '../lib/api';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type App, createApp, deleteApp, fetchApps, getToken } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import StatusBadge from './StatusBadge';
@@ -37,7 +37,7 @@ function AppListInner() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
-  async function loadApps() {
+  const loadApps = useCallback(async () => {
     try {
       setLoadError(null);
       const nextApps = await fetchApps();
@@ -47,7 +47,7 @@ function AppListInner() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadApps();
@@ -55,7 +55,7 @@ function AppListInner() {
       void loadApps();
     }, 20_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [loadApps]);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -132,6 +132,7 @@ function AppListInner() {
           <h2 className="section-title">Manage apps</h2>
         </div>
         <button
+          type="button"
           className="btn btn-primary"
           onClick={() => {
             setShowCreate(true);
@@ -158,7 +159,6 @@ function AppListInner() {
                 onChange={(event) => setNewAppName(event.target.value)}
                 pattern="[a-z0-9][a-z0-9-]*"
                 title="Lowercase letters, numbers, and hyphens only"
-                autoFocus
                 autoComplete="off"
               />
             </div>
@@ -236,6 +236,7 @@ function AppListInner() {
                   </a>
                 </div>
                 <button
+                  type="button"
                   className="btn btn-danger btn-sm"
                   onClick={() => setDeleteTarget(app.name)}
                   disabled={deleting === app.name}

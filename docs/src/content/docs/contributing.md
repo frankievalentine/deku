@@ -25,6 +25,7 @@ Contributions should prioritize correctness, compatibility, and clear user-facin
 - Keep API and CLI request/response shapes aligned.
 - Verify browser-facing work with `astro check` and `astro build`.
 - Verify Rust-facing changes with workspace tests or targeted checks.
+- Run `./scripts/ci-local.sh` before pushing when you need a full local pass across Rust, dashboard, docs, and install smoke coverage.
 
 ## Documentation
 

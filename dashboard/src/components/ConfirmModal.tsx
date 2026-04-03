@@ -39,16 +39,15 @@ export default function ConfirmModal({
   return (
     <div
       className="modal-backdrop"
-      onClick={() => {
+      onMouseDown={() => {
         if (!busy) onClose();
       }}
     >
-      <div
+      <dialog
         className="modal-shell"
-        role="dialog"
-        aria-modal="true"
+        open
         aria-labelledby="confirm-modal-title"
-        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="modal-badge">Destructive action</div>
         <div className="stack-md">
@@ -65,7 +64,7 @@ export default function ConfirmModal({
             {busy ? 'Working…' : confirmLabel}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }

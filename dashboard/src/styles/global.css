@@ -54,8 +54,7 @@ html {
   font-size: 16px;
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
-  background:
-    radial-gradient(circle at top left, rgba(242, 178, 82, 0.12), transparent 28%),
+  background: radial-gradient(circle at top left, rgba(242, 178, 82, 0.12), transparent 28%),
     radial-gradient(circle at bottom right, rgba(143, 215, 197, 0.08), transparent 24%),
     var(--color-bg-primary);
 }
@@ -77,8 +76,7 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+  background-image: linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
   background-size: 120px 120px;
   mask-image: radial-gradient(circle at center, black, transparent 78%);
@@ -89,8 +87,7 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(circle at 15% 15%, rgba(242, 178, 82, 0.08), transparent 26%),
+  background: radial-gradient(circle at 15% 15%, rgba(242, 178, 82, 0.08), transparent 26%),
     radial-gradient(circle at 85% 25%, rgba(143, 215, 197, 0.06), transparent 22%);
 }
 
@@ -339,8 +336,7 @@ ol {
 
 .segment-button.is-selected {
   border-color: rgba(242, 178, 82, 0.28);
-  background:
-    linear-gradient(135deg, rgba(242, 178, 82, 0.16), rgba(242, 178, 82, 0.03)),
+  background: linear-gradient(135deg, rgba(242, 178, 82, 0.16), rgba(242, 178, 82, 0.03)),
     rgba(255, 255, 255, 0.03);
   color: var(--color-accent);
 }
@@ -513,8 +509,8 @@ ol {
   display: grid;
   place-items: center;
   padding: var(--space-5);
-  background:
-    radial-gradient(circle at top, rgba(242, 178, 82, 0.12), transparent 28%), rgba(7, 9, 10, 0.76);
+  background: radial-gradient(circle at top, rgba(242, 178, 82, 0.12), transparent 28%),
+    rgba(7, 9, 10, 0.76);
   backdrop-filter: blur(16px);
 }
 
@@ -525,8 +521,8 @@ ol {
   padding: var(--space-6);
   border-radius: calc(var(--radius-lg) + 2px);
   border: 1px solid rgba(255, 116, 106, 0.28);
-  background:
-    linear-gradient(180deg, rgba(255, 116, 106, 0.08), transparent 24%), rgba(15, 18, 20, 0.96);
+  background: linear-gradient(180deg, rgba(255, 116, 106, 0.08), transparent 24%),
+    rgba(15, 18, 20, 0.96);
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.45);
 }
 
@@ -643,8 +639,7 @@ ol {
 
 .service-list-item.is-active {
   border-color: rgba(242, 178, 82, 0.28);
-  background:
-    linear-gradient(135deg, rgba(242, 178, 82, 0.14), rgba(242, 178, 82, 0.04)),
+  background: linear-gradient(135deg, rgba(242, 178, 82, 0.14), rgba(242, 178, 82, 0.04)),
     rgba(255, 255, 255, 0.03);
 }
 
@@ -746,8 +741,8 @@ ol {
   padding: var(--space-4);
   border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%), var(--color-bg-log);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
+    var(--color-bg-log);
   color: var(--color-log-text);
   font-family: var(--font-mono);
   font-size: 0.82rem;
@@ -818,8 +813,8 @@ ol {
   padding: var(--space-6);
   border-radius: calc(var(--radius-lg) + 4px);
   border: 1px solid var(--color-border-strong);
-  background:
-    linear-gradient(180deg, rgba(242, 178, 82, 0.08), transparent 28%), rgba(15, 18, 20, 0.86);
+  background: linear-gradient(180deg, rgba(242, 178, 82, 0.08), transparent 28%),
+    rgba(15, 18, 20, 0.86);
   box-shadow: var(--shadow-card);
 }
 
@@ -888,8 +883,8 @@ ol {
   max-height: 34rem;
   overflow: auto;
   padding: var(--space-4) 0;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 16%), var(--color-bg-log);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 16%),
+    var(--color-bg-log);
 }
 
 .log-empty {

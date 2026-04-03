@@ -208,7 +208,7 @@ export default function AppDeployPanel({
                   <th>Status</th>
                   <th>Source</th>
                   <th>Created</th>
-                  <th></th>
+                  <th />
                 </tr>
               </thead>
               <tbody>

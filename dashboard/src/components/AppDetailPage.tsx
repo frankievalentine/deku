@@ -1,10 +1,13 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import {
   type App,
-  addDomain,
   type ConfigVar,
   type Deployment,
   type Domain,
+  type PortMapping,
+  type ProcessRecord,
+  type ScaleMap,
+  addDomain,
   deleteConfigVar,
   fetchApp,
   fetchConfig,
@@ -14,10 +17,7 @@ import {
   fetchProcesses,
   fetchScale,
   getToken,
-  type PortMapping,
-  type ProcessRecord,
   removeDomain,
-  type ScaleMap,
   setConfigVar,
   setScale,
 } from '../lib/api';
@@ -295,7 +295,7 @@ function AppDetailInner() {
                 <tr>
                   <th>Domain</th>
                   <th>Created</th>
-                  <th></th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -487,7 +487,7 @@ function AppDetailInner() {
                   <th>Key</th>
                   <th>Value</th>
                   <th>Scope</th>
-                  <th></th>
+                  <th />
                 </tr>
               </thead>
               <tbody>

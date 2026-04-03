@@ -145,7 +145,9 @@ function ServicesInner() {
   const activeServiceKey = activeServiceName ? serviceKey(activeKind, activeServiceName) : null;
   const activeDetail = activeServiceKey ? (detailsByService[activeServiceKey] ?? null) : null;
   const activeBackups =
-    supportsBackups(activeKind) && activeServiceKey ? (backupsByService[activeServiceKey] ?? []) : [];
+    supportsBackups(activeKind) && activeServiceKey
+      ? (backupsByService[activeServiceKey] ?? [])
+      : [];
   const activeLogs = activeServiceKey ? (logsByService[activeServiceKey] ?? []) : [];
 
   useEffect(() => {
@@ -578,7 +580,7 @@ function ServicesInner() {
                       <tr>
                         <th>App</th>
                         <th>Env key</th>
-                        <th></th>
+                        <th />
                       </tr>
                     </thead>
                     <tbody>
@@ -664,7 +666,7 @@ function ServicesInner() {
                           <th>Format</th>
                           <th>Size</th>
                           <th>Restored</th>
-                          <th></th>
+                          <th />
                         </tr>
                       </thead>
                       <tbody>
@@ -681,7 +683,13 @@ function ServicesInner() {
                               <button
                                 type="button"
                                 className="btn btn-danger btn-sm"
-                                onClick={() => setRestoreTarget({ kind: activeKind, serviceName: activeServiceName, backup })}
+                                onClick={() =>
+                                  setRestoreTarget({
+                                    kind: activeKind,
+                                    serviceName: activeServiceName,
+                                    backup,
+                                  })
+                                }
                                 disabled={busy !== null}
                               >
                                 Restore
@@ -729,7 +737,7 @@ function ServicesInner() {
                 <th>Status</th>
                 <th>Container</th>
                 <th>Created</th>
-                <th></th>
+                <th />
               </tr>
             </thead>
             <tbody>

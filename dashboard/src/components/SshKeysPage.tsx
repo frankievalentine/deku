@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { addSshKey, deleteSshKey, fetchSshKeys, getToken, type SshKey } from '../lib/api';
+import { type FormEvent, useEffect, useState } from 'react';
+import { type SshKey, addSshKey, deleteSshKey, fetchSshKeys, getToken } from '../lib/api';
 import ConnectScreen from './ConnectScreen';
 
 export default function SshKeysPage() {
@@ -135,7 +135,7 @@ function SshKeysInner() {
               <tr>
                 <th>Name</th>
                 <th>Fingerprint</th>
-                <th></th>
+                <th />
               </tr>
             </thead>
             <tbody>

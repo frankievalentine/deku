@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { type FormEvent, useState } from 'react';
 import { setToken, verifyToken } from '../lib/api';
 
 interface ConnectScreenProps {
@@ -24,7 +24,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     try {
       const valid = await verifyToken(trimmed);
       if (!valid) {
-        setError('Invalid token. Use the one-time token from setup, or run `deku dashboard reset-token` on the host.');
+        setError(
+          'Invalid token. Use the one-time token from setup, or run `deku dashboard reset-token` on the host.'
+        );
         return;
       }
 
@@ -47,7 +49,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         <h1 className="connect-title">Bind this dashboard to your daemon</h1>
         <p className="connect-copy">
           Paste the one-time dashboard token shown during <code>deku setup</code> or a later{' '}
-          <code>deku dashboard reset-token</code>. It is stored only in this browser after you connect.
+          <code>deku dashboard reset-token</code>. It is stored only in this browser after you
+          connect.
         </p>
 
         <form onSubmit={handleSubmit} className="stack-md" noValidate>
@@ -63,7 +66,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               value={token}
               onChange={(event) => setTokenValue(event.target.value)}
               autoComplete="current-password"
-              autoFocus
               spellCheck={false}
             />
           </div>

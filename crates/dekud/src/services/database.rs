@@ -811,7 +811,7 @@ async fn exec_in_container(
     Ok(ExecResult {
         stdout,
         stderr,
-        exit_code: inspect.exit_code.unwrap_or(-1) as i64,
+        exit_code: inspect.exit_code.unwrap_or(-1),
     })
 }
 

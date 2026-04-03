@@ -1,14 +1,14 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import {
-  addPortMapping,
   type CertificateStatus,
+  type PortMapping,
+  type RoutingAppStatus,
+  addPortMapping,
   disableTls,
   enableTls,
   fetchAppRoutingStatus,
   fetchPorts,
   fetchTlsStatus,
-  type PortMapping,
-  type RoutingAppStatus,
   removePortMapping,
 } from '../lib/api';
 
@@ -219,7 +219,7 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
                 <th>Host</th>
                 <th>Container</th>
                 <th>Protocol</th>
-                <th></th>
+                <th />
               </tr>
             </thead>
             <tbody>

@@ -186,6 +186,12 @@ cargo check --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+Full local CI gate:
+
+```bash
+./scripts/ci-local.sh
+```
+
 Frontend and docs:
 
 ```bash

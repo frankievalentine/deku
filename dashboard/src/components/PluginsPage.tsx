@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { deletePlugin, fetchPlugins, getToken, installPlugin, type Plugin } from '../lib/api';
+import { type FormEvent, useEffect, useState } from 'react';
+import { type Plugin, deletePlugin, fetchPlugins, getToken, installPlugin } from '../lib/api';
 import ConnectScreen from './ConnectScreen';
 
 export default function PluginsPage() {
@@ -126,7 +126,7 @@ function PluginsInner() {
                 <th>Name</th>
                 <th>Version</th>
                 <th>Path</th>
-                <th></th>
+                <th />
               </tr>
             </thead>
             <tbody>
