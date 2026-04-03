@@ -41,6 +41,9 @@ jobs:
         working-directory: dashboard
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: oven-sh/setup-bun@v2.2.0
       - run: bun install --frozen-lockfile
       - name: Type check
@@ -58,6 +61,9 @@ jobs:
         working-directory: docs
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: oven-sh/setup-bun@v2.2.0
       - run: bun install --frozen-lockfile
       - name: Type check
