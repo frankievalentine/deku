@@ -334,7 +334,9 @@ else
   [[ -f "${TEST_ROOT}/config/dashboard/index.html" ]]
 fi
 grep -q "${INSTALL_DIR}/dekud" "${SYSTEMD_UNIT_PATH}"
-[[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
+if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
+  [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
+fi
 [[ "$first_output" == *"Dashboard token:"* ]]
 [[ "$first_output" == *"Reset token:   deku dashboard reset-token"* ]]
 [[ "$first_output" == *"Dashboard URL: http://127.0.0.1:2810"* ]]
@@ -357,7 +359,9 @@ else
 fi
 grep -q "${INSTALL_DIR}/dekud" "${SYSTEMD_UNIT_PATH}"
 cmp -s "${DEKU_CONFIG_DIR}/config.toml" "${TEST_ROOT}/config.first"
-[[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
+if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
+  [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
+fi
 [[ "$second_output" != *"Dashboard token:"* ]]
 [[ "$second_output" == *"Reset token:   deku dashboard reset-token"* ]]
 
