@@ -18,6 +18,10 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: linux-stable
+          add-job-id-key: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
