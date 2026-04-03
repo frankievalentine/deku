@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use reqwest::{Client, StatusCode};
+use serde::Deserialize;
 use std::path::PathBuf;
 
 pub struct DekuClient {
@@ -8,11 +9,46 @@ pub struct DekuClient {
     token: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct ClientConfig {
+    data_dir: Option<PathBuf>,
+    api_port: Option<u16>,
+}
+
+fn config_dir() -> PathBuf {
+    std::env::var_os("DEKU_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs_next::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/root"))
+                .join(".deku")
+        })
+}
+
+fn config_path() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
+fn load_config() -> ClientConfig {
+    let path = config_path();
+    if !path.exists() {
+        return ClientConfig::default();
+    }
+
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| toml::from_str::<ClientConfig>(&contents).ok())
+        .unwrap_or_default()
+}
+
 fn token_path() -> PathBuf {
-    dirs_next::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/root"))
-        .join(".deku")
-        .join("cli-token")
+    let config = load_config();
+    config.data_dir.unwrap_or_else(config_dir).join("cli-token")
+}
+
+fn base_url() -> String {
+    let config = load_config();
+    format!("http://localhost:{}", config.api_port.unwrap_or(2810))
 }
 
 fn load_token() -> Option<String> {
@@ -26,7 +62,7 @@ impl DekuClient {
         let token = load_token();
         Ok(Self {
             http: Client::new(),
-            base_url: "http://localhost:2810".to_string(),
+            base_url: base_url(),
             token,
         })
     }

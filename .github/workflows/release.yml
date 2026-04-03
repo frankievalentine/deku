@@ -6,46 +6,33 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  build-release:
+    name: Build release artifacts
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2.9.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
       - name: Install cross
         run: cargo install cross
-      - name: Build
-        run: cross build --release --target ${{ matrix.target }} -p dekud -p deku
-      - name: Package
-        run: |
-          mkdir -p dist
-          ARCH="${{ matrix.target }}"
-          ARCH="${ARCH%%-*}"
-          cp target/${{ matrix.target }}/release/dekud dist/dekud-linux-${ARCH}
-          cp target/${{ matrix.target }}/release/deku dist/deku-linux-${ARCH}
-      - uses: actions/upload-artifact@v7
+      - name: Build release artifacts
+        run: ./scripts/build-release.sh
+      - uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.target }}
+          name: release-dist
           path: dist/
 
   release:
-    needs: build
+    needs:
+      - build-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v4
         with:
-          pattern: binaries-*
-          merge-multiple: true
+          name: release-dist
           path: dist/
       - uses: softprops/action-gh-release@v2.6.1
         with:

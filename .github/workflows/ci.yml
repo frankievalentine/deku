@@ -25,6 +25,14 @@ jobs:
       - name: Test
         run: cargo test --all
 
+  install-smoke:
+    name: Install Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run installer smoke test
+        run: ./scripts/test-install-smoke.sh
+
   dashboard:
     name: Dashboard
     runs-on: ubuntu-latest

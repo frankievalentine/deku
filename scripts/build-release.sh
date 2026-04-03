@@ -1,25 +1,110 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> Building Deku release binaries"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="${ROOT_DIR}/dist"
 
 targets=(
   "x86_64-unknown-linux-musl"
   "aarch64-unknown-linux-musl"
 )
 
-for target in "${targets[@]}"; do
-  echo "==> Building for $target"
-  cargo build --release --target "$target" -p dekud -p deku
-done
+release_artifacts=(
+  "deku-dashboard.tar.gz"
+  "deku-linux-amd64"
+  "deku-linux-arm64"
+  "dekud-linux-amd64"
+  "dekud-linux-arm64"
+  "install.sh"
+  "deku.service"
+)
 
-echo "==> Packaging"
-mkdir -p dist
+log() {
+  printf '==> %s\n' "$*"
+}
 
-for target in "${targets[@]}"; do
-  arch="${target%%-*}"
-  cp "target/$target/release/dekud" "dist/dekud-linux-$arch"
-  cp "target/$target/release/deku" "dist/deku-linux-$arch"
-done
+checksum_file() {
+  local file="$1"
 
-echo "==> Build complete. Artifacts in dist/"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file"
+    return
+  fi
+
+  shasum -a 256 "$file"
+}
+
+artifact_arch() {
+  case "$1" in
+    x86_64-unknown-linux-musl) echo "amd64" ;;
+    aarch64-unknown-linux-musl) echo "arm64" ;;
+    *) printf 'unknown target: %s\n' "$1" >&2; exit 1 ;;
+  esac
+}
+
+build_dashboard() {
+  log "Building dashboard assets"
+  (
+    cd "${ROOT_DIR}/dashboard"
+    bun install --frozen-lockfile
+    bun run build
+  )
+
+  tar -czf "${DIST_DIR}/deku-dashboard.tar.gz" \
+    -C "${ROOT_DIR}/crates/dekud/assets/dashboard" .
+}
+
+build_binaries() {
+  local builder=(cargo build)
+
+  if command -v cross >/dev/null 2>&1; then
+    builder=(cross build)
+  fi
+
+  for target in "${targets[@]}"; do
+    log "Building ${target}"
+    "${builder[@]}" --release --target "$target" -p dekud -p deku
+  done
+}
+
+package_binaries() {
+  for target in "${targets[@]}"; do
+    local arch
+    arch="$(artifact_arch "$target")"
+
+    cp "${ROOT_DIR}/target/${target}/release/dekud" "${DIST_DIR}/dekud-linux-${arch}"
+    cp "${ROOT_DIR}/target/${target}/release/deku" "${DIST_DIR}/deku-linux-${arch}"
+  done
+}
+
+package_support_files() {
+  cp "${ROOT_DIR}/scripts/install.sh" "${DIST_DIR}/install.sh"
+  cp "${ROOT_DIR}/scripts/package/deku.service" "${DIST_DIR}/deku.service"
+  chmod 0755 "${DIST_DIR}/install.sh"
+  chmod 0644 "${DIST_DIR}/deku.service"
+}
+
+write_checksums() {
+  (
+    cd "${DIST_DIR}"
+    : > SHA256SUMS
+    for artifact in "${release_artifacts[@]}"; do
+      [[ -f "$artifact" ]] || {
+        printf 'missing release artifact: %s\n' "$artifact" >&2
+        exit 1
+      }
+      checksum_file "$artifact" >> SHA256SUMS
+    done
+  )
+}
+
+rm -rf "$DIST_DIR"
+mkdir -p "$DIST_DIR"
+
+build_dashboard
+build_binaries
+package_binaries
+package_support_files
+write_checksums
+
+log "Artifacts written to ${DIST_DIR}"
