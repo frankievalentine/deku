@@ -24,6 +24,10 @@ log() {
   printf '==> %s\n' "$*"
 }
 
+build_target_dir() {
+  printf '%s/target/release-build/%s\n' "${ROOT_DIR}" "$1"
+}
+
 checksum_file() {
   local file="$1"
 
@@ -64,17 +68,20 @@ build_binaries() {
 
   for target in "${targets[@]}"; do
     log "Building ${target}"
-    "${builder[@]}" --release --target "$target" -p dekud -p deku
+    CARGO_TARGET_DIR="$(build_target_dir "$target")" \
+      "${builder[@]}" --release --target "$target" -p dekud -p deku
   done
 }
 
 package_binaries() {
   for target in "${targets[@]}"; do
     local arch
+    local target_dir
     arch="$(artifact_arch "$target")"
+    target_dir="$(build_target_dir "$target")"
 
-    cp "${ROOT_DIR}/target/${target}/release/dekud" "${DIST_DIR}/dekud-linux-${arch}"
-    cp "${ROOT_DIR}/target/${target}/release/deku" "${DIST_DIR}/deku-linux-${arch}"
+    cp "${target_dir}/${target}/release/dekud" "${DIST_DIR}/dekud-linux-${arch}"
+    cp "${target_dir}/${target}/release/deku" "${DIST_DIR}/deku-linux-${arch}"
   done
 }
 
