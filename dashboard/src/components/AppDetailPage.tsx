@@ -1,22 +1,30 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import {
+  type App,
   addDomain,
+  type ConfigVar,
+  type Deployment,
+  type Domain,
   deleteConfigVar,
   fetchApp,
   fetchConfig,
   fetchDeployments,
   fetchDomains,
+  fetchPorts,
+  fetchProcesses,
   fetchScale,
   getToken,
+  type PortMapping,
+  type ProcessRecord,
   removeDomain,
+  type ScaleMap,
   setConfigVar,
   setScale,
-  type App,
-  type ConfigVar,
-  type Deployment,
-  type Domain,
-  type ScaleMap,
 } from '../lib/api';
+import AppDeployPanel from './AppDeployPanel';
+import AppInfrastructurePanel from './AppInfrastructurePanel';
+import AppOperationsPanel from './AppOperationsPanel';
+import AppRoutingPanel from './AppRoutingPanel';
 import ConnectScreen from './ConnectScreen';
 import LogStream from './LogStream';
 import StatusBadge from './StatusBadge';
@@ -25,8 +33,10 @@ interface AppDataState {
   app: App;
   deployments: Deployment[];
   domains: Domain[];
+  ports: PortMapping[];
   config: ConfigVar[];
   scales: ScaleMap;
+  processes: ProcessRecord[];
 }
 
 export default function AppDetailPage() {
@@ -56,6 +66,28 @@ function AppDetailInner() {
     setAppName(query.get('name') ?? '');
   }, []);
 
+  const load = useCallback(async () => {
+    if (!appName) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const [app, deployments, domains, ports, config, scales, processes] = await Promise.all([
+        fetchApp(appName),
+        fetchDeployments(appName),
+        fetchDomains(appName),
+        fetchPorts(appName),
+        fetchConfig(appName),
+        fetchScale(appName),
+        fetchProcesses(appName),
+      ]);
+      setState({ app, deployments, domains, ports, config, scales, processes });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to load app details.');
+    } finally {
+      setLoading(false);
+    }
+  }, [appName]);
+
   useEffect(() => {
     if (!appName) {
       setLoading(false);
@@ -63,27 +95,7 @@ function AppDetailInner() {
     }
 
     void load();
-  }, [appName]);
-
-  async function load() {
-    if (!appName) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const [app, deployments, domains, config, scales] = await Promise.all([
-        fetchApp(appName),
-        fetchDeployments(appName),
-        fetchDomains(appName),
-        fetchConfig(appName),
-        fetchScale(appName),
-      ]);
-      setState({ app, deployments, domains, config, scales });
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to load app details.');
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [appName, load]);
 
   async function handleAddDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -204,8 +216,8 @@ function AppDetailInner() {
             <div className="stack-sm">
               <h1 className="page-title">{state.app.name}</h1>
               <p className="page-copy">
-                Runtime controls, deployment history, config surface, and live output for the
-                selected app.
+                Runtime controls, deploy actions, config surface, and live output for the selected
+                app.
               </p>
             </div>
             <StatusBadge status={state.app.status} />
@@ -213,11 +225,40 @@ function AppDetailInner() {
         </div>
         <div className="metrics-grid">
           <Metric label="Domains" value={String(state.domains.length)} />
+          <Metric label="Ports" value={String(state.ports.length)} />
           <Metric label="Deployments" value={String(state.deployments.length)} />
-          <Metric label="Config vars" value={String(state.config.length)} />
           <Metric label="TLS" value={state.app.tls_enabled ? 'On' : 'Off'} />
         </div>
       </section>
+
+      <AppDeployPanel
+        key={state.app.name}
+        appName={state.app.name}
+        locked={state.app.locked}
+        deployments={state.deployments}
+        onRefresh={load}
+      />
+
+      <AppRoutingPanel
+        key={`${state.app.name}:${state.domains.length}:${state.app.tls_enabled}`}
+        appName={state.app.name}
+        locked={state.app.locked}
+        onAppRefresh={load}
+      />
+
+      <AppInfrastructurePanel
+        key={state.app.name}
+        appName={state.app.name}
+        locked={state.app.locked}
+      />
+
+      <AppOperationsPanel
+        appId={state.app.id}
+        appName={state.app.name}
+        createdAt={state.app.created_at}
+        locked={state.app.locked}
+        status={state.app.status}
+      />
 
       <section className="panel-grid">
         <article className="panel stack-md">
@@ -285,6 +326,11 @@ function AppDetailInner() {
             <h2 className="section-title">Scale</h2>
           </div>
 
+          <p className="page-copy">
+            Desired replica counts per process type. Actual running containers are listed in the
+            runtime inventory.
+          </p>
+
           <form onSubmit={handleSetScale} className="stack-md">
             <div className="panel-grid">
               <div className="form-group">
@@ -332,6 +378,61 @@ function AppDetailInner() {
                 </div>
               ))}
             </dl>
+          )}
+        </article>
+
+        <article className="panel stack-md">
+          <div className="cluster justify-between align-center">
+            <div className="stack-sm">
+              <p className="eyebrow">Live runtime</p>
+              <h2 className="section-title">Process inventory</h2>
+            </div>
+            <span className="inventory-summary">
+              {state.processes.length} container{state.processes.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {state.processes.length === 0 ? (
+            <p className="text-muted">
+              No containers are currently recorded for this app. Deploy or scale the app to inspect
+              runtime process state here.
+            </p>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Process</th>
+                  <th>Status</th>
+                  <th>Port</th>
+                  <th>Container</th>
+                  <th>Deployment</th>
+                  <th>Started</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.processes.map((process) => (
+                  <tr key={process.container_id}>
+                    <td className="font-mono">{process.process_type}</td>
+                    <td>
+                      <StatusBadge status={processStatus(process.status)} size="sm" />
+                    </td>
+                    <td className="font-mono">
+                      {process.host_port > 0 ? String(process.host_port) : 'internal'}
+                    </td>
+                    <td className="font-mono">{truncateId(process.container_id)}</td>
+                    <td>
+                      <a
+                        href={`/deployments?app=${encodeURIComponent(state.app.name)}&id=${process.deployment_id}`}
+                        className="font-mono"
+                      >
+                        {truncateId(process.deployment_id)}
+                      </a>
+                    </td>
+                    <td className="font-mono">{formatDate(process.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </article>
       </section>
@@ -489,4 +590,36 @@ function formatDate(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function truncateId(value: string): string {
+  return value.slice(0, 12);
+}
+
+function processStatus(
+  value: string
+): 'created' | 'deployed' | 'stopped' | 'error' | 'building' | 'pending' {
+  const normalized = value.toLowerCase();
+  if (normalized.includes('run') || normalized.includes('up') || normalized.includes('live')) {
+    return 'deployed';
+  }
+  if (
+    normalized.includes('build') ||
+    normalized.includes('pull') ||
+    normalized.includes('create')
+  ) {
+    return 'building';
+  }
+  if (
+    normalized.includes('fail') ||
+    normalized.includes('error') ||
+    normalized.includes('dead') ||
+    normalized.includes('exit')
+  ) {
+    return 'error';
+  }
+  if (normalized.includes('stop')) {
+    return 'stopped';
+  }
+  return 'pending';
 }

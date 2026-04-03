@@ -44,6 +44,32 @@ export interface Domain {
   created_at: string;
 }
 
+export interface PortMapping {
+  id: string;
+  app_id: string;
+  host_port: number;
+  container_port: number;
+  protocol: string;
+}
+
+export interface NetworkRecord {
+  id: string;
+  name: string;
+}
+
+export interface StorageMount {
+  id: string;
+  app_id: string;
+  host_path: string;
+  container_path: string;
+}
+
+export interface CronEntry {
+  id: string;
+  schedule: string;
+  command: string;
+}
+
 export interface SshKey {
   id: string;
   name: string;
@@ -56,11 +82,140 @@ export interface Plugin {
   path: string;
 }
 
+export type ManagedServiceKind = 'postgres' | 'redis' | 'mysql';
+
+export interface ManagedServiceSummary {
+  id: string;
+  name: string;
+  status: string;
+  plugin: string;
+  container_id: string | null;
+  created_at: string;
+}
+
+export interface ManagedServiceLink {
+  name: string;
+  env_key: string;
+}
+
+export type ManagedServiceConnection = Record<string, string | number | boolean | null>;
+
+export interface ManagedServiceDetail {
+  id: string;
+  name: string;
+  status: string;
+  plugin: string;
+  container_id: string | null;
+  created_at: string;
+  connection: ManagedServiceConnection;
+  links: ManagedServiceLink[];
+}
+
+export interface ServiceBackup {
+  id: string;
+  service_id: string;
+  object_key: string;
+  format: string;
+  size_bytes: number | null;
+  sha256: string | null;
+  created_at: string;
+  restored_at: string | null;
+}
+
 export interface EventRecord {
   id: string;
   app_id: string | null;
   event_type: string;
   payload: string | null;
+  created_at: string;
+}
+
+export interface Upstream {
+  host: string;
+  port: number;
+}
+
+export interface RoutingTableEntry {
+  app: string;
+  domains: string[];
+  upstreams: Upstream[];
+}
+
+export interface FileStatus {
+  path: string;
+  exists: boolean;
+  modified_at: string | null;
+}
+
+export interface AngieConfigStatus {
+  config_valid: boolean;
+  validation_error?: string | null;
+}
+
+export interface RoutingAppStatus {
+  app: string;
+  status: string;
+  domains: string[];
+  upstreams: Upstream[];
+  tls_enabled: boolean;
+  proxy_config_path: string;
+  proxy_config_present: boolean;
+  certificate: FileStatus;
+  private_key: FileStatus;
+  tls_ready: boolean;
+  issues: string[];
+}
+
+export interface RoutingStatusResponse {
+  angie: AngieConfigStatus;
+  apps: RoutingAppStatus[];
+}
+
+export interface SingleRoutingStatusResponse {
+  angie: AngieConfigStatus;
+  app: RoutingAppStatus;
+}
+
+export interface CertificateStatus {
+  enabled: boolean;
+  domains: string[];
+  certificate: FileStatus;
+  private_key: FileStatus;
+  ready: boolean;
+  not_before: string | null;
+  not_after: string | null;
+  subject: string | null;
+  inspection_error?: string | null;
+}
+
+export interface LetsEncryptConfig {
+  configured: boolean;
+  email: string | null;
+}
+
+export interface ObjectStoreConfig {
+  provider: string;
+  bucket: string;
+  region: string;
+  endpoint: string;
+  access_key_id: string;
+  secret_access_key: string;
+  path_style: boolean;
+  prefix?: string | null;
+}
+
+export interface ObjectStoreState {
+  configured: boolean;
+  object_store: ObjectStoreConfig | null;
+}
+
+export interface ProcessRecord {
+  process_type: string;
+  scale: number;
+  status: string;
+  container_id: string;
+  deployment_id: string;
+  host_port: number;
   created_at: string;
 }
 
@@ -87,7 +242,9 @@ async function apiFetch<T>(
   const token = tokenOverride ?? getToken();
   const headers = new Headers(init.headers ?? {});
 
-  if (!headers.has('Content-Type') && init.body) {
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
+
+  if (!headers.has('Content-Type') && init.body && !isFormData) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -140,6 +297,33 @@ export function fetchDeployments(appName: string): Promise<Deployment[]> {
   return apiFetch<Deployment[]>(`/api/apps/${encodeURIComponent(appName)}/deployments`);
 }
 
+export function triggerImageDeploy(appName: string, image: string): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>(`/api/apps/${encodeURIComponent(appName)}/deploy`, {
+    method: 'POST',
+    body: JSON.stringify({ source: 'image', image }),
+  });
+}
+
+export function triggerArchiveDeploy(appName: string, archive: File): Promise<{ message: string }> {
+  const formData = new FormData();
+  formData.append('archive', archive);
+
+  return apiFetch<{ message: string }>(`/api/apps/${encodeURIComponent(appName)}/deploy/archive`, {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export function triggerRollback(
+  appName: string,
+  deploymentId: string
+): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>(`/api/apps/${encodeURIComponent(appName)}/rollback`, {
+    method: 'POST',
+    body: JSON.stringify({ deployment_id: deploymentId }),
+  });
+}
+
 export function fetchConfig(appName: string): Promise<ConfigVar[]> {
   return apiFetch<ConfigVar[]>(`/api/apps/${encodeURIComponent(appName)}/config`);
 }
@@ -180,8 +364,41 @@ export function removeDomain(appName: string, domain: string): Promise<void> {
   );
 }
 
+export function fetchPorts(appName: string): Promise<PortMapping[]> {
+  return apiFetch<PortMapping[]>(`/api/apps/${encodeURIComponent(appName)}/ports`);
+}
+
+export function addPortMapping(
+  appName: string,
+  hostPort: number,
+  containerPort: number,
+  protocol = 'tcp'
+): Promise<PortMapping> {
+  return apiFetch<PortMapping>(`/api/apps/${encodeURIComponent(appName)}/ports`, {
+    method: 'POST',
+    body: JSON.stringify({
+      host_port: hostPort,
+      container_port: containerPort,
+      protocol,
+    }),
+  });
+}
+
+export function removePortMapping(appName: string, portId: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/ports/${encodeURIComponent(portId)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+}
+
 export function fetchScale(appName: string): Promise<ScaleMap> {
   return apiFetch<ScaleMap>(`/api/apps/${encodeURIComponent(appName)}/scale`);
+}
+
+export function fetchProcesses(appName: string): Promise<ProcessRecord[]> {
+  return apiFetch<ProcessRecord[]>(`/api/apps/${encodeURIComponent(appName)}/ps`);
 }
 
 export function setScale(appName: string, scales: ScaleMap): Promise<void> {
@@ -228,12 +445,267 @@ export function deletePlugin(name: string): Promise<void> {
   return apiFetch<void>(`/api/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
-export function fetchEvents(appId: string): Promise<EventRecord[]> {
-  return apiFetch<EventRecord[]>(`/api/events?app=${encodeURIComponent(appId)}`);
+export function fetchEvents(appId?: string): Promise<EventRecord[]> {
+  const suffix = appId ? `?app=${encodeURIComponent(appId)}` : '';
+  return apiFetch<EventRecord[]>(`/api/events${suffix}`);
 }
 
 export function appEventStreamUrl(appName: string, token?: string): string {
   const url = `${BASE_URL}/api/apps/${encodeURIComponent(appName)}/events/stream`;
   if (!token) return url;
   return `${url}?token=${encodeURIComponent(token)}`;
+}
+
+export function fetchNetworks(): Promise<NetworkRecord[]> {
+  return apiFetch<NetworkRecord[]>('/api/networks');
+}
+
+export function createNetwork(name: string): Promise<NetworkRecord> {
+  return apiFetch<NetworkRecord>('/api/networks', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteNetwork(name: string): Promise<void> {
+  return apiFetch<void>(`/api/networks/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function fetchAppNetworks(appName: string): Promise<NetworkRecord[]> {
+  return apiFetch<NetworkRecord[]>(`/api/apps/${encodeURIComponent(appName)}/networks`);
+}
+
+export function attachAppNetwork(appName: string, networkName: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/networks/${encodeURIComponent(networkName)}`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export function detachAppNetwork(appName: string, networkName: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/networks/${encodeURIComponent(networkName)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+}
+
+export function fetchStorageMounts(appName: string): Promise<StorageMount[]> {
+  return apiFetch<StorageMount[]>(`/api/apps/${encodeURIComponent(appName)}/storage`);
+}
+
+export function addStorageMount(
+  appName: string,
+  hostPath: string,
+  containerPath: string
+): Promise<StorageMount> {
+  return apiFetch<StorageMount>(`/api/apps/${encodeURIComponent(appName)}/storage`, {
+    method: 'POST',
+    body: JSON.stringify({
+      host_path: hostPath,
+      container_path: containerPath,
+    }),
+  });
+}
+
+export function removeStorageMount(appName: string, mountId: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/storage/${encodeURIComponent(mountId)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+}
+
+export function ensureStorageDirectory(appName: string, path: string): Promise<void> {
+  return apiFetch<void>(`/api/apps/${encodeURIComponent(appName)}/storage/ensure`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+}
+
+export function fetchCronEntries(appName: string): Promise<CronEntry[]> {
+  return apiFetch<CronEntry[]>(`/api/apps/${encodeURIComponent(appName)}/cron`);
+}
+
+export function addCronEntry(
+  appName: string,
+  schedule: string,
+  command: string
+): Promise<CronEntry> {
+  return apiFetch<CronEntry>(`/api/apps/${encodeURIComponent(appName)}/cron`, {
+    method: 'POST',
+    body: JSON.stringify({ schedule, command }),
+  });
+}
+
+export function removeCronEntry(appName: string, cronId: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/cron/${encodeURIComponent(cronId)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+}
+
+export function fetchRoutingTable(): Promise<RoutingTableEntry[]> {
+  return apiFetch<RoutingTableEntry[]>('/api/routing');
+}
+
+export function fetchRoutingStatus(): Promise<RoutingStatusResponse> {
+  return apiFetch<RoutingStatusResponse>('/api/routing/status');
+}
+
+export function fetchAppRoutingStatus(appName: string): Promise<SingleRoutingStatusResponse> {
+  return apiFetch<SingleRoutingStatusResponse>(
+    `/api/routing/status/${encodeURIComponent(appName)}`
+  );
+}
+
+export function enableTls(appName: string): Promise<void> {
+  return apiFetch<void>(`/api/letsencrypt/enable/${encodeURIComponent(appName)}`, {
+    method: 'POST',
+  });
+}
+
+export function disableTls(appName: string): Promise<void> {
+  return apiFetch<void>(`/api/letsencrypt/disable/${encodeURIComponent(appName)}`, {
+    method: 'POST',
+  });
+}
+
+export function fetchTlsStatus(appName: string): Promise<CertificateStatus> {
+  return apiFetch<CertificateStatus>(`/api/letsencrypt/status/${encodeURIComponent(appName)}`);
+}
+
+export function fetchLetsEncryptConfig(): Promise<LetsEncryptConfig> {
+  return apiFetch<LetsEncryptConfig>('/api/letsencrypt/config');
+}
+
+export function setLetsEncryptConfig(email: string): Promise<void> {
+  return apiFetch<void>('/api/letsencrypt/config', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function fetchObjectStoreConfig(): Promise<ObjectStoreState> {
+  return apiFetch<ObjectStoreState>('/api/objectstore');
+}
+
+export function setObjectStoreConfig(config: ObjectStoreConfig): Promise<ObjectStoreState> {
+  return apiFetch<ObjectStoreState>('/api/objectstore', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
+}
+
+export function unsetObjectStoreConfig(): Promise<void> {
+  return apiFetch<void>('/api/objectstore', {
+    method: 'DELETE',
+  });
+}
+
+export function testObjectStoreConfig(): Promise<{ ok: boolean }> {
+  return apiFetch<{ ok: boolean }>('/api/objectstore/test', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+function serviceBasePath(kind: ManagedServiceKind): string {
+  return `/api/${kind}/services`;
+}
+
+export function fetchManagedServices(kind: ManagedServiceKind): Promise<ManagedServiceSummary[]> {
+  return apiFetch<ManagedServiceSummary[]>(serviceBasePath(kind));
+}
+
+export function createManagedService(
+  kind: ManagedServiceKind,
+  name: string
+): Promise<ManagedServiceSummary> {
+  return apiFetch<ManagedServiceSummary>(serviceBasePath(kind), {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function fetchManagedService(
+  kind: ManagedServiceKind,
+  name: string
+): Promise<ManagedServiceDetail> {
+  return apiFetch<ManagedServiceDetail>(`${serviceBasePath(kind)}/${encodeURIComponent(name)}`);
+}
+
+export function deleteManagedService(kind: ManagedServiceKind, name: string): Promise<void> {
+  return apiFetch<void>(`${serviceBasePath(kind)}/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function linkManagedService(
+  kind: ManagedServiceKind,
+  serviceName: string,
+  appName: string
+): Promise<void> {
+  return apiFetch<void>(
+    `${serviceBasePath(kind)}/${encodeURIComponent(serviceName)}/link/${encodeURIComponent(appName)}`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export function unlinkManagedService(
+  kind: ManagedServiceKind,
+  serviceName: string,
+  appName: string
+): Promise<void> {
+  return apiFetch<void>(
+    `${serviceBasePath(kind)}/${encodeURIComponent(serviceName)}/link/${encodeURIComponent(appName)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+}
+
+export async function fetchManagedServiceLogs(
+  kind: ManagedServiceKind,
+  name: string,
+  n = 100
+): Promise<string[]> {
+  const response = await apiFetch<{ logs: string[] }>(
+    `${serviceBasePath(kind)}/${encodeURIComponent(name)}/logs?n=${n}`
+  );
+  return response.logs;
+}
+
+export function fetchPostgresBackups(name: string): Promise<ServiceBackup[]> {
+  return apiFetch<ServiceBackup[]>(
+    `${serviceBasePath('postgres')}/${encodeURIComponent(name)}/backups`
+  );
+}
+
+export function triggerPostgresBackup(name: string): Promise<ServiceBackup> {
+  return apiFetch<ServiceBackup>(
+    `${serviceBasePath('postgres')}/${encodeURIComponent(name)}/backups`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export function restorePostgresBackup(name: string, backupId: string): Promise<ServiceBackup> {
+  return apiFetch<ServiceBackup>(
+    `${serviceBasePath('postgres')}/${encodeURIComponent(name)}/restore/${encodeURIComponent(backupId)}`,
+    {
+      method: 'POST',
+    }
+  );
 }

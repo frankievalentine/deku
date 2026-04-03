@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { createApp, deleteApp, fetchApps, getToken, type App } from '../lib/api';
+import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import StatusBadge from './StatusBadge';
 
@@ -34,6 +35,7 @@ function AppListInner() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   async function loadApps() {
     try {
@@ -74,11 +76,12 @@ function AppListInner() {
     }
   }
 
-  async function handleDelete(name: string) {
-    if (!window.confirm(`Delete app "${name}"? This cannot be undone.`)) return;
+  async function handleDelete() {
+    if (!deleteTarget) return;
     try {
-      setDeleting(name);
-      await deleteApp(name);
+      setDeleting(deleteTarget);
+      await deleteApp(deleteTarget);
+      setDeleteTarget(null);
       await loadApps();
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Unable to delete app.');
@@ -218,15 +221,23 @@ function AppListInner() {
               </dl>
 
               <div className="cluster justify-between align-center">
-                <a
-                  href={`/app?name=${encodeURIComponent(app.name)}`}
-                  className="btn btn-secondary btn-sm"
-                >
-                  Open app
-                </a>
+                <div className="cluster">
+                  <a
+                    href={`/app?name=${encodeURIComponent(app.name)}`}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    Open app
+                  </a>
+                  <a
+                    href={`/deployments?app=${encodeURIComponent(app.name)}`}
+                    className="btn btn-ghost btn-sm"
+                  >
+                    Deployments
+                  </a>
+                </div>
                 <button
                   className="btn btn-danger btn-sm"
-                  onClick={() => handleDelete(app.name)}
+                  onClick={() => setDeleteTarget(app.name)}
                   disabled={deleting === app.name}
                   aria-label={`Delete ${app.name}`}
                 >
@@ -237,6 +248,23 @@ function AppListInner() {
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        open={deleteTarget !== null}
+        title={`Delete ${deleteTarget ?? 'app'}?`}
+        description={
+          deleteTarget
+            ? `This permanently removes the app record and its attached runtime metadata for ${deleteTarget}. This action cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete app"
+        cancelLabel="Keep app"
+        busy={deleting !== null}
+        onConfirm={() => {
+          void handleDelete();
+        }}
+        onClose={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }
