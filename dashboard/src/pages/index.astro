@@ -1,15 +1,8 @@
 ---
-// Deku Dashboard — root page
+import Shell from '../layouts/Shell.astro';
+import AppList from '../components/AppList';
 ---
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Deku Dashboard</title>
-  </head>
-  <body>
-    <h1>Deku Dashboard</h1>
-    <p>Dashboard coming in Milestone 6.</p>
-  </body>
-</html>
+
+<Shell title="Deku / Apps" activeNav="apps">
+  <AppList client:load />
+</Shell>

@@ -1,0 +1,8 @@
+---
+import Shell from '../layouts/Shell.astro';
+import DeploymentDetailPage from '../components/DeploymentDetailPage';
+---
+
+<Shell title="Deku / Deployments" activeNav="apps">
+  <DeploymentDetailPage client:load />
+</Shell>

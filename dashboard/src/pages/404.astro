@@ -1,0 +1,29 @@
+---
+import Shell from '../layouts/Shell.astro';
+---
+
+<Shell title="Deku / Not Found">
+  <section class="hero-panel stack-lg not-found-panel">
+    <div class="stack-sm">
+      <p class="eyebrow">Signal Lost</p>
+      <h1 class="page-title">Route not found</h1>
+      <p class="page-copy">
+        This control surface does not have a panel at this address. Return to the app index or
+        reopen a known deployment route.
+      </p>
+    </div>
+
+    <div class="cluster">
+      <a class="btn btn-primary" href="/">Return to apps</a>
+      <a class="btn btn-secondary" href="/deployments/">Open deployments</a>
+    </div>
+  </section>
+</Shell>
+
+<style>
+  .not-found-panel {
+    min-height: min(68vh, 640px);
+    align-content: center;
+    max-width: 920px;
+  }
+</style>

@@ -1,0 +1,188 @@
+---
+export interface Props {
+  activeNav?: string;
+}
+
+const { activeNav } = Astro.props;
+
+const navItems = [
+  { href: '/', label: 'Apps', id: 'apps', icon: 'grid' },
+  { href: '/ssh-keys', label: 'SSH Keys', id: 'ssh-keys', icon: 'key' },
+  { href: '/plugins', label: 'Plugins', id: 'plugins', icon: 'plug' },
+];
+---
+
+<nav class="sidebar" aria-label="Main navigation">
+  <div class="sidebar-brand">
+    <a href="/" class="brand-link" aria-label="Deku home">
+      <span class="brand-kicker">Control surface</span>
+      <span class="brand-wordmark">DEKU</span>
+      <span class="brand-meta">Milestone 6 / dashboard</span>
+    </a>
+  </div>
+
+  <ul class="sidebar-nav" role="list">
+    {navItems.map((item) => (
+      <li>
+        <a
+          href={item.href}
+          class:list={['nav-link', { active: activeNav === item.id }]}
+          aria-current={activeNav === item.id ? 'page' : undefined}
+        >
+          <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            {item.icon === 'grid' && (
+              <>
+                <rect x="1" y="1" width="6" height="6" rx="1" fill="currentColor" />
+                <rect x="9" y="1" width="6" height="6" rx="1" fill="currentColor" />
+                <rect x="1" y="9" width="6" height="6" rx="1" fill="currentColor" />
+                <rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor" />
+              </>
+            )}
+            {item.icon === 'key' && (
+              <path d="M10.5 1a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM7 5.5a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0zm-1.854 3.646L1 13.293V15h1.707l.5-.5V13.5H4.5V12h1.207l1.046-1.046A5.505 5.505 0 0 1 5.146 9.146z" fill="currentColor" />
+            )}
+            {item.icon === 'plug' && (
+              <path d="M6 1v3H4v2h2v1.268A4 4 0 0 0 8 15a4 4 0 0 0 2-7.732V6h2V4h-2V1H6zm2 6.268A2 2 0 1 1 8 11V7.268z" fill="currentColor" />
+            )}
+          </svg>
+          <span>{item.label}</span>
+        </a>
+      </li>
+    ))}
+  </ul>
+
+  <div class="sidebar-footer panel">
+    <p class="eyebrow">Build lane</p>
+    <p class="sidebar-note">Static Astro shell, live API panels, SSE event stream, and daemon-served assets.</p>
+  </div>
+</nav>
+
+<style>
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: var(--sidebar-width);
+    height: 100vh;
+    background:
+      linear-gradient(180deg, rgba(242, 178, 82, 0.12), transparent 24%),
+      linear-gradient(180deg, rgba(15, 18, 20, 0.98), rgba(15, 18, 20, 0.88));
+    border-right: 1px solid var(--color-border-strong);
+    display: flex;
+    flex-direction: column;
+    z-index: 100;
+    overflow-y: auto;
+    backdrop-filter: blur(18px);
+  }
+
+  .sidebar-brand {
+    padding: var(--space-6) var(--space-5) var(--space-5);
+    border-bottom: 1px solid rgba(242, 178, 82, 0.18);
+    flex-shrink: 0;
+  }
+
+  .brand-link {
+    text-decoration: none;
+    color: var(--color-text-primary);
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .brand-kicker {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--color-text-muted);
+  }
+
+  .brand-wordmark {
+    font-family: var(--font-heading);
+    font-size: 1.65rem;
+    font-weight: 800;
+    color: var(--color-accent);
+    letter-spacing: 0.08em;
+  }
+
+  .brand-meta {
+    font-size: 0.86rem;
+    color: var(--color-text-soft);
+  }
+
+  .sidebar-nav {
+    flex: 1;
+    padding: var(--space-5) var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0.9rem 0.95rem;
+    border-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: var(--transition-fast);
+    border: 1px solid transparent;
+  }
+
+  .nav-link:hover {
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--color-text-primary);
+    border-color: rgba(242, 178, 82, 0.12);
+  }
+
+  .nav-link.active {
+    background:
+      linear-gradient(135deg, rgba(242, 178, 82, 0.22), rgba(242, 178, 82, 0.08)),
+      rgba(255, 255, 255, 0.03);
+    color: var(--color-accent);
+    border-color: rgba(242, 178, 82, 0.28);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+
+  .nav-icon {
+    flex-shrink: 0;
+    opacity: 0.9;
+  }
+
+  .sidebar-footer {
+    margin: var(--space-4);
+    padding: var(--space-4);
+  }
+
+  .sidebar-note {
+    color: var(--color-text-soft);
+    line-height: 1.6;
+  }
+
+  @media (max-width: 960px) {
+    .sidebar {
+      position: sticky;
+      width: 100%;
+      height: auto;
+      border-right: 0;
+      border-bottom: 1px solid var(--color-border-strong);
+    }
+
+    .sidebar-nav {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .sidebar-footer {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .sidebar-nav {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

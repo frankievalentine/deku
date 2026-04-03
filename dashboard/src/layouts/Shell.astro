@@ -1,0 +1,66 @@
+---
+import Base from './Base.astro';
+import Sidebar from '../components/Sidebar.astro';
+import Header from '../components/Header.astro';
+
+export interface Props {
+  title?: string;
+  activeNav?: string;
+}
+
+const { title, activeNav } = Astro.props;
+---
+
+<Base title={title}>
+  <div class="shell">
+    <Sidebar activeNav={activeNav} />
+    <div class="shell-body">
+      <Header />
+      <main class="shell-main">
+        <div class="shell-content section-fade">
+          <slot />
+        </div>
+      </main>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .shell {
+    display: flex;
+    min-height: 100vh;
+    position: relative;
+  }
+
+  .shell-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin-left: var(--sidebar-width);
+  }
+
+  .shell-main {
+    flex: 1;
+    padding: var(--space-8) var(--space-7) var(--space-10);
+  }
+
+  .shell-content {
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+
+  @media (max-width: 960px) {
+    .shell {
+      flex-direction: column;
+    }
+
+    .shell-body {
+      margin-left: 0;
+    }
+
+    .shell-main {
+      padding: var(--space-5) var(--space-4) var(--space-8);
+    }
+  }
+</style>

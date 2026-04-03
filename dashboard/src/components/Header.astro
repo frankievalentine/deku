@@ -1,0 +1,162 @@
+<header class="header" role="banner">
+  <div class="header-inner">
+    <div class="header-left">
+      <p class="eyebrow">Realtime operations deck</p>
+      <p class="header-copy">Dekud state, deployment history, runtime controls.</p>
+    </div>
+    <div class="header-right">
+      <button class="token-reset" id="token-reset" type="button">Reset token</button>
+      <div class="health-indicator" id="health-indicator" title="Daemon status" aria-label="Daemon status">
+        <span class="health-dot" id="health-dot" data-status="unknown"></span>
+        <span class="health-label" id="health-label">Awaiting token</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<script>
+  const BASE = import.meta.env.PUBLIC_API_URL ?? '';
+  const tokenReset = document.getElementById('token-reset');
+
+  async function poll() {
+    const dot = document.getElementById('health-dot');
+    const label = document.getElementById('health-label');
+    const token = window.localStorage.getItem('deku_token');
+
+    if (!dot || !label) return;
+    if (!token) {
+      dot.dataset.status = 'unknown';
+      label.textContent = 'Awaiting token';
+      return;
+    }
+
+    try {
+      const res = await fetch(`${BASE}/healthz`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.ok) {
+        dot.dataset.status = 'ok';
+        label.textContent = 'Online';
+      } else {
+        dot.dataset.status = 'error';
+        label.textContent = 'Offline';
+      }
+    } catch {
+      dot.dataset.status = 'error';
+      label.textContent = 'Offline';
+    }
+  }
+
+  poll();
+  setInterval(poll, 30_000);
+
+  tokenReset?.addEventListener('click', () => {
+    window.localStorage.removeItem('deku_token');
+    window.location.reload();
+  });
+</script>
+
+<style>
+  .header {
+    position: sticky;
+    top: 0;
+    min-height: var(--header-height);
+    background: rgba(12, 15, 16, 0.88);
+    border-bottom: 1px solid rgba(242, 178, 82, 0.12);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    padding: var(--space-4) var(--space-7);
+    backdrop-filter: blur(14px);
+  }
+
+  .header-inner {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .header-left {
+    display: grid;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+
+  .header-copy {
+    color: var(--color-text-soft);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-shrink: 0;
+  }
+
+  .health-indicator {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0.7rem 0.9rem;
+    border: 1px solid rgba(242, 178, 82, 0.12);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .health-label {
+    font-size: 0.82rem;
+    color: var(--color-text-soft);
+  }
+
+  .health-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+    transition: background 0.3s ease;
+    flex-shrink: 0;
+  }
+
+  .health-dot[data-status='ok'] {
+    background: var(--color-status-running);
+    box-shadow: 0 0 6px var(--color-status-running);
+  }
+
+  .health-dot[data-status='error'] {
+    background: var(--color-status-stopped);
+  }
+
+  .token-reset {
+    border: 1px solid rgba(242, 178, 82, 0.18);
+    border-radius: var(--radius-pill);
+    padding: 0.7rem 1rem;
+    color: var(--color-text-primary);
+    background: transparent;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+  }
+
+  .token-reset:hover {
+    background: rgba(242, 178, 82, 0.12);
+  }
+
+  @media (max-width: 960px) {
+    .header {
+      padding: var(--space-4);
+    }
+
+    .header-inner {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .header-right {
+      width: 100%;
+      justify-content: space-between;
+    }
+  }
+</style>
