@@ -80,7 +80,8 @@ mod tests {
     use super::{app_config_path, apply_app_config, write_raw_app_config, DesiredAppConfig};
     use deku_core::types::Upstream;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
+    use tokio::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -98,7 +99,7 @@ mod tests {
 
     #[tokio::test]
     async fn restores_previous_config_when_reload_fails() {
-        let _guard = env_lock().lock().expect("env lock should acquire");
+        let _guard = env_lock().lock().await;
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path().join("conf");
         std::fs::create_dir_all(&conf_dir).expect("conf dir should create");

@@ -84,14 +84,42 @@ pub async fn list_apps(pool: &SqlitePool) -> Result<Vec<App>> {
 }
 
 pub async fn delete_app(pool: &SqlitePool, name: &str) -> Result<()> {
-    let result = sqlx::query!("DELETE FROM apps WHERE name = ?1", name)
-        .execute(pool)
+    let app = get_app(pool, name).await?;
+    let mut tx = pool.begin().await?;
+
+    // Older schema tables do not consistently use ON DELETE CASCADE, so app deletion
+    // needs to clear dependent rows explicitly before removing the app record itself.
+    for statement in [
+        "DELETE FROM events WHERE app_id = ?",
+        "DELETE FROM containers WHERE app_id = ?",
+        "DELETE FROM deployments WHERE app_id = ?",
+        "DELETE FROM domains WHERE app_id = ?",
+        "DELETE FROM config_vars WHERE app_id = ?",
+        "DELETE FROM port_mappings WHERE app_id = ?",
+        "DELETE FROM storage_mounts WHERE app_id = ?",
+        "DELETE FROM resource_limits WHERE app_id = ?",
+        "DELETE FROM process_scale WHERE app_id = ?",
+        "DELETE FROM docker_options WHERE app_id = ?",
+        "DELETE FROM app_networks WHERE app_id = ?",
+        "DELETE FROM service_links WHERE app_id = ?",
+        "DELETE FROM cron_entries WHERE app_id = ?",
+    ] {
+        sqlx::query(statement)
+            .bind(&app.id)
+            .execute(tx.as_mut())
+            .await?;
+    }
+
+    let result = sqlx::query("DELETE FROM apps WHERE id = ?")
+        .bind(&app.id)
+        .execute(tx.as_mut())
         .await?;
 
     if result.rows_affected() == 0 {
         return Err(DekuError::AppNotFound(name.to_string()));
     }
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -623,29 +651,6 @@ pub async fn list_containers_for_app(
     Ok(containers)
 }
 
-pub async fn list_containers_for_deployment(
-    pool: &SqlitePool,
-    deployment_id: &str,
-) -> Result<Vec<ContainerRecord>> {
-    let containers = sqlx::query_as!(
-        ContainerRecord,
-        r#"SELECT
-            id            as "id!",
-            app_id        as "app_id!",
-            deployment_id as "deployment_id!",
-            process_type  as "process_type!",
-            status        as "status!",
-            host_port     as "host_port",
-            created_at    as "created_at!: _"
-           FROM containers
-           WHERE deployment_id = ?1 AND status = 'running'"#,
-        deployment_id
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(containers)
-}
-
 // ── Process scale ─────────────────────────────────────────────────────────────
 
 pub async fn get_process_scales(
@@ -676,7 +681,6 @@ pub async fn get_app_by_name(pool: &SqlitePool, name: &str) -> Result<App> {
 pub struct SshKey {
     pub id: String,
     pub name: String,
-    pub public_key: String,
     pub fingerprint: String,
 }
 
@@ -701,7 +705,6 @@ pub async fn add_ssh_key(
     Ok(SshKey {
         id,
         name: name.to_string(),
-        public_key: public_key.to_string(),
         fingerprint: fingerprint.to_string(),
     })
 }
@@ -718,7 +721,6 @@ pub async fn list_ssh_keys(pool: &SqlitePool) -> Result<Vec<SshKey>> {
         .map(|r| SshKey {
             id: r.id.unwrap_or_default(),
             name: r.name,
-            public_key: r.public_key,
             fingerprint: r.fingerprint,
         })
         .collect())
@@ -739,7 +741,6 @@ pub async fn find_ssh_key_by_fingerprint(
     Ok(row.map(|r| SshKey {
         id: r.id.unwrap_or_default(),
         name: r.name,
-        public_key: r.public_key,
         fingerprint: r.fingerprint,
     }))
 }
@@ -827,7 +828,6 @@ pub struct Service {
 }
 
 pub struct ServiceLink {
-    pub id: String,
     pub service_id: String,
     pub app_id: String,
     pub env_key: String,
@@ -836,15 +836,12 @@ pub struct ServiceLink {
 pub struct Network {
     pub id: String,
     pub name: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub struct CronEntry {
     pub id: String,
-    pub app_id: String,
     pub schedule: String,
     pub command: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub struct ServiceBackup {
@@ -927,6 +924,26 @@ pub async fn get_service_for_plugin(
     Ok(service)
 }
 
+pub async fn get_service_by_id(pool: &SqlitePool, id: &str) -> Result<Service> {
+    let row = sqlx::query(
+        r#"SELECT id, name, plugin, container_id, status, config, created_at
+           FROM services WHERE id = ?1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| DekuError::Database(sqlx::Error::RowNotFound))?;
+    Ok(Service {
+        id: row.get("id"),
+        name: row.get("name"),
+        plugin: row.get("plugin"),
+        container_id: row.get("container_id"),
+        status: row.get("status"),
+        config: row.get("config"),
+        created_at: row.get("created_at"),
+    })
+}
+
 pub async fn list_services(pool: &SqlitePool, plugin: &str) -> Result<Vec<Service>> {
     let rows = sqlx::query!(
         r#"SELECT id as "id!", name as "name!", plugin as "plugin!",
@@ -949,23 +966,6 @@ pub async fn list_services(pool: &SqlitePool, plugin: &str) -> Result<Vec<Servic
             created_at: r.created_at,
         })
         .collect())
-}
-
-pub async fn update_service_status(
-    pool: &SqlitePool,
-    service_id: &str,
-    container_id: &str,
-    status: &str,
-) -> Result<()> {
-    sqlx::query!(
-        "UPDATE services SET container_id = ?1, status = ?2 WHERE id = ?3",
-        container_id,
-        status,
-        service_id,
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 pub async fn delete_service(pool: &SqlitePool, name: &str) -> Result<Vec<ServiceLink>> {
@@ -995,7 +995,6 @@ pub async fn link_service(
     .execute(pool)
     .await?;
     Ok(ServiceLink {
-        id,
         service_id: service_id.to_string(),
         app_id: app_id.to_string(),
         env_key: env_key.to_string(),
@@ -1016,7 +1015,6 @@ pub async fn get_service_link(
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|r| ServiceLink {
-        id: r.id,
         service_id: r.service_id,
         app_id: r.app_id,
         env_key: r.env_key,
@@ -1034,10 +1032,30 @@ pub async fn list_service_links(pool: &SqlitePool, service_id: &str) -> Result<V
     Ok(rows
         .into_iter()
         .map(|r| ServiceLink {
-            id: r.id,
             service_id: r.service_id,
             app_id: r.app_id,
             env_key: r.env_key,
+        })
+        .collect())
+}
+
+pub async fn list_service_links_for_app(
+    pool: &SqlitePool,
+    app_id: &str,
+) -> Result<Vec<ServiceLink>> {
+    let rows = sqlx::query(
+        r#"SELECT service_id, app_id, env_key
+           FROM service_links WHERE app_id = ?1"#,
+    )
+    .bind(app_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ServiceLink {
+            service_id: r.get("service_id"),
+            app_id: r.get("app_id"),
+            env_key: r.get("env_key"),
         })
         .collect())
 }
@@ -1165,7 +1183,6 @@ pub async fn create_network(pool: &SqlitePool, name: &str) -> Result<Network> {
     Ok(Network {
         id,
         name: name.to_string(),
-        created_at: now,
     })
 }
 
@@ -1181,7 +1198,6 @@ pub async fn get_network(pool: &SqlitePool, name: &str) -> Result<Network> {
     Ok(Network {
         id: row.id,
         name: row.name,
-        created_at: row.created_at,
     })
 }
 
@@ -1197,7 +1213,6 @@ pub async fn list_networks(pool: &SqlitePool) -> Result<Vec<Network>> {
         .map(|r| Network {
             id: r.id,
             name: r.name,
-            created_at: r.created_at,
         })
         .collect())
 }
@@ -1261,7 +1276,6 @@ pub async fn list_app_networks(pool: &SqlitePool, app_id: &str) -> Result<Vec<Ne
         .map(|r| Network {
             id: r.id,
             name: r.name,
-            created_at: r.created_at,
         })
         .collect())
 }
@@ -1295,10 +1309,8 @@ pub async fn list_cron_entries(pool: &SqlitePool, app_id: &str) -> Result<Vec<Cr
         .into_iter()
         .map(|r| CronEntry {
             id: r.id,
-            app_id: r.app_id,
             schedule: r.schedule,
             command: r.command,
-            created_at: r.created_at,
         })
         .collect())
 }
@@ -1324,10 +1336,8 @@ pub async fn add_cron_entry(
     .await?;
     Ok(CronEntry {
         id,
-        app_id: app_id.to_string(),
         schedule: schedule.to_string(),
         command: command.to_string(),
-        created_at: now,
     })
 }
 

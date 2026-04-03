@@ -32,7 +32,7 @@ pub async fn run(args: PluginsArgs, client: &DekuClient) -> Result<()> {
                 if plugins.is_empty() {
                     println!("No plugins installed.");
                 } else {
-                    println!("{:<24} {}", "NAME", "VERSION");
+                    println!("{:<24} VERSION", "NAME");
                     println!("{}", "-".repeat(40));
                     for p in plugins {
                         let name = p["name"].as_str().unwrap_or("-");

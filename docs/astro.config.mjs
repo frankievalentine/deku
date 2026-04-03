@@ -22,13 +22,16 @@ export default defineConfig({
           items: [
             { label: 'Introduction', link: '/introduction/' },
             { label: 'Installation', link: '/installation/' },
-            { label: 'Quick Start', link: '/quickstart/' },
+            { label: 'Get Started', link: '/get-started/' },
+            { label: 'Dashboard Overview', link: '/dashboard-overview/' },
+            { label: 'Architecture', link: '/architecture/' },
           ],
         },
         {
           label: 'Reference',
           items: [
             { label: 'CLI Reference', link: '/reference/cli-reference/' },
+            { label: 'API Reference', link: '/reference/api-reference/' },
             { label: 'deku.toml', link: '/reference/deku-toml/' },
             { label: 'Plugin API', link: '/reference/plugin-api/' },
           ],
@@ -37,7 +40,6 @@ export default defineConfig({
           label: 'Operations',
           items: [
             { label: 'Agent Operations', link: '/agent-operations/' },
-            { label: 'Self-hosting', link: '/self-hosting/' },
           ],
         },
         {

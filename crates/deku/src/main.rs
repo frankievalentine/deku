@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod client;
 mod commands;
+mod local_config;
 mod prompt;
 
 #[derive(Debug, Parser)]
@@ -16,6 +17,8 @@ struct Cli {
 enum Commands {
     /// First-run setup wizard
     Setup(commands::setup::SetupArgs),
+    /// Show dashboard access details
+    Dashboard(commands::dashboard::DashboardArgs),
     /// Application management
     Apps(commands::apps::AppsArgs),
     /// Configuration variables
@@ -66,6 +69,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Setup(_) => unreachable!(),
+        Commands::Dashboard(args) => commands::dashboard::run(args, &client).await,
         Commands::Apps(args) => commands::apps::run(args, &client).await,
         Commands::Config(args) => commands::config::run(args, &client).await,
         Commands::Deploy(args) => commands::deploy::run(args, &client).await,

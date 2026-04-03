@@ -81,10 +81,7 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
                 if deploys.is_empty() {
                     println!("No deployments found.");
                 } else {
-                    println!(
-                        "{:<12} {:<12} {:<20} {}",
-                        "ID", "STATUS", "IMAGE", "CREATED"
-                    );
+                    println!("{:<12} {:<12} {:<20} CREATED", "ID", "STATUS", "IMAGE");
                     println!("{}", "-".repeat(72));
                     for d in deploys {
                         let id = &d["id"].as_str().unwrap_or("?")

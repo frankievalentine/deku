@@ -33,8 +33,8 @@ pub async fn run(args: PsArgs, client: &DekuClient) -> Result<()> {
                     println!("No processes running.");
                 } else {
                     println!(
-                        "{:<16} {:<8} {:<12} {}",
-                        "PROCESS", "SCALE", "STATUS", "CONTAINER"
+                        "{:<16} {:<8} {:<12} CONTAINER",
+                        "PROCESS", "SCALE", "STATUS"
                     );
                     println!("{}", "-".repeat(60));
                     for p in procs {

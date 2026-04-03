@@ -291,6 +291,48 @@ pub async fn rd_logs(
     }
 }
 
+pub async fn rd_backups(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match database::list_backups(&state.pool, &name, "redis").await {
+        Ok(backups) => {
+            let json: Vec<_> = backups.iter().map(backup_json).collect();
+            (StatusCode::OK, Json(serde_json::json!(json))).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+pub async fn rd_backup(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => match database::backup_redis(&state.pool, &state.docker, &cfg, &name).await {
+            Ok(backup) => (StatusCode::CREATED, Json(backup_json(&backup))).into_response(),
+            Err(e) => internal_error(e).into_response(),
+        },
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+pub async fn rd_restore(
+    State(state): State<SharedState>,
+    Path((name, backup_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => {
+            match database::restore_redis(&state.pool, &state.docker, &cfg, &name, &backup_id).await
+            {
+                Ok(backup) => (StatusCode::OK, Json(backup_json(&backup))).into_response(),
+                Err(e) => internal_error(e).into_response(),
+            }
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
 // ── MySQL ─────────────────────────────────────────────────────────────────────
 
 pub async fn my_list(State(state): State<SharedState>) -> impl IntoResponse {

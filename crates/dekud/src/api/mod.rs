@@ -27,14 +27,19 @@ use crate::container::DockerClient;
 use crate::db::queries;
 use crate::deploy::{DeployRequest, DeploySource};
 use crate::events::EventSender;
-use deku_core::types::{NewApp, ObjectStoreConfig, Upstream};
+use deku_core::{
+    auth::{issue_dashboard_token, DashboardTokenState},
+    types::{NewApp, ObjectStoreConfig, Upstream},
+};
+use deku_plugin_sdk::context::AppContext;
+use tokio::sync::RwLock;
 
 pub mod auth;
 mod services;
 
-#[derive(Clone)]
 pub struct AppState {
     pub config: DekuConfig,
+    pub dashboard_auth: RwLock<Option<DashboardTokenState>>,
     pub pool: SqlitePool,
     pub events: EventSender,
     pub docker: DockerClient,
@@ -50,6 +55,7 @@ impl AppState {
         plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            dashboard_auth: RwLock::new(config.dashboard_auth.clone()),
             config,
             pool,
             events,
@@ -61,11 +67,8 @@ impl AppState {
 
 pub type SharedState = Arc<AppState>;
 
-fn build_router(state: SharedState) -> Router {
-    let dashboard_dir = state.config.dashboard_dir.clone();
+fn build_api_router(state: SharedState) -> Router {
     Router::new()
-        // Health
-        .route("/healthz", get(health_check))
         // Apps
         .route("/api/apps", get(list_apps).post(create_app))
         .route("/api/apps/{name}", get(get_app).delete(delete_app))
@@ -88,9 +91,16 @@ fn build_router(state: SharedState) -> Router {
         .route("/api/apps/{name}/rollback", post(trigger_rollback))
         // Logs
         .route("/api/apps/{name}/logs", get(get_logs))
+        .route("/api/apps/{name}/checks", get(get_app_checks))
         // Config vars
         .route("/api/apps/{name}/config", get(list_config).post(set_config))
         .route("/api/apps/{name}/config/{key}", delete(unset_config))
+        .route(
+            "/api/apps/{name}/objectstore",
+            get(get_app_object_store_link)
+                .post(link_app_object_store)
+                .delete(unlink_app_object_store),
+        )
         // Process scale
         .route("/api/apps/{name}/ps", get(list_processes))
         .route("/api/apps/{name}/scale", get(get_scale).post(set_scale))
@@ -116,6 +126,8 @@ fn build_router(state: SharedState) -> Router {
                 .delete(unset_object_store_config),
         )
         .route("/api/objectstore/test", post(test_object_store_config))
+        // Dashboard auth
+        .route("/api/dashboard/token", post(rotate_dashboard_token))
         // Archive deploy
         .route("/api/apps/{name}/deploy/archive", post(deploy_archive))
         // Postgres
@@ -148,6 +160,14 @@ fn build_router(state: SharedState) -> Router {
         .route(
             "/api/redis/services/{name}",
             get(services::rd_info).delete(services::rd_destroy),
+        )
+        .route(
+            "/api/redis/services/{name}/backups",
+            get(services::rd_backups).post(services::rd_backup),
+        )
+        .route(
+            "/api/redis/services/{name}/restore/{backup_id}",
+            post(services::rd_restore),
         )
         .route(
             "/api/redis/services/{name}/link/{app}",
@@ -207,38 +227,30 @@ fn build_router(state: SharedState) -> Router {
         )
         .route("/api/apps/{app}/cron/{id}", delete(services::cron_remove))
         .with_state(state)
-        .layer(TraceLayer::new_for_http())
-        // Dashboard static files — fallback so API routes take precedence
+}
+
+fn build_public_router(state: SharedState) -> Router {
+    let dashboard_dir = state.config.dashboard_dir.clone();
+    Router::new()
+        .route("/healthz", get(health_check))
         .fallback_service(ServeDir::new(dashboard_dir).append_index_html_on_directories(true))
 }
 
 pub async fn serve(state: SharedState) -> anyhow::Result<()> {
-    // Generate and persist the CLI token on startup
-    if let Some(secret) = &state.config.auth_secret {
-        match auth::generate_token(secret) {
-            Ok(token) => {
-                let token_path = state.config.data_dir.join("cli-token");
-                std::fs::create_dir_all(&state.config.data_dir)?;
-                std::fs::write(&token_path, &token)?;
-                info!(
-                    token_path = %token_path.display(),
-                    "CLI auth token written"
-                );
-            }
-            Err(e) => {
-                tracing::warn!("failed to generate CLI auth token: {e}");
-            }
-        }
-    }
-
     // Unix socket router — trusted local access, no auth required
-    let unix_app = build_router(state.clone());
+    let unix_app = build_api_router(state.clone())
+        .merge(build_public_router(state.clone()))
+        .layer(TraceLayer::new_for_http());
 
-    // TCP router — requires valid JWT Bearer token
-    let tcp_app = build_router(state.clone()).layer(middleware::from_fn_with_state(
-        state.clone(),
-        auth::require_auth,
-    ));
+    // TCP router — dashboard/static assets are public, API routes require dashboard auth.
+    let tcp_app = build_public_router(state.clone())
+        .merge(
+            build_api_router(state.clone()).layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .layer(TraceLayer::new_for_http());
 
     let tcp_addr = format!("0.0.0.0:{}", state.config.api_port);
     let tcp_listener = TcpListener::bind(&tcp_addr).await?;
@@ -280,6 +292,29 @@ fn not_found(msg: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value
 
 async fn health_check() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok", "service": "dekud" }))
+}
+
+async fn rotate_dashboard_token(State(state): State<SharedState>) -> impl IntoResponse {
+    match rotate_dashboard_token_inner(&state).await {
+        Ok(token) => (StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn rotate_dashboard_token_inner(state: &SharedState) -> anyhow::Result<String> {
+    let current = state.dashboard_auth.read().await.clone();
+    let (token, dashboard_auth) = issue_dashboard_token(Utc::now(), current.as_ref())?;
+
+    {
+        let mut auth = state.dashboard_auth.write().await;
+        *auth = Some(dashboard_auth.clone());
+    }
+
+    let mut cfg = state.config.clone();
+    cfg.dashboard_auth = Some(dashboard_auth);
+    crate::config::save(&cfg)?;
+
+    Ok(token)
 }
 
 // ── Object Store ──────────────────────────────────────────────────────────────
@@ -352,6 +387,219 @@ async fn test_object_store_config() -> impl IntoResponse {
     }
 }
 
+const APP_OBJECT_STORE_ENV_KEYS: [&str; 15] = [
+    "DEKU_OBJECT_STORE_PROVIDER",
+    "DEKU_OBJECT_STORE_BUCKET",
+    "DEKU_OBJECT_STORE_REGION",
+    "DEKU_OBJECT_STORE_ENDPOINT",
+    "DEKU_OBJECT_STORE_PREFIX",
+    "DEKU_OBJECT_STORE_PATH_STYLE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_ENDPOINT_URL",
+    "AWS_ENDPOINT_URL_S3",
+    "S3_BUCKET",
+    "S3_PREFIX",
+    "S3_PATH_STYLE",
+];
+
+#[derive(Debug, Deserialize)]
+struct ObjectStoreAppLinkBody {
+    #[serde(default)]
+    prefix: Option<String>,
+}
+
+fn app_object_store_env_pairs(
+    object_store: &ObjectStoreConfig,
+    prefix: &str,
+) -> [(&'static str, String); 15] {
+    let path_style = object_store.path_style.to_string();
+    [
+        (
+            "DEKU_OBJECT_STORE_PROVIDER",
+            object_store.provider.to_string(),
+        ),
+        ("DEKU_OBJECT_STORE_BUCKET", object_store.bucket.to_string()),
+        ("DEKU_OBJECT_STORE_REGION", object_store.region.to_string()),
+        (
+            "DEKU_OBJECT_STORE_ENDPOINT",
+            object_store.endpoint.to_string(),
+        ),
+        ("DEKU_OBJECT_STORE_PREFIX", prefix.to_string()),
+        ("DEKU_OBJECT_STORE_PATH_STYLE", path_style.clone()),
+        ("AWS_ACCESS_KEY_ID", object_store.access_key_id.to_string()),
+        (
+            "AWS_SECRET_ACCESS_KEY",
+            object_store.secret_access_key.to_string(),
+        ),
+        ("AWS_REGION", object_store.region.to_string()),
+        ("AWS_DEFAULT_REGION", object_store.region.to_string()),
+        ("AWS_ENDPOINT_URL", object_store.endpoint.to_string()),
+        ("AWS_ENDPOINT_URL_S3", object_store.endpoint.to_string()),
+        ("S3_BUCKET", object_store.bucket.to_string()),
+        ("S3_PREFIX", prefix.to_string()),
+        ("S3_PATH_STYLE", path_style),
+    ]
+}
+
+async fn get_app_object_store_link(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let config_vars = match queries::get_config_vars(&state.pool, &app.id).await {
+        Ok(vars) => vars,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let values = config_vars
+        .into_iter()
+        .map(|entry| (entry.key, entry.value))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    match crate::config::load() {
+        Ok(cfg) => {
+            let Some(object_store) = cfg.object_store else {
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "app": app.name,
+                        "configured": false,
+                        "linked": APP_OBJECT_STORE_ENV_KEYS.iter().any(|key| values.contains_key(*key)),
+                        "link": serde_json::Value::Null,
+                    })),
+                )
+                    .into_response();
+            };
+
+            let default_prefix =
+                crate::objectstore::normalized_app_prefix(&object_store, &app.name, None);
+            let linked_keys = APP_OBJECT_STORE_ENV_KEYS
+                .iter()
+                .filter(|key| values.contains_key(**key))
+                .map(|key| (*key).to_string())
+                .collect::<Vec<_>>();
+            let linked = !linked_keys.is_empty();
+            let prefix = values
+                .get("S3_PREFIX")
+                .or_else(|| values.get("DEKU_OBJECT_STORE_PREFIX"))
+                .cloned()
+                .unwrap_or(default_prefix);
+            let path_style = values
+                .get("S3_PATH_STYLE")
+                .or_else(|| values.get("DEKU_OBJECT_STORE_PATH_STYLE"))
+                .and_then(|value| value.parse::<bool>().ok())
+                .unwrap_or(object_store.path_style);
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "app": app.name,
+                    "configured": true,
+                    "linked": linked,
+                    "link": {
+                        "provider": values.get("DEKU_OBJECT_STORE_PROVIDER").cloned().unwrap_or_else(|| object_store.provider.clone()),
+                        "bucket": values.get("S3_BUCKET").or_else(|| values.get("DEKU_OBJECT_STORE_BUCKET")).cloned().unwrap_or_else(|| object_store.bucket.clone()),
+                        "region": values.get("AWS_REGION").or_else(|| values.get("DEKU_OBJECT_STORE_REGION")).cloned().unwrap_or_else(|| object_store.region.clone()),
+                        "endpoint": values.get("AWS_ENDPOINT_URL").or_else(|| values.get("DEKU_OBJECT_STORE_ENDPOINT")).cloned().unwrap_or_else(|| object_store.endpoint.clone()),
+                        "prefix": prefix,
+                        "path_style": path_style,
+                        "secret_present": values.get("AWS_SECRET_ACCESS_KEY").map(|value| !value.trim().is_empty()).unwrap_or(false),
+                        "linked_keys": linked_keys,
+                    }
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn link_app_object_store(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<ObjectStoreAppLinkBody>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let cfg = match crate::config::load() {
+        Ok(cfg) => cfg,
+        Err(e) => return internal_error(e).into_response(),
+    };
+    let Some(object_store) = cfg.object_store else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "object store is not configured" })),
+        )
+            .into_response();
+    };
+
+    let prefix =
+        crate::objectstore::normalized_app_prefix(&object_store, &app.name, body.prefix.as_deref());
+
+    for (key, value) in app_object_store_env_pairs(&object_store, &prefix) {
+        if let Err(e) = queries::set_config_var(&state.pool, &app.id, key, &value, false).await {
+            return internal_error(e).into_response();
+        }
+    }
+
+    state.events.emit(
+        Some(app.id),
+        "app.objectstore.linked",
+        Some(serde_json::json!({
+            "app": app.name,
+            "bucket": object_store.bucket,
+            "prefix": prefix,
+        })),
+    );
+
+    get_app_object_store_link(State(state), axum::extract::Path(name))
+        .await
+        .into_response()
+}
+
+async fn unlink_app_object_store(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    for key in APP_OBJECT_STORE_ENV_KEYS {
+        if let Err(e) = queries::unset_config_var(&state.pool, &app.id, key).await {
+            return internal_error(e).into_response();
+        }
+    }
+
+    state.events.emit(
+        Some(app.id),
+        "app.objectstore.unlinked",
+        Some(serde_json::json!({ "app": app.name })),
+    );
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
 // ── Apps ──────────────────────────────────────────────────────────────────────
 
 async fn list_apps(State(state): State<SharedState>) -> impl IntoResponse {
@@ -372,6 +620,13 @@ async fn create_app(
                 "app.created",
                 Some(serde_json::json!({ "name": app.name })),
             );
+            state
+                .plugins
+                .run_app_create(&AppContext {
+                    app: app.clone(),
+                    data_dir: state.config.data_dir.clone(),
+                })
+                .await;
             (StatusCode::CREATED, Json(serde_json::json!(app))).into_response()
         }
         Err(e) => (
@@ -399,6 +654,14 @@ async fn delete_app(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
     match queries::delete_app(&state.pool, &name).await {
         Ok(()) => {
             if let Err(e) = crate::proxy::remove_app_config(&state.config.angie_conf_dir, &name) {
@@ -407,6 +670,13 @@ async fn delete_app(
             if let Err(e) = crate::proxy::reload().await {
                 tracing::warn!("angie reload failed after app delete: {e}");
             }
+            state
+                .plugins
+                .run_app_destroy(&AppContext {
+                    app,
+                    data_dir: state.config.data_dir.clone(),
+                })
+                .await;
             state.events.emit(
                 None,
                 "app.deleted",
@@ -899,6 +1169,63 @@ fn upstreams_from_ports(ports: &[deku_core::types::PortMapping]) -> Vec<Upstream
         .collect()
 }
 
+fn normalize_check_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+async fn run_live_http_probe(
+    host_port: u16,
+    path: &str,
+    timeout_secs: u64,
+) -> AppChecksProbeResult {
+    let target = format!("http://127.0.0.1:{host_port}");
+    let url = format!("{target}{path}");
+    let started = std::time::Instant::now();
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        reqwest::get(&url),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(response)) => {
+            let status_code = response.status().as_u16();
+            AppChecksProbeResult {
+                ok: response.status().is_success() || status_code < 400,
+                target,
+                path: path.to_string(),
+                status_code: Some(status_code),
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                error: None,
+            }
+        }
+        Ok(Err(error)) => AppChecksProbeResult {
+            ok: false,
+            target,
+            path: path.to_string(),
+            status_code: None,
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+            error: Some(error.to_string()),
+        },
+        Err(_) => AppChecksProbeResult {
+            ok: false,
+            target,
+            path: path.to_string(),
+            status_code: None,
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+            error: Some(format!("timed out after {timeout_secs}s")),
+        },
+    }
+}
+
 // ── Deployments ───────────────────────────────────────────────────────────────
 
 async fn list_deployments(
@@ -998,11 +1325,14 @@ async fn trigger_deploy(
     let docker = state.docker.clone();
     let events = state.events.clone();
     let cfg = state.config.clone();
+    let plugins = state.plugins.clone();
     let app_id = app.id.clone();
 
     // Run deploy in background so the HTTP response returns immediately
     tokio::spawn(async move {
-        if let Err(e) = crate::deploy::run_deploy(&pool, &docker, &events, &cfg, req).await {
+        if let Err(e) =
+            crate::deploy::run_deploy(&pool, &docker, &events, &cfg, plugins.as_ref(), req).await
+        {
             tracing::error!(app = %app_id, "deploy failed: {e}");
         }
     });
@@ -1036,6 +1366,7 @@ async fn trigger_rollback(
     let docker = state.docker.clone();
     let events = state.events.clone();
     let cfg = state.config.clone();
+    let plugins = state.plugins.clone();
     let app_id = app.id.clone();
     let to_id = body.deployment_id.clone();
 
@@ -1045,6 +1376,7 @@ async fn trigger_rollback(
             &docker,
             &events,
             &cfg,
+            plugins.as_ref(),
             &app_id,
             &name,
             to_id.as_deref(),
@@ -1070,8 +1402,55 @@ struct LogsQuery {
     n: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct AppChecksQuery {
+    path: Option<String>,
+    timeout_secs: Option<u64>,
+}
+
 fn default_log_lines() -> usize {
     100
+}
+
+#[derive(Debug, Serialize)]
+struct AppChecksDeploymentSummary {
+    id: String,
+    status: deku_core::types::DeployStatus,
+    builder: deku_core::types::BuilderType,
+    image_tag: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct AppChecksContainerSummary {
+    id: String,
+    deployment_id: String,
+    process_type: String,
+    status: String,
+    host_port: Option<i64>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct AppChecksProbeResult {
+    ok: bool,
+    target: String,
+    path: String,
+    status_code: Option<u16>,
+    latency_ms: Option<u64>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AppChecksResponse {
+    app: String,
+    status: String,
+    latest_deployment: Option<AppChecksDeploymentSummary>,
+    routing: RoutingAppStatus,
+    containers: Vec<AppChecksContainerSummary>,
+    port_mappings: Vec<deku_core::types::PortMapping>,
+    probe: Option<AppChecksProbeResult>,
+    issues: Vec<String>,
 }
 
 async fn get_logs(
@@ -1103,6 +1482,111 @@ async fn get_logs(
     (
         StatusCode::OK,
         Json(serde_json::json!({ "logs": all_logs })),
+    )
+        .into_response()
+}
+
+async fn get_app_checks(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Query(params): Query<AppChecksQuery>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let latest_deployment = match queries::get_latest_deployment(&state.pool, &app.id).await {
+        Ok(deployment) => deployment.map(|deployment| AppChecksDeploymentSummary {
+            id: deployment.id,
+            status: deployment.status,
+            builder: deployment.builder,
+            image_tag: deployment.image_tag,
+            created_at: deployment.created_at,
+        }),
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let routing = match build_routing_status_for_app(&state, &app).await {
+        Ok(routing) => routing,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let containers = match queries::list_containers_for_app(&state.pool, &app.id).await {
+        Ok(containers) => containers,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let port_mappings = match queries::list_port_mappings(&state.pool, &app.id).await {
+        Ok(ports) => ports,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let path = normalize_check_path(params.path.as_deref().unwrap_or("/"));
+    let timeout_secs = params.timeout_secs.unwrap_or(5);
+    let probe = if let Some(port) = port_mappings.first() {
+        Some(run_live_http_probe(port.host_port as u16, &path, timeout_secs).await)
+    } else {
+        None
+    };
+
+    let mut issues = Vec::new();
+    if latest_deployment.is_none() {
+        issues.push("no live deployment recorded".to_string());
+    }
+    if containers.is_empty() {
+        issues.push("no running containers recorded".to_string());
+    }
+    if probe.is_none() {
+        issues.push("no published web port available for an HTTP probe".to_string());
+    }
+    if let Some(probe) = &probe {
+        if !probe.ok {
+            issues.push(format!(
+                "local HTTP probe failed for {}{}",
+                probe.target, probe.path
+            ));
+        }
+    }
+    issues.extend(routing.issues.iter().cloned());
+
+    let has_fatal_issue = latest_deployment.is_none()
+        || containers.is_empty()
+        || probe.as_ref().is_some_and(|probe| !probe.ok);
+
+    let container_summaries = containers
+        .into_iter()
+        .map(|container| AppChecksContainerSummary {
+            id: container.id,
+            deployment_id: container.deployment_id,
+            process_type: container.process_type,
+            status: container.status,
+            host_port: container.host_port,
+            created_at: container.created_at,
+        })
+        .collect::<Vec<_>>();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!(AppChecksResponse {
+            app: app.name,
+            status: if has_fatal_issue {
+                "fail".to_string()
+            } else if issues.is_empty() {
+                "pass".to_string()
+            } else {
+                "warn".to_string()
+            },
+            latest_deployment,
+            routing,
+            containers: container_summaries,
+            port_mappings,
+            probe,
+            issues,
+        })),
     )
         .into_response()
 }
@@ -1598,10 +2082,13 @@ async fn deploy_archive(
     let docker = state.docker.clone();
     let events = state.events.clone();
     let cfg = state.config.clone();
+    let plugins = state.plugins.clone();
     let app_id = app.id.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = crate::deploy::run_deploy(&pool, &docker, &events, &cfg, req).await {
+        if let Err(e) =
+            crate::deploy::run_deploy(&pool, &docker, &events, &cfg, plugins.as_ref(), req).await
+        {
             tracing::error!(app = %app_id, "archive deploy failed: {e}");
         }
         let _ = std::fs::remove_file(&path_str);

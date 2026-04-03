@@ -82,8 +82,41 @@ struct SshHandler {
     state: SharedState,
 }
 
+const AUTH_BANNER: &str = "Deku SSH accepts only registered public keys. If this key is rejected, add it on the host with: deku ssh add <name> ~/.ssh/id_ed25519.pub";
+
 impl russh::server::Handler for SshHandler {
     type Error = anyhow::Error;
+
+    async fn auth_publickey_offered(
+        &mut self,
+        _user: &str,
+        public_key: &PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        let fingerprint = public_key
+            .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+            .to_string();
+
+        match queries::find_ssh_key_by_fingerprint(&self.state.pool, &fingerprint).await {
+            Ok(Some(_)) => {
+                tracing::info!(%fingerprint, "SSH key offered and recognized");
+                Ok(Auth::Accept)
+            }
+            Ok(None) => {
+                tracing::warn!(%fingerprint, "SSH key rejected during offer: not found");
+                Ok(Auth::Reject {
+                    proceed_with_methods: None,
+                    partial_success: false,
+                })
+            }
+            Err(e) => {
+                tracing::error!("DB error during SSH key lookup: {e}");
+                Ok(Auth::Reject {
+                    proceed_with_methods: None,
+                    partial_success: false,
+                })
+            }
+        }
+    }
 
     async fn auth_publickey(
         &mut self,
@@ -116,6 +149,10 @@ impl russh::server::Handler for SshHandler {
         }
     }
 
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(Some(AUTH_BANNER.to_string()))
+    }
+
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
@@ -143,7 +180,16 @@ async fn run_git_command(channel: Channel<Msg>, state: &SharedState, cmd: &str) 
         Some(n) => n,
         None => {
             tracing::warn!("SSH: unsupported command: {cmd}");
-            let _ = channel.close().await;
+            let (read_half, write_half) = channel.split();
+            drop(read_half);
+            let mut stderr = write_half.make_writer_ext(Some(1));
+            let _ = stderr
+                .write_all(
+                    b"unsupported SSH command. Use git push to a Deku remote like git@HOST:APP\n",
+                )
+                .await;
+            let _ = write_half.exit_status(1).await;
+            let _ = write_half.close().await;
             return;
         }
     };
@@ -155,7 +201,15 @@ async fn run_git_command(channel: Channel<Msg>, state: &SharedState, cmd: &str) 
         Ok(app) => app,
         Err(e) => {
             tracing::warn!("SSH: app '{app_name}' not found: {e}");
-            let _ = channel.close().await;
+            let (read_half, write_half) = channel.split();
+            drop(read_half);
+            let mut stderr = write_half.make_writer_ext(Some(1));
+            let message = format!(
+                "app '{app_name}' does not exist on this Deku host. Create it first with: deku apps create {app_name}\n"
+            );
+            let _ = stderr.write_all(message.as_bytes()).await;
+            let _ = write_half.exit_status(1).await;
+            let _ = write_half.close().await;
             return;
         }
     };
@@ -167,7 +221,13 @@ async fn run_git_command(channel: Channel<Msg>, state: &SharedState, cmd: &str) 
     if !git_dir.exists() {
         if let Err(e) = init_bare_repo(&git_dir).await {
             tracing::error!("SSH: failed to init git repo: {e}");
-            let _ = channel.close().await;
+            let (read_half, write_half) = channel.split();
+            drop(read_half);
+            let mut stderr = write_half.make_writer_ext(Some(1));
+            let message = format!("failed to initialize the git remote for '{app_name}': {e}\n");
+            let _ = stderr.write_all(message.as_bytes()).await;
+            let _ = write_half.exit_status(1).await;
+            let _ = write_half.close().await;
             return;
         }
     }
@@ -182,7 +242,13 @@ async fn run_git_command(channel: Channel<Msg>, state: &SharedState, cmd: &str) 
         Ok(c) => c,
         Err(e) => {
             tracing::error!("SSH: failed to spawn git-receive-pack: {e}");
-            let _ = channel.close().await;
+            let (read_half, write_half) = channel.split();
+            drop(read_half);
+            let mut stderr = write_half.make_writer_ext(Some(1));
+            let message = format!("failed to start git-receive-pack: {e}\n");
+            let _ = stderr.write_all(message.as_bytes()).await;
+            let _ = write_half.exit_status(1).await;
+            let _ = write_half.close().await;
             return;
         }
     };
@@ -241,12 +307,13 @@ async fn run_git_command(channel: Channel<Msg>, state: &SharedState, cmd: &str) 
 
     let _ = tokio::join!(stdin_task, stdout_task, stderr_task);
 
+    if exit_status == 0 {
+        let mut stderr = write_half.make_writer_ext(Some(1));
+        let _ = deploy_from_git_with_feedback(state, &app, git_dir, &mut stderr).await;
+    }
+
     let _ = write_half.exit_status(exit_status).await;
     let _ = write_half.close().await;
-
-    if exit_status == 0 {
-        trigger_deploy_from_git(state, &app, git_dir);
-    }
 }
 
 async fn pipe_read_to_write(
@@ -268,59 +335,171 @@ async fn pipe_read_to_write(
     let _ = writer.shutdown().await;
 }
 
-fn trigger_deploy_from_git(state: &SharedState, app: &deku_core::types::App, git_dir: PathBuf) {
-    let pool = state.pool.clone();
-    let docker = state.docker.clone();
-    let events = state.events.clone();
-    let cfg = state.config.clone();
+async fn deploy_from_git_with_feedback(
+    state: &SharedState,
+    app: &deku_core::types::App,
+    git_dir: PathBuf,
+    stderr: &mut (impl AsyncWriteExt + Unpin),
+) -> Result<()> {
+    stderr
+        .write_all(format!("starting deploy for '{}'\n", app.name).as_bytes())
+        .await?;
+
+    let mut events_rx = state.events.subscribe();
+    let app_id = app.id.clone();
+    let state = state.clone();
     let app = app.clone();
+    let app_for_task = app.clone();
+    let deploy_task =
+        tokio::spawn(async move { run_git_deploy(&state, &app_for_task, git_dir).await });
+    tokio::pin!(deploy_task);
 
-    tokio::spawn(async move {
-        let tmp = match tempfile::tempdir() {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("tmpdir creation failed: {e}");
-                return;
+    loop {
+        tokio::select! {
+            deploy_result = &mut deploy_task => {
+                match deploy_result {
+                    Ok(Ok(())) => {
+                        stderr
+                            .write_all(format!("deploy finished for '{}'\n", app.name).as_bytes())
+                            .await?;
+                    }
+                    Ok(Err(error)) => {
+                        tracing::error!(app = app.name, "git push deploy failed: {error}");
+                        stderr
+                            .write_all(
+                                format!(
+                                    "push accepted, but deploy failed for '{}': {error}\n",
+                                    app.name
+                                )
+                                .as_bytes(),
+                            )
+                            .await?;
+                        stderr
+                            .write_all(
+                                format!(
+                                    "inspect with: deku deploy list {} && deku logs {} -n 100\n",
+                                    app.name, app.name
+                                )
+                                .as_bytes(),
+                            )
+                            .await?;
+                    }
+                    Err(error) => {
+                        stderr
+                            .write_all(
+                                format!(
+                                    "push accepted, but deploy task crashed for '{}': {error}\n",
+                                    app.name
+                                )
+                                .as_bytes(),
+                            )
+                            .await?;
+                    }
+                }
+                break;
             }
-        };
-
-        let git_dir_str = git_dir.to_string_lossy().to_string();
-        let work_tree = tmp.path().to_str().unwrap_or(".").to_string();
-
-        let ok = tokio::process::Command::new("git")
-            .args([
-                "--work-tree",
-                &work_tree,
-                "--git-dir",
-                &git_dir_str,
-                "checkout",
-                "HEAD",
-                "--",
-                ".",
-            ])
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if !ok {
-            tracing::error!(app = app.name, "git checkout for deploy failed");
-            return;
+            event = events_rx.recv() => match event {
+                Ok(event) => {
+                    if event.app_id.as_deref() != Some(app_id.as_str()) {
+                        continue;
+                    }
+                    if let Some(line) = render_deploy_feedback(&event) {
+                        stderr.write_all(line.as_bytes()).await?;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
         }
+    }
 
-        let req = crate::deploy::DeployRequest {
-            app_id: app.id.clone(),
-            app_name: app.name.clone(),
-            source: crate::deploy::DeploySource::Source {
-                path: tmp.path().to_path_buf(),
-            },
-            force_builder: None,
-        };
+    Ok(())
+}
 
-        if let Err(e) = crate::deploy::run_deploy(&pool, &docker, &events, &cfg, req).await {
-            tracing::error!(app = app.name, "git push deploy failed: {e}");
-        }
-    });
+async fn run_git_deploy(
+    state: &SharedState,
+    app: &deku_core::types::App,
+    git_dir: PathBuf,
+) -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+
+    let git_dir_str = git_dir.to_string_lossy().to_string();
+    let work_tree = tmp.path().to_str().unwrap_or(".").to_string();
+
+    let checkout = tokio::process::Command::new("git")
+        .args([
+            "--work-tree",
+            &work_tree,
+            "--git-dir",
+            &git_dir_str,
+            "checkout",
+            "HEAD",
+            "--",
+            ".",
+        ])
+        .status()
+        .await?;
+
+    if !checkout.success() {
+        anyhow::bail!("git checkout HEAD failed before deploy");
+    }
+
+    let req = crate::deploy::DeployRequest {
+        app_id: app.id.clone(),
+        app_name: app.name.clone(),
+        source: crate::deploy::DeploySource::Source {
+            path: tmp.path().to_path_buf(),
+        },
+        force_builder: None,
+    };
+
+    crate::deploy::run_deploy(
+        &state.pool,
+        &state.docker,
+        &state.events,
+        &state.config,
+        state.plugins.as_ref(),
+        req,
+    )
+    .await?;
+
+    Ok(())
+}
+
+fn render_deploy_feedback(event: &deku_core::types::Event) -> Option<String> {
+    let payload = event
+        .payload
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+
+    match event.event_type.as_str() {
+        "build.log" | "deploy.release.log" | "deploy.service_check" => payload
+            .as_ref()
+            .and_then(|value| value["line"].as_str())
+            .map(|line| format!("{line}\n")),
+        "deploy.health_checking" => payload.as_ref().map(|value| {
+            format!(
+                "running health checks on port {}\n",
+                value["port"].as_u64().unwrap_or(0)
+            )
+        }),
+        "deploy.rollback" => payload.as_ref().map(|value| {
+            format!(
+                "rolling back deploy: {}\n",
+                value["reason"].as_str().unwrap_or("unspecified")
+            )
+        }),
+        "deploy.live" => payload
+            .as_ref()
+            .and_then(|value| value["url"].as_str())
+            .map(|url| format!("deploy live: {url}\n")),
+        "deploy.failed" => payload
+            .as_ref()
+            .and_then(|value| value["error"].as_str())
+            .map(|error| format!("deploy failed: {error}\n")),
+        "deploy.complete" => Some("deploy completed\n".to_string()),
+        _ => None,
+    }
 }
 
 fn parse_git_receive_pack(cmd: &str) -> Option<String> {
@@ -330,7 +509,7 @@ fn parse_git_receive_pack(cmd: &str) -> Option<String> {
     if app_name.is_empty() {
         return None;
     }
-    Some(app_name.to_string())
+    Some(app_name.trim_end_matches(".git").to_string())
 }
 
 async fn init_bare_repo(path: &PathBuf) -> Result<()> {

@@ -1,26 +1,44 @@
 ---
 title: CLI Reference
-description: Generated command reference for the current Deku CLI surface.
+description: Release-facing command reference for the current Deku CLI surface.
 ---
 
-This page is generated from [`.codex/deku-build-plan.md`](../../../../.codex/deku-build-plan.md).
-It reflects the current planned and implemented CLI surface in the repository, not a polished release contract.
+This page summarizes the current `deku` command surface.
 
-## Implemented Command Summary
+## Core Commands
 
+- `deku setup`
+- `deku dashboard`
 - `deku apps list|create|destroy|info`
+- `deku checks run|routing`
 - `deku config list|set|unset`
 - `deku deploy run|list|rollback`
 - `deku domains list|add|remove`
+- `deku letsencrypt enable|disable|status|config`
 - `deku logs [-n] [--follow]`
 - `deku ps list|scale`
 - `deku ssh add|list|remove`
 - `deku plugins list|install|uninstall`
-- `deku objectstore setup|info|test|unset`
+- `deku objectstore setup|info|test|unset|status|link|unlink`
 - `deku postgres create|destroy|link|unlink|list|info|connect|logs|backup|backups|restore`
-- `deku redis create|destroy|link|unlink|list|info|connect|logs`
+- `deku redis create|destroy|link|unlink|list|info|connect|logs|backup|backups|restore`
+- `deku mysql create|destroy|link|unlink|list|info|connect|logs`
+- `deku network create|destroy|attach|detach|list|report`
+- `deku storage ensure-directory|mount|unmount|list`
+- `deku cron list|add|remove`
+- `deku git set|report|remote add|doctor`
 
 ## Command Groups
+
+### `deku setup`
+
+- `setup` — interactive first-run configuration for the server
+
+### `deku dashboard`
+
+- `dashboard` — print the dashboard URL, token status, and reset guidance
+- `dashboard --json` — print non-secret access metadata as JSON
+- `dashboard reset-token [--yes]` — rotate the dashboard token and print the new value once
 
 ### `deku apps`
 
@@ -41,7 +59,6 @@ It reflects the current planned and implemented CLI surface in the repository, n
 - With `--image`: POST to `/api/apps/:name/deploy`
 - Without: tar.gz source directory, POST multipart to `/api/apps/:name/deploy/archive`
 - Streams SSE deploy log to terminal
-- Preferred deploy path for coding-agent workflows
 - `deploy list <app>` — tabular deployment history
 - `deploy rollback <app> [--to <id>]`
 
@@ -72,3 +89,66 @@ It reflects the current planned and implemented CLI surface in the repository, n
 - `plugins list`
 - `plugins install <path-to-.so>`
 - `plugins uninstall <name>`
+
+### `deku letsencrypt`
+
+- `letsencrypt enable <app>`
+- `letsencrypt disable <app>`
+- `letsencrypt status <app>`
+- `letsencrypt config <email>`
+
+### `deku objectstore`
+
+- `objectstore setup`
+- `objectstore info`
+- `objectstore test`
+- `objectstore unset`
+- `objectstore status <app>`
+- `objectstore link <app> [--prefix path]`
+- `objectstore unlink <app>`
+
+### `deku postgres`
+
+- create, destroy, link, unlink, list, info, connect, logs, backup, backups, restore
+
+### `deku redis`
+
+- create, destroy, link, unlink, list, info, connect, logs, backup, backups, restore
+
+### `deku mysql`
+
+- create, destroy, link, unlink, list, info, connect, logs
+
+### `deku network`
+
+- `network create <name>`
+- `network destroy <name>`
+- `network attach <app> <network>`
+- `network detach <app> <network>`
+- `network list`
+- `network report <app>`
+
+### `deku storage`
+
+- `storage ensure-directory <app> <path>`
+- `storage mount <app> <host-path> <container-path>`
+- `storage unmount <app> <id>`
+- `storage list <app>`
+
+### `deku cron`
+
+- `cron list <app>`
+- `cron add <app> <schedule> <command>`
+- `cron remove <app> <id>`
+
+### `deku checks`
+
+- `checks run <app> [--path /health] [--timeout 5]`
+- `checks routing [app]`
+
+### `deku git`
+
+- `git set <app> <key> <value>`
+- `git report <app>`
+- `git remote add <app>`
+- `git doctor`

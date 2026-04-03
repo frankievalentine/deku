@@ -45,6 +45,8 @@ worker = 2
 - `attempts`: number of health-check retries
 - `retire`: seconds before old containers are retired
 
+These settings are applied by the live deploy pipeline in `dekud`, not just documented metadata.
+
 ## Processes
 
 The `[processes]` table controls desired process counts by Procfile type.

@@ -12,7 +12,7 @@ It is aimed at **coding agents already operating in a repo or shell**. The suppo
 Current defaults:
 
 - Primary interface: `deku` CLI
-- Fallback machine interface: daemon HTTP API with `Authorization: Bearer $(cat ~/.deku/cli-token)`
+- Fallback machine interface: daemon HTTP API with an operator-provisioned dashboard token
 - Preferred deploy method: archive or image deploy via CLI or HTTP API
 - Secondary deploy method: `git push` over SSH
 - Supported operator model: coding agents running in a shell or repo
@@ -49,7 +49,7 @@ SSH `git push` deploys remain supported, but they are not the recommended defaul
 The standard agent flow is:
 
 1. Ensure `dekud` is reachable.
-2. Read `~/.deku/cli-token`.
+2. Prefer the local `deku` CLI over the trusted Unix socket; only use direct HTTP if you already have a dashboard token.
 3. Create or inspect app state.
 4. Set required config.
 5. Deploy via archive or image path.
@@ -61,10 +61,11 @@ The standard agent flow is:
 Recommended checks before an agent attempts a deploy:
 
 ```bash
+TOKEN="dku_REPLACE_WITH_OPERATOR_TOKEN"
 deku apps list
 deku apps info <app>
 deku config list <app>
-curl -H "Authorization: Bearer $(cat ~/.deku/cli-token)" \
+curl -H "Authorization: Bearer ${TOKEN}" \
   http://127.0.0.1:2810/api/apps
 ```
 
@@ -109,16 +110,12 @@ deku apps info agent-demo
 
 ## HTTP API Workflow Examples
 
-The daemon writes the long-lived local token to:
-
-```bash
-~/.deku/cli-token
-```
+If an agent needs direct HTTP access, use a dashboard token that was captured during `deku setup` or minted explicitly with `deku dashboard reset-token`.
 
 Example session:
 
 ```bash
-TOKEN="$(cat ~/.deku/cli-token)"
+TOKEN="dku_REPLACE_WITH_OPERATOR_TOKEN"
 ```
 
 List apps:
@@ -216,7 +213,7 @@ Do not make SSH `git push` the default path for agents in v1.
 If the daemon is missing or unreachable:
 
 - verify `dekud` is running
-- verify `~/.deku/cli-token` exists
+- verify you have a valid dashboard token if you are using direct HTTP
 - verify authenticated requests to `/api/apps` succeed
 
 If the app does not exist:
@@ -241,7 +238,7 @@ If a service dependency is missing:
 
 ## Current Limitations
 
-The current milestone state still has important constraints:
+The current product shape still has important constraints:
 
 - the dashboard is useful, but the agent contract is CLI/API-first
 - dynamic plugin support exists, but it is not the primary first-party integration model

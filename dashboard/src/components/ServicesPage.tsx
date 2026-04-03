@@ -13,11 +13,11 @@ import {
   fetchManagedService,
   fetchManagedServiceLogs,
   fetchManagedServices,
-  fetchPostgresBackups,
+  fetchServiceBackups,
   getToken,
   linkManagedService,
-  restorePostgresBackup,
-  triggerPostgresBackup,
+  restoreServiceBackup,
+  triggerServiceBackup,
   unlinkManagedService,
 } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
@@ -43,6 +43,7 @@ interface ServiceTarget {
 }
 
 interface RestoreTarget {
+  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>;
   serviceName: string;
   backup: ServiceBackup;
 }
@@ -119,7 +120,7 @@ function ServicesInner() {
 
       const [detail, backups] = await Promise.all([
         fetchManagedService(kind, name),
-        kind === 'postgres' ? fetchPostgresBackups(name) : Promise.resolve(null),
+        supportsBackups(kind) ? fetchServiceBackups(kind, name) : Promise.resolve(null),
       ]);
 
       setDetailsByService((current) => ({ ...current, [key]: detail }));
@@ -144,7 +145,7 @@ function ServicesInner() {
   const activeServiceKey = activeServiceName ? serviceKey(activeKind, activeServiceName) : null;
   const activeDetail = activeServiceKey ? (detailsByService[activeServiceKey] ?? null) : null;
   const activeBackups =
-    activeKind === 'postgres' && activeServiceKey ? (backupsByService[activeServiceKey] ?? []) : [];
+    supportsBackups(activeKind) && activeServiceKey ? (backupsByService[activeServiceKey] ?? []) : [];
   const activeLogs = activeServiceKey ? (logsByService[activeServiceKey] ?? []) : [];
 
   useEffect(() => {
@@ -284,14 +285,14 @@ function ServicesInner() {
   }
 
   async function handleBackup() {
-    if (!activeServiceName || activeKind !== 'postgres') return;
+    if (!activeServiceName || !supportsBackups(activeKind)) return;
 
     try {
       setBusy(`backup-${activeServiceName}`);
       setError(null);
       setNotice(null);
-      await triggerPostgresBackup(activeServiceName);
-      await loadServiceDetail('postgres', activeServiceName);
+      await triggerServiceBackup(activeKind, activeServiceName);
+      await loadServiceDetail(activeKind, activeServiceName);
       setNotice(`Backup started for ${activeServiceName}.`);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to create backup.');
@@ -307,9 +308,13 @@ function ServicesInner() {
       setBusy(`restore-${restoreTarget.backup.id}`);
       setError(null);
       setNotice(null);
-      await restorePostgresBackup(restoreTarget.serviceName, restoreTarget.backup.id);
+      await restoreServiceBackup(
+        restoreTarget.kind,
+        restoreTarget.serviceName,
+        restoreTarget.backup.id
+      );
       setRestoreTarget(null);
-      await loadServiceDetail('postgres', restoreTarget.serviceName);
+      await loadServiceDetail(restoreTarget.kind, restoreTarget.serviceName);
       setNotice(
         `Restore started for ${restoreTarget.serviceName} using backup ${restoreTarget.backup.id.slice(0, 8)}.`
       );
@@ -629,7 +634,7 @@ function ServicesInner() {
                 )}
               </div>
 
-              {activeKind === 'postgres' ? (
+              {supportsBackups(activeKind) ? (
                 <div className="stack-md">
                   <div className="cluster justify-between align-center">
                     <div className="stack-sm">
@@ -676,9 +681,7 @@ function ServicesInner() {
                               <button
                                 type="button"
                                 className="btn btn-danger btn-sm"
-                                onClick={() =>
-                                  setRestoreTarget({ serviceName: activeServiceName, backup })
-                                }
+                                onClick={() => setRestoreTarget({ kind: activeKind, serviceName: activeServiceName, backup })}
                                 disabled={busy !== null}
                               >
                                 Restore
@@ -818,6 +821,12 @@ function ServiceState({ status }: { status: string }) {
 
 function serviceKey(kind: ManagedServiceKind, name: string): string {
   return `${kind}:${name}`;
+}
+
+function supportsBackups(
+  kind: ManagedServiceKind
+): kind is Extract<ManagedServiceKind, 'postgres' | 'redis'> {
+  return kind === 'postgres' || kind === 'redis';
 }
 
 function emptyKindRecord<T>(value: T): KindRecord<T> {

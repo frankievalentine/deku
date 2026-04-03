@@ -41,6 +41,16 @@ enum ObjectStoreCommands {
     Test,
     /// Remove the current object store configuration
     Unset,
+    /// Show the object-store link status for an app
+    Status { app: String },
+    /// Link the configured object store credentials into an app
+    Link {
+        app: String,
+        #[arg(long)]
+        prefix: Option<String>,
+    },
+    /// Remove the object-store credentials from an app
+    Unlink { app: String },
 }
 
 pub async fn run(args: ObjectStoreArgs, client: &DekuClient) -> Result<()> {
@@ -121,6 +131,25 @@ pub async fn run(args: ObjectStoreArgs, client: &DekuClient) -> Result<()> {
             client.delete("/api/objectstore").await?;
             println!("Object store configuration removed.");
         }
+        ObjectStoreCommands::Status { app } => {
+            let response = client.get(&format!("/api/apps/{app}/objectstore")).await?;
+            print_app_link_info(&response);
+        }
+        ObjectStoreCommands::Link { app, prefix } => {
+            let response = client
+                .post(
+                    &format!("/api/apps/{app}/objectstore"),
+                    serde_json::json!({ "prefix": prefix }),
+                )
+                .await?;
+            print_app_link_info(&response);
+        }
+        ObjectStoreCommands::Unlink { app } => {
+            client
+                .delete(&format!("/api/apps/{app}/objectstore"))
+                .await?;
+            println!("Object store credentials removed from '{app}'.");
+        }
     }
 
     Ok(())
@@ -186,4 +215,72 @@ fn print_info(response: &serde_json::Value) {
         object_store["path_style"].as_bool().unwrap_or(true)
     );
     println!("Prefix: {}", object_store["prefix"].as_str().unwrap_or("-"));
+}
+
+fn print_app_link_info(response: &serde_json::Value) {
+    println!("App: {}", response["app"].as_str().unwrap_or("-"));
+    println!(
+        "Host object store configured: {}",
+        response["configured"].as_bool().unwrap_or(false)
+    );
+    println!("Linked: {}", response["linked"].as_bool().unwrap_or(false));
+
+    let Some(link) = response["link"].as_object() else {
+        println!("Link details: unavailable");
+        return;
+    };
+
+    println!(
+        "Provider: {}",
+        link.get("provider")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "Bucket: {}",
+        link.get("bucket")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "Region: {}",
+        link.get("region")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "Endpoint: {}",
+        link.get("endpoint")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "Prefix: {}",
+        link.get("prefix")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "Path style: {}",
+        link.get("path_style")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    );
+    println!(
+        "Secret present: {}",
+        link.get("secret_present")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    );
+
+    println!("Linked env keys:");
+    if let Some(keys) = link.get("linked_keys").and_then(|value| value.as_array()) {
+        if keys.is_empty() {
+            println!("- none");
+        } else {
+            for key in keys {
+                println!("- {}", key.as_str().unwrap_or("-"));
+            }
+        }
+    }
 }

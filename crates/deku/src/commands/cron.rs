@@ -31,7 +31,7 @@ pub async fn run(args: CronArgs, client: &DekuClient) -> Result<()> {
                 if entries.is_empty() {
                     println!("No cron entries for '{app}'.");
                 } else {
-                    println!("{:<36} {:<20} {}", "ID", "SCHEDULE", "COMMAND");
+                    println!("{:<36} {:<20} COMMAND", "ID", "SCHEDULE");
                     println!("{}", "-".repeat(80));
                     for e in entries {
                         println!(

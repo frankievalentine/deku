@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![allow(improper_ctypes_definitions, unsafe_code)]
 
 use async_trait::async_trait;
 use deku_plugin_sdk::error::Result;

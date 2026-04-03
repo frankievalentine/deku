@@ -23,6 +23,8 @@ enum MysqlCommands {
     List,
     /// Show info about a mysql service
     Info { name: String },
+    /// Print connection details for a mysql service
+    Connect { name: String },
     /// Tail logs from a mysql service container
     Logs {
         name: String,
@@ -66,7 +68,11 @@ pub async fn run(args: MysqlArgs, client: &DekuClient) -> Result<()> {
         }
         MysqlCommands::Info { name } => {
             let data = client.get(&format!("/api/mysql/services/{name}")).await?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
+            print_service_info(&data);
+        }
+        MysqlCommands::Connect { name } => {
+            let data = client.get(&format!("/api/mysql/services/{name}")).await?;
+            print_connect_details(&data);
         }
         MysqlCommands::Logs { name, lines } => {
             let data = client
@@ -98,4 +104,56 @@ fn print_service_table(data: &serde_json::Value) {
             );
         }
     }
+}
+
+fn print_service_info(data: &serde_json::Value) {
+    println!("Name: {}", data["name"].as_str().unwrap_or("-"));
+    println!("Status: {}", data["status"].as_str().unwrap_or("-"));
+    println!("Created: {}", data["created_at"].as_str().unwrap_or("-"));
+    println!(
+        "Container: {}",
+        data["container_id"].as_str().unwrap_or("-")
+    );
+
+    let connection = &data["connection"];
+    println!("Host: {}", connection["host"].as_str().unwrap_or("-"));
+    println!("Port: {}", connection["port"].as_u64().unwrap_or_default());
+    println!(
+        "Database: {}",
+        connection["database"].as_str().unwrap_or("-")
+    );
+    println!(
+        "Username: {}",
+        connection["username"].as_str().unwrap_or("-")
+    );
+    println!("Env key: {}", connection["env_key"].as_str().unwrap_or("-"));
+    println!("Volume: {}", connection["volume"].as_str().unwrap_or("-"));
+    println!("URL: {}", connection["url"].as_str().unwrap_or("-"));
+
+    println!("Linked apps:");
+    if let Some(links) = data["links"].as_array() {
+        if links.is_empty() {
+            println!("- none");
+        } else {
+            for link in links {
+                println!(
+                    "- {} ({})",
+                    link["name"].as_str().unwrap_or("-"),
+                    link["env_key"].as_str().unwrap_or("-"),
+                );
+            }
+        }
+    }
+}
+
+fn print_connect_details(data: &serde_json::Value) {
+    let name = data["name"].as_str().unwrap_or("-");
+    let connection = &data["connection"];
+    println!("{}", connection["url"].as_str().unwrap_or("-"));
+    println!(
+        "docker exec -it deku-mysql-{name} mysql -u{} -p{} {}",
+        connection["username"].as_str().unwrap_or("deku"),
+        connection["password"].as_str().unwrap_or("-"),
+        connection["database"].as_str().unwrap_or(name),
+    );
 }

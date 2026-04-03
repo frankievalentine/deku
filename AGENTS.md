@@ -7,7 +7,7 @@ This file is for coding agents already running in a repo or shell on the same ma
 ## Supported Agent Model
 
 - Primary interface: `deku` CLI
-- Fallback machine interface: daemon HTTP API with `Authorization: Bearer $(cat ~/.deku/cli-token)`
+- Fallback machine interface: daemon HTTP API with an operator-provisioned dashboard token
 - Preferred deploy path: archive or image deploy via `deku deploy run`
 - Secondary deploy path: `git push` over SSH
 
@@ -16,7 +16,7 @@ The current v1 agent workflow is **deploy + inspect**, not full autonomous platf
 ## Preferred Workflow
 
 1. Ensure `dekud` is running and reachable.
-2. Read `~/.deku/cli-token` if using HTTP API calls directly.
+2. Prefer the local `deku` CLI over the trusted Unix socket; only use direct HTTP if you already have a dashboard token.
 3. Inspect or create the target app.
 4. Set required config vars.
 5. Deploy with `deku deploy run <app> --path <dir>` or `--image <ref>`.
@@ -30,10 +30,11 @@ Prefer deterministic non-interactive commands. Use `git push` only when you expl
 Run these before attempting a deploy:
 
 ```bash
+TOKEN="dku_REPLACE_WITH_OPERATOR_TOKEN"
 deku apps list
 deku apps info <app>
 deku config list <app>
-curl -H "Authorization: Bearer $(cat ~/.deku/cli-token)" \
+curl -H "Authorization: Bearer ${TOKEN}" \
   http://127.0.0.1:2810/api/apps
 ```
 
@@ -74,10 +75,10 @@ deku apps info <app>
 
 ## HTTP API Fallback
 
-Use the daemon API directly when a shell agent needs machine-structured output:
+Use the daemon API directly when a shell agent needs machine-structured output and already has a valid dashboard token:
 
 ```bash
-TOKEN="$(cat ~/.deku/cli-token)"
+TOKEN="dku_REPLACE_WITH_OPERATOR_TOKEN"
 
 curl -H "Authorization: Bearer ${TOKEN}" \
   http://127.0.0.1:2810/api/apps
@@ -121,7 +122,7 @@ curl -H "Authorization: Bearer ${TOKEN}" \
 If `dekud` is unavailable:
 
 - verify the daemon is running
-- verify the API token exists at `~/.deku/cli-token`
+- verify you have a valid dashboard token if you are using direct HTTP
 - verify authenticated API requests return HTTP 200
 
 If an app does not exist:

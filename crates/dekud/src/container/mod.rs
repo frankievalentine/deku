@@ -5,9 +5,8 @@ use bollard::models::{
     HostConfig, Mount, MountTypeEnum, PortBinding, PortMap, RestartPolicy, RestartPolicyNameEnum,
 };
 use bollard::query_parameters::{
-    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, ListContainersOptionsBuilder,
-    LogsOptionsBuilder, RemoveContainerOptionsBuilder, StopContainerOptionsBuilder,
-    TagImageOptionsBuilder,
+    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, LogsOptionsBuilder,
+    RemoveContainerOptionsBuilder, StopContainerOptionsBuilder, TagImageOptionsBuilder,
 };
 use bollard::Docker;
 use bytes::Bytes;
@@ -125,38 +124,6 @@ pub async fn remove_container(docker: &Docker, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub struct ContainerInfo {
-    pub id: String,
-    pub running: bool,
-    pub exit_code: Option<i64>,
-    /// First non-empty IP from any attached network
-    pub ip_address: Option<String>,
-}
-
-/// Inspect a container and return its state.
-pub async fn inspect_container(docker: &Docker, id: &str) -> anyhow::Result<ContainerInfo> {
-    let resp = docker.inspect_container(id, None).await?;
-
-    let running = resp.state.as_ref().and_then(|s| s.running).unwrap_or(false);
-
-    let exit_code = resp.state.as_ref().and_then(|s| s.exit_code);
-
-    let ip_address = resp
-        .network_settings
-        .as_ref()
-        .and_then(|ns| ns.networks.as_ref())
-        .and_then(|nets| nets.values().next())
-        .and_then(|net| net.ip_address.clone())
-        .filter(|ip| !ip.is_empty());
-
-    Ok(ContainerInfo {
-        id: resp.id.unwrap_or_default(),
-        running,
-        exit_code,
-        ip_address,
-    })
-}
-
 /// Pull an image from a registry. Calls `on_progress` for each status message.
 pub async fn pull_image(
     docker: &Docker,
@@ -206,21 +173,6 @@ pub async fn get_container_logs(
     }
 
     Ok(lines)
-}
-
-/// List Deku-managed container IDs for an app.
-pub async fn list_app_containers(docker: &Docker, app_name: &str) -> anyhow::Result<Vec<String>> {
-    let mut filters: HashMap<String, Vec<String>> = HashMap::new();
-    filters.insert("name".to_string(), vec![format!("deku.{app_name}.")]);
-    filters.insert("label".to_string(), vec!["deku.managed=true".to_string()]);
-
-    let opts = ListContainersOptionsBuilder::default()
-        .all(true)
-        .filters(&filters)
-        .build();
-
-    let containers = docker.list_containers(Some(opts)).await?;
-    Ok(containers.into_iter().filter_map(|c| c.id).collect())
 }
 
 /// Build a tar.gz archive of `source_dir` in memory.

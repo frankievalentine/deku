@@ -20,7 +20,6 @@ use bollard::body_full;
 // ── Output types ──────────────────────────────────────────────────────────────
 
 pub struct BuiltImage {
-    pub image_id: String,
     pub tag: String,
     pub exposed_ports: Vec<u16>,
     pub procfile: Vec<ProcfileEntry>,
@@ -202,8 +201,6 @@ impl Builder for DockerfileBuilder {
         let build_opts = build_opts_builder.build();
 
         let mut stream = docker.build_image(build_opts, None, Some(body_full(tar_bytes)));
-        let mut image_id = String::new();
-
         while let Some(item) = stream.next().await {
             match item {
                 Ok(info) => {
@@ -218,21 +215,13 @@ impl Builder for DockerfileBuilder {
                         }
                     }
                     if let Some(aux) = info.aux {
-                        if let Some(id) = aux.id {
-                            image_id = id;
-                        }
+                        let _ = aux.id;
                     }
                     if let Some(err) = info.error_detail.and_then(|e| e.message) {
                         return Err(DekuError::BuildFailed(err));
                     }
                 }
                 Err(e) => return Err(DekuError::BuildFailed(e.to_string())),
-            }
-        }
-
-        if image_id.is_empty() {
-            if let Ok(info) = docker.inspect_image(&image_tag).await {
-                image_id = info.id.unwrap_or_default();
             }
         }
 
@@ -246,7 +235,6 @@ impl Builder for DockerfileBuilder {
         );
 
         Ok(BuiltImage {
-            image_id,
             tag: image_tag,
             exposed_ports,
             procfile,
@@ -320,7 +308,6 @@ impl Builder for NixpacksBuilder {
         );
 
         Ok(BuiltImage {
-            image_id: image_tag.clone(),
             tag: image_tag,
             exposed_ports,
             procfile,
@@ -394,7 +381,6 @@ impl Builder for PackBuilder {
         );
 
         Ok(BuiltImage {
-            image_id: image_tag.clone(),
             tag: image_tag,
             exposed_ports,
             procfile,
@@ -435,7 +421,6 @@ impl Builder for ImageBuilder {
         let procfile = extract_procfile(docker, &image_tag).await;
 
         Ok(BuiltImage {
-            image_id: image_tag.clone(),
             tag: image_tag,
             exposed_ports,
             procfile,
@@ -500,7 +485,7 @@ impl Builder for ComposeBuilder {
             .find(|k| k.as_str() == Some("web"))
             .or_else(|| {
                 services.keys().find(|k| {
-                    k.as_str().map_or(false, |name| {
+                    k.as_str().is_some_and(|name| {
                         compose["services"][name]
                             .get("x-deku-web")
                             .and_then(|v| v.as_bool())
@@ -584,7 +569,6 @@ impl Builder for ComposeBuilder {
         );
 
         Ok(BuiltImage {
-            image_id: image_tag.clone(),
             tag: image_tag,
             exposed_ports,
             procfile,

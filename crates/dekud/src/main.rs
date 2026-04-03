@@ -18,6 +18,9 @@ mod ssh;
 async fn main() -> Result<()> {
     let cfg = config::load()?;
     config::init_logging(&cfg)?;
+    if config::ensure_dashboard_assets(&cfg)? {
+        info!(dashboard_dir = %cfg.dashboard_dir.display(), "seeded bundled dashboard assets");
+    }
     info!("dekud starting");
 
     let pool = db::connect(&cfg).await?;

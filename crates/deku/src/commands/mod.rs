@@ -2,6 +2,7 @@ pub mod apps;
 pub mod checks;
 pub mod config;
 pub mod cron;
+pub mod dashboard;
 pub mod deploy;
 pub mod domains;
 pub mod git;

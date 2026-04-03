@@ -32,7 +32,6 @@ futures = { workspace = true }
 libloading = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-jsonwebtoken = "10"
 axum-extra = { version = "0.12", features = ["typed-header"] }
 dirs-next = "2"
 async-trait = "0.1"
@@ -47,3 +46,4 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = { workspace = true }
 percent-encoding = { workspace = true }
+include_dir = "0.7"

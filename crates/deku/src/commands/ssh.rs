@@ -50,7 +50,7 @@ pub async fn run(args: SshArgs, client: &DekuClient) -> Result<()> {
                 if keys.is_empty() {
                     println!("No SSH keys registered.");
                 } else {
-                    println!("{:<20} {}", "NAME", "FINGERPRINT");
+                    println!("{:<20} FINGERPRINT", "NAME");
                     println!("{}", "-".repeat(60));
                     for k in keys {
                         let name = k["name"].as_str().unwrap_or("-");

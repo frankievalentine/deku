@@ -4,20 +4,29 @@ description: Documentation home for Deku.
 template: splash
 hero:
   title: DEKU
-  tagline: A modern, lightweight self-hosted PaaS built with Rust, Angie, and Astro.
+  tagline: Install Deku, deploy your first app, and manage it from the built-in dashboard.
   actions:
+    - text: Installation
+      link: /installation/
     - text: Get Started
-      link: /introduction/
-    - text: Agent Operations
-      link: /agent-operations/
-    - text: CLI Reference
-      link: /reference/cli-reference/
+      link: /get-started/
+    - text: Dashboard Overview
+      link: /dashboard-overview/
 ---
 
-## What You Can Do Here
+## Start Here
 
-- Learn the current architecture and runtime model.
-- Install and run `dekud` locally for milestone testing.
-- Understand the current CLI surface and configuration model.
-- Follow the supported coding-agent deployment and inspection workflow.
-- Review the plugin model and contribution flow while the platform is still in active buildout.
+- Install Deku on a server with the packaged installer.
+- Save the one-time dashboard token shown during `deku setup`, then use `deku dashboard` for URL and reset guidance later.
+- Create an app, deploy source code or an image, and inspect the result.
+- Manage config, domains, routing, TLS, scale, storage, cron, services, and logs from the dashboard.
+- Use the CLI and HTTP API for automation and agent-driven workflows.
+
+## Key Guides
+
+- Start with [Installation](/installation/).
+- Follow [Get Started](/get-started/) for the first app and first deploy workflow.
+- Read [Dashboard Overview](/dashboard-overview/) before managing apps from the web UI.
+- Read [Architecture](/architecture/) for the CLI, daemon, dashboard-auth, and API model.
+- Use [CLI Reference](/reference/cli-reference/) and [deku.toml](/reference/deku-toml/) when working from the terminal.
+- Follow [Agent Operations](/agent-operations/) for advanced CLI/API-first automation.

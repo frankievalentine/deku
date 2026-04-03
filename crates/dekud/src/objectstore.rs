@@ -51,6 +51,22 @@ pub async fn delete_object(cfg: &ObjectStoreConfig, key: &str) -> Result<()> {
     ensure_success(response, "delete object").await
 }
 
+pub fn normalized_app_prefix(
+    cfg: &ObjectStoreConfig,
+    app_name: &str,
+    override_prefix: Option<&str>,
+) -> String {
+    if let Some(prefix) = override_prefix {
+        let trimmed = prefix.trim().trim_matches('/');
+        if !trimmed.is_empty() {
+            return format!("{trimmed}/");
+        }
+    }
+
+    let base = cfg.normalized_prefix().unwrap_or_default();
+    format!("{base}apps/{app_name}/")
+}
+
 async fn signed_request(
     client: &Client,
     method: Method,

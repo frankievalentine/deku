@@ -1,10 +1,12 @@
-use anyhow::Result;
-use deku_core::types::ObjectStoreConfig;
+use anyhow::{Context, Result};
+use deku_core::{auth::DashboardTokenState, types::ObjectStoreConfig};
+use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use uuid::Uuid;
+
+static EMBEDDED_DASHBOARD_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/dashboard");
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DekuConfig {
@@ -21,7 +23,8 @@ pub struct DekuConfig {
     pub global_domain: Option<String>,
     #[serde(default = "default_container_backend")]
     pub container_backend: String,
-    /// HMAC secret used to sign CLI auth tokens. Generated on first startup.
+    /// Reserved for future compatibility. Dashboard access no longer uses this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_secret: Option<String>,
     /// Directory where Angie per-app config fragments are written.
     #[serde(default = "default_angie_conf_dir")]
@@ -31,6 +34,8 @@ pub struct DekuConfig {
     pub dashboard_dir: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_store: Option<ObjectStoreConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard_auth: Option<DashboardTokenState>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -46,6 +51,7 @@ struct RawDekuConfig {
     angie_conf_dir: Option<PathBuf>,
     dashboard_dir: Option<PathBuf>,
     object_store: Option<ObjectStoreConfig>,
+    dashboard_auth: Option<DashboardTokenState>,
 }
 
 fn default_config_dir() -> PathBuf {
@@ -118,13 +124,9 @@ impl Default for DekuConfig {
             angie_conf_dir: default_angie_conf_dir(),
             dashboard_dir: default_dashboard_dir(),
             object_store: None,
+            dashboard_auth: None,
         }
     }
-}
-
-fn generate_secret() -> String {
-    // Two UUIDs concatenated = 256 bits of randomness
-    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 pub fn save(cfg: &DekuConfig) -> Result<()> {
@@ -147,7 +149,7 @@ pub fn load() -> Result<DekuConfig> {
 
     let data_dir = raw.data_dir.unwrap_or_else(default_data_dir);
 
-    let mut cfg = DekuConfig {
+    let cfg = DekuConfig {
         data_dir: data_dir.clone(),
         socket_path: raw
             .socket_path
@@ -165,13 +167,8 @@ pub fn load() -> Result<DekuConfig> {
             .dashboard_dir
             .unwrap_or_else(|| default_dashboard_dir_for(&data_dir)),
         object_store: raw.object_store,
+        dashboard_auth: raw.dashboard_auth,
     };
-
-    // Generate auth secret if missing and persist it
-    if cfg.auth_secret.is_none() {
-        cfg.auth_secret = Some(generate_secret());
-        save(&cfg)?;
-    }
 
     Ok(cfg)
 }
@@ -189,6 +186,39 @@ pub fn init_logging(cfg: &DekuConfig) -> Result<()> {
         .with(fmt::layer().with_writer(file_appender).json())
         .with(fmt::layer().with_writer(std::io::stderr))
         .init();
+
+    Ok(())
+}
+
+pub fn ensure_dashboard_assets(cfg: &DekuConfig) -> Result<bool> {
+    let index_path = cfg.dashboard_dir.join("index.html");
+    if index_path.exists() {
+        return Ok(false);
+    }
+
+    std::fs::create_dir_all(&cfg.dashboard_dir)?;
+    write_embedded_dir(&EMBEDDED_DASHBOARD_DIR, &cfg.dashboard_dir)?;
+    Ok(true)
+}
+
+fn write_embedded_dir(dir: &Dir<'_>, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+
+    for file in dir.files() {
+        let file_name = file
+            .path()
+            .file_name()
+            .context("embedded dashboard file is missing a file name")?;
+        std::fs::write(dest.join(file_name), file.contents())?;
+    }
+
+    for subdir in dir.dirs() {
+        let dir_name = subdir
+            .path()
+            .file_name()
+            .context("embedded dashboard directory is missing a directory name")?;
+        write_embedded_dir(subdir, &dest.join(dir_name))?;
+    }
 
     Ok(())
 }

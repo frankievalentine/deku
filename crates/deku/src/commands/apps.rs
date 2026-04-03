@@ -40,7 +40,7 @@ pub async fn run(args: AppsArgs, client: &DekuClient) -> Result<()> {
                 if apps.is_empty() {
                     println!("No apps found.");
                 } else {
-                    println!("{:<20} {:<12} {}", "NAME", "STATUS", "CREATED");
+                    println!("{:<20} {:<12} CREATED", "NAME", "STATUS");
                     println!("{}", "-".repeat(60));
                     for app in apps {
                         let name = app["name"].as_str().unwrap_or("-");

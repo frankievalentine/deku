@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DEKU_VERSION="${DEKU_VERSION:-latest}"
-DEKU_REPO="${DEKU_REPO:-yourorg/deku}"
+DEKU_REPO="${DEKU_REPO:-frankievalentine/deku}"
 DEKU_RELEASE_BASE_URL="${DEKU_RELEASE_BASE_URL:-}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 CONFIG_DIR="${DEKU_CONFIG_DIR:-${HOME:-/root}/.deku}"
@@ -25,6 +25,28 @@ log() {
 fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+
+install_support_artifact() {
+  local artifact="$1"
+  local dest="$2"
+  local mode="$3"
+  local downloaded="${TMP_DIR}/${artifact}"
+
+  download_artifact "$artifact" "$downloaded"
+  verify_artifact "$artifact" "$downloaded"
+
+  mkdir -p "$(dirname "$dest")"
+
+  case "$artifact" in
+    deku.service)
+      sed "s|__DEKU_INSTALL_DIR__|${INSTALL_DIR}|g" "$downloaded" > "$dest"
+      chmod "$mode" "$dest"
+      ;;
+    *)
+      install -m "$mode" "$downloaded" "$dest"
+      ;;
+  esac
 }
 
 require_root() {
@@ -158,20 +180,7 @@ install_angie() {
   apt-get install -y angie
 
   mkdir -p "$ANGIE_CONF_DIR"
-  cat > "$ANGIE_BASE_CONF" <<'EOF'
-# Base Angie configuration for Deku
-# This file is managed by the Deku installer.
-
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-
-    location / {
-        return 404;
-    }
-}
-EOF
+  install_support_artifact "angie-deku.conf" "$ANGIE_BASE_CONF" 0644
 }
 
 install_binaries() {
@@ -189,24 +198,7 @@ install_binaries() {
 
 write_systemd_unit() {
   log "Writing systemd unit"
-  cat > "$SYSTEMD_UNIT_PATH" <<EOF
-[Unit]
-Description=Deku PaaS Daemon
-After=network.target docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-ExecStart=${INSTALL_DIR}/dekud
-Restart=always
-RestartSec=5
-User=root
-Environment=HOME=/root
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=multi-user.target
-EOF
+  install_support_artifact "deku.service" "$SYSTEMD_UNIT_PATH" 0644
 }
 
 run_setup() {
@@ -231,6 +223,11 @@ run_setup() {
   fi
 
   "${cmd[@]}"
+}
+
+print_dashboard_access() {
+  log "Dashboard access"
+  "${INSTALL_DIR}/deku" dashboard
 }
 
 configured_data_dir() {
@@ -367,10 +364,6 @@ main() {
   require_linux
   require_root
 
-  if [[ "$DEKU_REPO" == "yourorg/deku" && -z "$DEKU_RELEASE_BASE_URL" ]]; then
-    fail "set DEKU_REPO to your GitHub repo (for example owner/deku) or set DEKU_RELEASE_BASE_URL"
-  fi
-
   local arch
   arch="$(detect_arch)"
 
@@ -391,10 +384,12 @@ main() {
   enable_services
   verify_installation "$data_dir" "$api_port"
   warn_if_missing_docker
+  print_dashboard_access
 
   log "Install complete"
   printf 'Deku config: %s/config.toml\n' "$CONFIG_DIR"
   printf 'Dashboard assets: %s/dashboard\n' "$data_dir"
+  printf 'If you missed the one-time token shown during setup, run `deku dashboard reset-token`.\n'
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

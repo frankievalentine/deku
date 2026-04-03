@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
-use deku_core::types::{AppStatus, BuilderType, DekuToml, DeployStatus, ProcfileEntry};
+use deku_core::types::{
+    AppStatus, BuilderType, DekuToml, DeployStatus, ObjectStoreConfig, ProcfileEntry,
+};
 use deku_plugin_sdk::context::BuildContext;
+use deku_plugin_sdk::context::DeployContext;
 use sqlx::SqlitePool;
 
 use crate::build::{select_builder, BuiltImage};
@@ -10,6 +13,7 @@ use crate::container::{self, ContainerSpec, DockerClient};
 use crate::db::queries;
 use crate::events::EventSender;
 use crate::proxy;
+use crate::services::{database, network};
 
 // ── Deploy request types ──────────────────────────────────────────────────────
 
@@ -69,6 +73,58 @@ fn find_free_port() -> anyhow::Result<u16> {
     Ok(port)
 }
 
+fn release_artifact_key(
+    object_store: &ObjectStoreConfig,
+    app_name: &str,
+    deploy_id: &str,
+    file_name: &str,
+) -> String {
+    let prefix = object_store.normalized_prefix().unwrap_or_default();
+    format!("{prefix}releases/{app_name}/{deploy_id}/{file_name}")
+}
+
+fn emit_build_note(events: &EventSender, app_id: &str, line: String) {
+    events.emit(
+        Some(app_id.to_string()),
+        "build.log",
+        Some(serde_json::json!({ "line": line })),
+    );
+}
+
+async fn retain_release_artifact(
+    events: &EventSender,
+    app_id: &str,
+    object_store: &ObjectStoreConfig,
+    app_name: &str,
+    deploy_id: &str,
+    file_name: &str,
+    payload: Vec<u8>,
+) {
+    let key = release_artifact_key(object_store, app_name, deploy_id, file_name);
+    match crate::objectstore::put_bytes(object_store, &key, payload).await {
+        Ok(()) => emit_build_note(
+            events,
+            app_id,
+            format!(
+                "Retained deploy artifact in object store: s3://{}/{}",
+                object_store.bucket, key
+            ),
+        ),
+        Err(error) => {
+            tracing::warn!(
+                app = app_name,
+                deploy = deploy_id,
+                "artifact retention skipped: {error}"
+            );
+            emit_build_note(
+                events,
+                app_id,
+                format!("Deploy artifact retention skipped: {error}"),
+            );
+        }
+    }
+}
+
 // ── Core deploy function ──────────────────────────────────────────────────────
 
 /// Run the full deploy pipeline for an app. Returns the deployment ID on success.
@@ -78,6 +134,7 @@ pub async fn run_deploy(
     docker: &DockerClient,
     events: &EventSender,
     cfg: &DekuConfig,
+    plugins: &crate::plugins::PluginRegistry,
     req: DeployRequest,
 ) -> anyhow::Result<String> {
     let app_id = &req.app_id;
@@ -112,7 +169,7 @@ pub async fn run_deploy(
     queries::update_app_status(pool, app_id, AppStatus::Created).await?;
 
     // Wrap the rest in a closure so we can always update deployment status on failure
-    let result = do_deploy(pool, docker, events, cfg, &req, &mut deployment).await;
+    let result = do_deploy(pool, docker, events, cfg, plugins, &req, &mut deployment).await;
 
     match result {
         Ok(ref _image_tag) => {
@@ -144,18 +201,20 @@ async fn do_deploy(
     docker: &DockerClient,
     events: &EventSender,
     cfg: &DekuConfig,
+    plugins: &crate::plugins::PluginRegistry,
     req: &DeployRequest,
     deployment: &mut deku_core::types::Deployment,
 ) -> anyhow::Result<String> {
     let app_id = &req.app_id;
     let app_name = &req.app_name;
     let deploy_id = &deployment.id;
+    let app = queries::get_app_by_id(pool, app_id).await?;
 
     // ── Build phase ───────────────────────────────────────────────────────────
 
     queries::update_deployment(pool, deploy_id, DeployStatus::Building, None).await?;
 
-    let built = match &req.source {
+    let (built, deku_toml) = match &req.source {
         DeploySource::Image { reference } => {
             // Pull the image and wrap it
             events.emit(
@@ -194,12 +253,14 @@ async fn do_deploy(
 
             let exposed_ports: Vec<u16> = vec![];
 
-            BuiltImage {
-                image_id: image_tag.clone(),
-                tag: image_tag,
-                exposed_ports,
-                procfile: vec![],
-            }
+            (
+                BuiltImage {
+                    tag: image_tag,
+                    exposed_ports,
+                    procfile: vec![],
+                },
+                None,
+            )
         }
 
         DeploySource::Archive { path } => {
@@ -211,6 +272,19 @@ async fn do_deploy(
                 std::fs::read(path)?
             };
 
+            if let Some(object_store) = cfg.object_store.as_ref() {
+                retain_release_artifact(
+                    events,
+                    app_id,
+                    object_store,
+                    app_name,
+                    deploy_id,
+                    "source-archive.tar.gz",
+                    archive_bytes.clone(),
+                )
+                .await;
+            }
+
             // Decompress tar.gz into tmp_dir
             let cursor = std::io::Cursor::new(archive_bytes);
             let decoder = flate2::read::GzDecoder::new(cursor);
@@ -221,22 +295,55 @@ async fn do_deploy(
             let deku_toml = load_deku_toml(&source_path);
 
             let ctx = BuildContext {
-                app: queries::get_app_by_id(pool, app_id).await?,
+                app: app.clone(),
                 source_dir: source_path.clone(),
                 data_dir: cfg.data_dir.clone(),
             };
 
             let builder = select_builder(&source_path, req.force_builder.as_deref());
-            builder
+            tracing::info!(app = app_name, builder = builder.name(), "selected builder");
+            plugins.run_pre_build(&ctx).await;
+            let built = builder
                 .build(&ctx, deku_toml.as_ref(), docker, events)
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            plugins.run_post_build(&ctx).await;
+            (built, deku_toml)
         }
 
         DeploySource::Source { path } => {
+            if let Some(object_store) = cfg.object_store.as_ref() {
+                match container::create_tar_gz(path) {
+                    Ok(archive) => {
+                        retain_release_artifact(
+                            events,
+                            app_id,
+                            object_store,
+                            app_name,
+                            deploy_id,
+                            "source.tar.gz",
+                            archive.to_vec(),
+                        )
+                        .await;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            app = app_name,
+                            deploy = deploy_id,
+                            "artifact retention skipped: {error}"
+                        );
+                        emit_build_note(
+                            events,
+                            app_id,
+                            format!("Deploy artifact retention skipped: {error}"),
+                        );
+                    }
+                }
+            }
+
             let deku_toml = load_deku_toml(path);
             let ctx = BuildContext {
-                app: queries::get_app_by_id(pool, app_id).await?,
+                app: app.clone(),
                 source_dir: path.clone(),
                 data_dir: cfg.data_dir.clone(),
             };
@@ -248,12 +355,30 @@ async fn do_deploy(
             });
 
             let builder = select_builder(path, forced);
-            builder
+            tracing::info!(app = app_name, builder = builder.name(), "selected builder");
+            plugins.run_pre_build(&ctx).await;
+            let built = builder
                 .build(&ctx, deku_toml.as_ref(), docker, events)
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            plugins.run_post_build(&ctx).await;
+            (built, deku_toml)
         }
     };
+
+    let deploy_cfg = deku_toml.as_ref().and_then(|cfg| cfg.deploy.as_ref());
+    let web_container_port = deploy_cfg
+        .and_then(|cfg| cfg.port)
+        .or_else(|| built.exposed_ports.first().copied())
+        .unwrap_or(3000);
+    let health_path = deploy_cfg
+        .and_then(|cfg| cfg.healthcheck.clone())
+        .filter(|path| !path.trim().is_empty())
+        .unwrap_or_else(|| "/".to_string());
+    let health_wait = deploy_cfg.and_then(|cfg| cfg.wait).unwrap_or(5);
+    let health_timeout = deploy_cfg.and_then(|cfg| cfg.timeout).unwrap_or(30);
+    let health_attempts = deploy_cfg.and_then(|cfg| cfg.attempts).unwrap_or(5);
+    let retire_secs = deploy_cfg.and_then(|cfg| cfg.retire).unwrap_or(60);
 
     queries::update_deployment(pool, deploy_id, DeployStatus::Built, Some(&built.tag)).await?;
 
@@ -293,6 +418,15 @@ async fn do_deploy(
     // ── Deploy phase ──────────────────────────────────────────────────────────
 
     queries::update_deployment(pool, deploy_id, DeployStatus::Deploying, Some(&built.tag)).await?;
+    deployment.status = DeployStatus::Deploying;
+    deployment.image_tag = Some(built.tag.clone());
+    plugins
+        .run_pre_deploy(&DeployContext {
+            app: app.clone(),
+            deployment: deployment.clone(),
+            data_dir: cfg.data_dir.clone(),
+        })
+        .await;
 
     // Collect previous containers for retirement
     let previous_containers = queries::list_containers_for_app(pool, app_id).await?;
@@ -335,13 +469,7 @@ async fn do_deploy(
 
             let mut port_bindings = HashMap::new();
             if is_web && host_port > 0 {
-                // Bind the first exposed container port to our host port
-                if let Some(&container_port) = built.exposed_ports.first() {
-                    port_bindings.insert(format!("{container_port}/tcp"), host_port);
-                } else {
-                    // Default to 3000 if no EXPOSE directive
-                    port_bindings.insert("3000/tcp".to_string(), host_port);
-                }
+                port_bindings.insert(format!("{web_container_port}/tcp"), host_port);
             }
 
             let cmd = if entry.command.is_empty() {
@@ -358,11 +486,11 @@ async fn do_deploy(
             let memory = resource_limits
                 .as_ref()
                 .and_then(|rl| rl.memory.as_deref())
-                .and_then(|m| parse_memory_bytes(m));
+                .and_then(parse_memory_bytes);
             let cpu_quota = resource_limits
                 .as_ref()
                 .and_then(|rl| rl.cpu.as_deref())
-                .and_then(|c| parse_cpu_quota(c));
+                .and_then(parse_cpu_quota);
 
             let spec = ContainerSpec {
                 image: &built.tag,
@@ -391,6 +519,37 @@ async fn do_deploy(
             )
             .await?;
 
+            let attached_networks = match network::attach_container_to_configured_networks(
+                pool,
+                docker,
+                app_id,
+                &container_id,
+            )
+            .await
+            {
+                Ok(networks) => networks,
+                Err(error) => {
+                    let _ = container::stop_container(docker, &container_id, 10).await;
+                    let _ = container::remove_container(docker, &container_id).await;
+                    let _ = queries::update_container_status(pool, &container_id, "removed").await;
+                    return Err(anyhow::anyhow!(
+                        "failed to attach '{container_name}' to configured networks: {error}"
+                    ));
+                }
+            };
+
+            if !attached_networks.is_empty() {
+                events.emit(
+                    Some(app_id.clone()),
+                    "deploy.network",
+                    Some(serde_json::json!({
+                        "container_id": container_id,
+                        "process_type": proc_type,
+                        "networks": attached_networks,
+                    })),
+                );
+            }
+
             new_container_ids.push(container_id);
         }
     }
@@ -406,15 +565,17 @@ async fn do_deploy(
     .await?;
 
     if let Some(port) = web_host_port {
-        let health_wait = 5u64;
-        let health_path = "/".to_string();
-        let health_timeout = 30u64;
-        let health_attempts = 5u32;
-
         events.emit(
             Some(app_id.clone()),
             "deploy.health_checking",
-            Some(serde_json::json!({ "port": port, "wait": health_wait })),
+            Some(serde_json::json!({
+                "port": port,
+                "container_port": web_container_port,
+                "path": health_path.clone(),
+                "wait": health_wait,
+                "timeout": health_timeout,
+                "attempts": health_attempts,
+            })),
         );
 
         tokio::time::sleep(std::time::Duration::from_secs(health_wait)).await;
@@ -441,16 +602,14 @@ async fn do_deploy(
         }
 
         // Update port mapping in DB
-        if let Some(&container_port) = built.exposed_ports.first() {
-            let _ = queries::upsert_port_mapping(
-                pool,
-                app_id,
-                port as i64,
-                container_port as i64,
-                "tcp",
-            )
-            .await;
-        }
+        let _ = queries::upsert_port_mapping(
+            pool,
+            app_id,
+            port as i64,
+            web_container_port as i64,
+            "tcp",
+        )
+        .await;
 
         // Update Angie upstream
         let domains = queries::list_domain_names(pool, app_id).await?;
@@ -491,14 +650,14 @@ async fn do_deploy(
             "deploy.live",
             Some(serde_json::json!({
                 "url": url,
-                "dashboard": format!("http://127.0.0.1:{}", cfg.dashboard_port),
+                "dashboard": format!("http://127.0.0.1:{}", cfg.api_port),
             })),
         );
 
         tracing::info!(
             app = app_name,
             %url,
-            dashboard = format!("http://127.0.0.1:{}", cfg.dashboard_port),
+            dashboard = format!("http://127.0.0.1:{}", cfg.api_port),
             "Application deployed"
         );
     }
@@ -506,10 +665,39 @@ async fn do_deploy(
     // ── Mark deployment live ──────────────────────────────────────────────────
 
     queries::update_deployment(pool, deploy_id, DeployStatus::Live, Some(&built.tag)).await?;
+    deployment.status = DeployStatus::Live;
+
+    match database::verify_linked_services_post_deploy(pool, docker, app_id).await {
+        Ok(lines) => {
+            for line in lines {
+                events.emit(
+                    Some(app_id.clone()),
+                    "deploy.service_check",
+                    Some(serde_json::json!({ "line": line })),
+                );
+            }
+        }
+        Err(error) => {
+            let line = format!("linked service verification skipped: {error}");
+            tracing::warn!(app = app_name, "{line}");
+            events.emit(
+                Some(app_id.clone()),
+                "deploy.service_check",
+                Some(serde_json::json!({ "line": line })),
+            );
+        }
+    }
+
+    plugins
+        .run_post_deploy(&DeployContext {
+            app,
+            deployment: deployment.clone(),
+            data_dir: cfg.data_dir.clone(),
+        })
+        .await;
 
     // ── Retire old containers ─────────────────────────────────────────────────
 
-    let retire_secs = 60u64;
     let old_ids: Vec<String> = previous_containers.iter().map(|c| c.id.clone()).collect();
 
     if !old_ids.is_empty() {
@@ -626,11 +814,13 @@ async fn run_release_phase(
 // ── Rollback ──────────────────────────────────────────────────────────────────
 
 /// Roll back an app to its previous live deployment.
+#[allow(clippy::too_many_arguments)]
 pub async fn rollback(
     pool: &SqlitePool,
     docker: &DockerClient,
     events: &EventSender,
     cfg: &DekuConfig,
+    plugins: &crate::plugins::PluginRegistry,
     app_id: &str,
     app_name: &str,
     to_deployment_id: Option<&str>,
@@ -667,7 +857,7 @@ pub async fn rollback(
         force_builder: Some("image".to_string()),
     };
 
-    run_deploy(pool, docker, events, cfg, req).await?;
+    run_deploy(pool, docker, events, cfg, plugins, req).await?;
 
     // Mark the previous current deployment as rolled_back
     queries::update_deployment(pool, &current.id, DeployStatus::RolledBack, None).await?;

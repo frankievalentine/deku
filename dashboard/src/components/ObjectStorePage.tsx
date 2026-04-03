@@ -6,12 +6,16 @@ import {
   useEffect,
   useState,
 } from 'react';
-import type { ObjectStoreConfig, ObjectStoreState } from '../lib/api';
+import type { App, AppObjectStoreState, ObjectStoreConfig, ObjectStoreState } from '../lib/api';
 import {
+  fetchAppObjectStoreLink,
+  fetchApps,
   fetchObjectStoreConfig,
   getToken,
+  linkAppObjectStore,
   setObjectStoreConfig,
   testObjectStoreConfig,
+  unlinkAppObjectStore,
   unsetObjectStoreConfig,
 } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
@@ -50,21 +54,29 @@ export default function ObjectStorePage() {
 }
 
 function ObjectStoreInner() {
+  const [apps, setApps] = useState<App[]>([]);
   const [state, setState] = useState<ObjectStoreState | null>(null);
+  const [selectedApp, setSelectedApp] = useState('');
+  const [appLink, setAppLink] = useState<AppObjectStoreState | null>(null);
+  const [appPrefixDraft, setAppPrefixDraft] = useState('');
   const [draft, setDraft] = useState<ObjectStoreDraft>(EMPTY_DRAFT);
   const [loading, setLoading] = useState(true);
+  const [linkLoading, setLinkLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmUnset, setConfirmUnset] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const nextState = await fetchObjectStoreConfig();
+      const [nextState, nextApps] = await Promise.all([fetchObjectStoreConfig(), fetchApps()]);
       setState(nextState);
+      setApps(nextApps);
       setDraft(buildDraft(nextState.object_store));
+      setSelectedApp((current) => chooseSelectedApp(current, nextApps));
     } catch (nextError) {
       setError(
         nextError instanceof Error ? nextError.message : 'Unable to load object store config.'
@@ -77,6 +89,32 @@ function ObjectStoreInner() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadAppLink = useCallback(async (appName: string) => {
+    if (!appName) {
+      setAppLink(null);
+      setAppPrefixDraft('');
+      return;
+    }
+
+    try {
+      setLinkLoading(true);
+      setError(null);
+      const nextLink = await fetchAppObjectStoreLink(appName);
+      setAppLink(nextLink);
+      setAppPrefixDraft(nextLink.link?.prefix ?? '');
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : 'Unable to load app object store link.'
+      );
+    } finally {
+      setLinkLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAppLink(selectedApp);
+  }, [loadAppLink, selectedApp]);
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -139,6 +177,48 @@ function ObjectStoreInner() {
     }
   }
 
+  async function handleLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedApp) {
+      setError('Select an app first.');
+      return;
+    }
+
+    try {
+      setBusy(`link-${selectedApp}`);
+      setError(null);
+      setNotice(null);
+      const nextLink = await linkAppObjectStore(selectedApp, appPrefixDraft.trim() || null);
+      setAppLink(nextLink);
+      setAppPrefixDraft(nextLink.link?.prefix ?? '');
+      setNotice(`Object store credentials linked to ${selectedApp}.`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to link app.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleUnlink() {
+    if (!selectedApp) {
+      return;
+    }
+
+    try {
+      setBusy(`unlink-${selectedApp}`);
+      setError(null);
+      setNotice(null);
+      await unlinkAppObjectStore(selectedApp);
+      setConfirmUnlink(false);
+      await loadAppLink(selectedApp);
+      setNotice(`Object store credentials removed from ${selectedApp}.`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Unable to unlink app.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="panel loading-state">
@@ -166,8 +246,8 @@ function ObjectStoreInner() {
             <p className="eyebrow">Host storage</p>
             <h1 className="page-title">Object store configuration</h1>
             <p className="page-copy">
-              Configure the S3-compatible store used for managed Postgres backups and other host
-              features that need durable object storage.
+              Configure the S3-compatible store used for managed backups, release storage, and
+              app-level object store credential linking.
             </p>
           </div>
           <div className="metrics-grid">
@@ -404,6 +484,161 @@ function ObjectStoreInner() {
               </>
             )}
           </article>
+
+          <article className="panel stack-md">
+            <div className="stack-sm">
+              <p className="eyebrow">App linking</p>
+              <h2 className="section-title">Credential workflow</h2>
+              <p className="page-copy">
+                Link the saved object store config into an app as managed AWS and S3 environment
+                variables with a per-app prefix.
+              </p>
+            </div>
+
+            {apps.length === 0 ? (
+              <p className="text-muted">
+                Create an app first, then link the configured object store credentials here.
+              </p>
+            ) : (
+              <>
+                <div className="panel-grid">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="objectstore-app">
+                      App
+                    </label>
+                    <select
+                      id="objectstore-app"
+                      className="input"
+                      value={selectedApp}
+                      onChange={(event) => setSelectedApp(event.target.value)}
+                      disabled={busy !== null}
+                    >
+                      {apps.map((app) => (
+                        <option key={app.id} value={app.name}>
+                          {app.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="objectstore-app-prefix">
+                      Prefix override
+                    </label>
+                    <input
+                      id="objectstore-app-prefix"
+                      className="input"
+                      value={appPrefixDraft}
+                      onChange={(event) => setAppPrefixDraft(event.target.value)}
+                      placeholder="apps/my-app/"
+                      disabled={busy !== null || !state.configured}
+                    />
+                  </div>
+                </div>
+
+                {linkLoading ? (
+                  <div className="panel loading-state">
+                    <span className="loading-spinner" />
+                    <span>Loading app link status…</span>
+                  </div>
+                ) : appLink ? (
+                  <>
+                    <dl className="data-grid">
+                      <div>
+                        <dt>Linked</dt>
+                        <dd>{appLink.linked ? 'Yes' : 'No'}</dd>
+                      </div>
+                      <div>
+                        <dt>Provider</dt>
+                        <dd>{appLink.link?.provider ?? 'Unavailable'}</dd>
+                      </div>
+                      <div>
+                        <dt>Bucket</dt>
+                        <dd className="font-mono">{appLink.link?.bucket ?? 'Unavailable'}</dd>
+                      </div>
+                      <div>
+                        <dt>Region</dt>
+                        <dd className="font-mono">{appLink.link?.region ?? 'Unavailable'}</dd>
+                      </div>
+                      <div>
+                        <dt>Endpoint</dt>
+                        <dd className="font-mono">{appLink.link?.endpoint ?? 'Unavailable'}</dd>
+                      </div>
+                      <div>
+                        <dt>Prefix</dt>
+                        <dd className="font-mono">{appLink.link?.prefix ?? 'Unavailable'}</dd>
+                      </div>
+                      <div>
+                        <dt>Path style</dt>
+                        <dd>
+                          {appLink.link
+                            ? appLink.link.path_style
+                              ? 'Enabled'
+                              : 'Disabled'
+                            : 'Unavailable'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Secret present</dt>
+                        <dd>
+                          {appLink.link
+                            ? appLink.link.secret_present
+                              ? 'Yes'
+                              : 'No'
+                            : 'Unavailable'}
+                        </dd>
+                      </div>
+                    </dl>
+
+                    <div className="stack-sm">
+                      <p className="eyebrow">Managed env keys</p>
+                      {appLink.link?.linked_keys.length ? (
+                        <div className="data-grid">
+                          {appLink.link.linked_keys.map((key) => (
+                            <div key={key}>
+                              <dt>Linked</dt>
+                              <dd className="font-mono">{key}</dd>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-muted">
+                          No managed object store keys are currently set for this app.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+
+                <form onSubmit={handleLink} className="form-actions">
+                  <button
+                    className="btn btn-primary"
+                    type="submit"
+                    disabled={busy !== null || !state.configured || !selectedApp}
+                  >
+                    {busy === `link-${selectedApp}` ? 'Linking…' : 'Link app'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      void loadAppLink(selectedApp);
+                    }}
+                    disabled={busy !== null || !selectedApp}
+                  >
+                    Refresh status
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => setConfirmUnlink(true)}
+                    disabled={busy !== null || !selectedApp || !appLink?.linked}
+                  >
+                    Unlink app
+                  </button>
+                </form>
+              </>
+            )}
+          </article>
         </div>
       </div>
 
@@ -418,6 +653,19 @@ function ObjectStoreInner() {
         }}
         onConfirm={() => {
           void handleUnset();
+        }}
+      />
+      <ConfirmModal
+        open={confirmUnlink}
+        title="Remove app object store link?"
+        description={`This will delete the managed AWS and S3 object store variables from ${selectedApp || 'the selected app'}.`}
+        confirmLabel="Unlink app"
+        busy={busy === `unlink-${selectedApp}`}
+        onClose={() => {
+          if (busy !== `unlink-${selectedApp}`) setConfirmUnlink(false);
+        }}
+        onConfirm={() => {
+          void handleUnlink();
         }}
       />
     </>
@@ -472,6 +720,14 @@ function updateDraft<K extends keyof ObjectStoreDraft>(
   value: ObjectStoreDraft[K]
 ) {
   setDraft((current) => ({ ...current, [key]: value }));
+}
+
+function chooseSelectedApp(current: string, apps: App[]): string {
+  if (current && apps.some((app) => app.name === current)) {
+    return current;
+  }
+
+  return apps[0]?.name ?? '';
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

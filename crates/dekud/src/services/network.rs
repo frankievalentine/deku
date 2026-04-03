@@ -52,6 +52,32 @@ pub async fn attach(
         .map_err(Into::into)
 }
 
+pub async fn attach_container_to_configured_networks(
+    pool: &SqlitePool,
+    docker: &Docker,
+    app_id: &str,
+    container_id: &str,
+) -> Result<Vec<String>> {
+    let networks = queries::list_app_networks(pool, app_id).await?;
+    let mut attached = Vec::with_capacity(networks.len());
+
+    for network in networks {
+        let docker_net = format!("deku-{}", network.name);
+        docker
+            .connect_network(
+                &docker_net,
+                NetworkConnectRequest {
+                    container: container_id.to_string(),
+                    endpoint_config: None,
+                },
+            )
+            .await?;
+        attached.push(network.name);
+    }
+
+    Ok(attached)
+}
+
 pub async fn detach(
     pool: &SqlitePool,
     docker: &Docker,

@@ -1,8 +1,13 @@
 use anyhow::Result;
+use chrono::Utc;
 use clap::Args;
-use deku_core::types::ObjectStoreConfig;
-use serde::Serialize;
+use deku_core::{auth::issue_dashboard_token, types::ObjectStoreConfig};
 use std::path::PathBuf;
+
+use crate::{
+    commands::dashboard::print_token_notice,
+    local_config::{config_dir, load_optional, normalize_path_string, save, LocalDekuConfig},
+};
 
 #[derive(Debug, Clone, Args)]
 pub struct SetupArgs {
@@ -24,27 +29,12 @@ pub struct SetupArgs {
     pub global_domain: Option<String>,
 }
 
-#[derive(Serialize)]
-struct SetupConfig {
-    data_dir: String,
-    api_port: u16,
-    ssh_port: u16,
-    angie_conf_dir: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    global_domain: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    object_store: Option<ObjectStoreConfig>,
-}
-
 pub fn run(args: SetupArgs) -> Result<()> {
     cliclack::intro("Deku setup")?;
     let skip_systemd = args.no_systemd;
     let use_defaults = args.defaults;
 
-    let home = dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("/root"));
-    let config_dir = std::env::var_os("DEKU_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".deku"));
+    let config_dir = config_dir();
     let default_data = config_dir.to_string_lossy().to_string();
 
     let data_dir = match args.data_dir {
@@ -156,21 +146,26 @@ pub fn run(args: SetupArgs) -> Result<()> {
         None
     };
 
-    let cfg = SetupConfig {
-        data_dir: data_dir.clone(),
-        api_port,
-        ssh_port,
-        angie_conf_dir,
+    let existing_dashboard_auth = load_optional()?.and_then(|config| config.dashboard_auth);
+    let (dashboard_token, dashboard_auth) =
+        issue_dashboard_token(Utc::now(), existing_dashboard_auth.as_ref())?;
+
+    let cfg = LocalDekuConfig {
+        data_dir: Some(PathBuf::from(&data_dir)),
+        api_port: Some(api_port),
+        ssh_port: Some(ssh_port),
+        angie_conf_dir: Some(PathBuf::from(&angie_conf_dir)),
         global_domain,
         object_store,
+        dashboard_auth: Some(dashboard_auth),
+        ..LocalDekuConfig::default()
     };
 
-    let data_path = PathBuf::from(&data_dir);
-    std::fs::create_dir_all(&data_path)?;
+    cfg.ensure_dirs()?;
+    cfg.clear_legacy_token_file()?;
     std::fs::create_dir_all(&config_dir)?;
     let config_path = config_dir.join("config.toml");
-    let contents = toml::to_string_pretty(&cfg)?;
-    std::fs::write(&config_path, contents)?;
+    save(&cfg)?;
 
     cliclack::log::success(format!("Config written to {}", config_path.display()))?;
 
@@ -192,7 +187,14 @@ pub fn run(args: SetupArgs) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     let _ = skip_systemd;
 
-    cliclack::outro("Setup complete. Run `dekud` to start the daemon.")?;
+    println!();
+    print_token_notice(&cfg.effective_dashboard_url(), &dashboard_token, false);
+    println!("Config file:      {}", normalize_path_string(&config_path));
+    println!(
+        "Dashboard assets: {}",
+        normalize_path_string(&cfg.dashboard_dir_path())
+    );
+    cliclack::outro("Setup complete. Start `dekud` to serve the dashboard.")?;
     Ok(())
 }
 

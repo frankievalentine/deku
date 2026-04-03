@@ -209,6 +209,24 @@ export interface ObjectStoreState {
   object_store: ObjectStoreConfig | null;
 }
 
+export interface AppObjectStoreLink {
+  provider: string;
+  bucket: string;
+  region: string;
+  endpoint: string;
+  prefix: string;
+  path_style: boolean;
+  secret_present: boolean;
+  linked_keys: string[];
+}
+
+export interface AppObjectStoreState {
+  app: string;
+  configured: boolean;
+  linked: boolean;
+  link: AppObjectStoreLink | null;
+}
+
 export interface ProcessRecord {
   process_type: string;
   scale: number;
@@ -598,6 +616,10 @@ export function fetchObjectStoreConfig(): Promise<ObjectStoreState> {
   return apiFetch<ObjectStoreState>('/api/objectstore');
 }
 
+export function fetchAppObjectStoreLink(appName: string): Promise<AppObjectStoreState> {
+  return apiFetch<AppObjectStoreState>(`/api/apps/${encodeURIComponent(appName)}/objectstore`);
+}
+
 export function setObjectStoreConfig(config: ObjectStoreConfig): Promise<ObjectStoreState> {
   return apiFetch<ObjectStoreState>('/api/objectstore', {
     method: 'POST',
@@ -605,8 +627,24 @@ export function setObjectStoreConfig(config: ObjectStoreConfig): Promise<ObjectS
   });
 }
 
+export function linkAppObjectStore(
+  appName: string,
+  prefix?: string | null
+): Promise<AppObjectStoreState> {
+  return apiFetch<AppObjectStoreState>(`/api/apps/${encodeURIComponent(appName)}/objectstore`, {
+    method: 'POST',
+    body: JSON.stringify({ prefix: prefix || null }),
+  });
+}
+
 export function unsetObjectStoreConfig(): Promise<void> {
   return apiFetch<void>('/api/objectstore', {
+    method: 'DELETE',
+  });
+}
+
+export function unlinkAppObjectStore(appName: string): Promise<void> {
+  return apiFetch<void>(`/api/apps/${encodeURIComponent(appName)}/objectstore`, {
     method: 'DELETE',
   });
 }
@@ -686,24 +724,29 @@ export async function fetchManagedServiceLogs(
   return response.logs;
 }
 
-export function fetchPostgresBackups(name: string): Promise<ServiceBackup[]> {
-  return apiFetch<ServiceBackup[]>(
-    `${serviceBasePath('postgres')}/${encodeURIComponent(name)}/backups`
-  );
+export function fetchServiceBackups(
+  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  name: string
+): Promise<ServiceBackup[]> {
+  return apiFetch<ServiceBackup[]>(`${serviceBasePath(kind)}/${encodeURIComponent(name)}/backups`);
 }
 
-export function triggerPostgresBackup(name: string): Promise<ServiceBackup> {
-  return apiFetch<ServiceBackup>(
-    `${serviceBasePath('postgres')}/${encodeURIComponent(name)}/backups`,
-    {
-      method: 'POST',
-    }
-  );
+export function triggerServiceBackup(
+  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  name: string
+): Promise<ServiceBackup> {
+  return apiFetch<ServiceBackup>(`${serviceBasePath(kind)}/${encodeURIComponent(name)}/backups`, {
+    method: 'POST',
+  });
 }
 
-export function restorePostgresBackup(name: string, backupId: string): Promise<ServiceBackup> {
+export function restoreServiceBackup(
+  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  name: string,
+  backupId: string
+): Promise<ServiceBackup> {
   return apiFetch<ServiceBackup>(
-    `${serviceBasePath('postgres')}/${encodeURIComponent(name)}/restore/${encodeURIComponent(backupId)}`,
+    `${serviceBasePath(kind)}/${encodeURIComponent(name)}/restore/${encodeURIComponent(backupId)}`,
     {
       method: 'POST',
     }

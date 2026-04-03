@@ -3,14 +3,13 @@ title: Contributing
 description: Contributing guidance for the Deku repository.
 ---
 
-Deku is still in active milestone buildout. Contributions should prioritize correctness and milestone completion over polish-only changes.
+Contributions should prioritize correctness, compatibility, and clear user-facing behavior.
 
 ## Recommended Workflow
 
-1. Read `.codex/deku-build-plan.md`.
-2. Confirm the current milestone and existing worktree state.
-3. Make changes in the smallest coherent slice possible.
-4. Run targeted checks for the affected area.
+1. Confirm the current repository state and existing worktree changes.
+2. Make changes in the smallest coherent slice possible.
+3. Run targeted checks for the affected area.
 
 ## Code Areas
 
@@ -29,9 +28,8 @@ Deku is still in active milestone buildout. Contributions should prioritize corr
 
 ## Documentation
 
-If command surfaces or milestone status change, update:
+If command surfaces or operating workflows change, update:
 
 - `AGENTS.md` when the supported coding-agent workflow changes
-- `.codex/deku-build-plan.md`
 - `docs/`
 - `.codex/deku-ops.md` when local run/test instructions change

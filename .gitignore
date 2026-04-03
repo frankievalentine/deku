@@ -6,6 +6,8 @@
 /docs/dist
 /docs/.astro
 /crates/dekud/assets
+/dist
+/.tmp-*/
 *.env
 .DS_Store
 .claude/

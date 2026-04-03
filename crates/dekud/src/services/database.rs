@@ -5,8 +5,8 @@ use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::{HostConfig, Mount, MountTypeEnum, PortBinding};
 use bollard::query_parameters::{
-    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, RemoveContainerOptionsBuilder,
-    RemoveVolumeOptionsBuilder,
+    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, LogsOptionsBuilder,
+    RemoveContainerOptionsBuilder, RemoveVolumeOptionsBuilder, WaitContainerOptionsBuilder,
 };
 use bollard::Docker;
 use futures::StreamExt;
@@ -186,7 +186,7 @@ pub async fn create(
         None,
         None,
     );
-    while let Some(_) = stream.next().await {}
+    while stream.next().await.is_some() {}
 
     // Generate password
     let password = uuid::Uuid::new_v4().simple().to_string();
@@ -527,6 +527,221 @@ pub async fn restore_postgres(
         .map_err(Into::into)
 }
 
+pub async fn backup_redis(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+) -> Result<queries::ServiceBackup> {
+    let object_store = cfg
+        .object_store
+        .as_ref()
+        .ok_or_else(|| anyhow!("object store is not configured"))?;
+    let service = queries::get_service_for_plugin(pool, service_name, "redis").await?;
+    let connection = connection_info(&redis_spec(), &service)?;
+    let container_name = format!("deku-redis-{service_name}");
+
+    let save_exec = exec_in_container(
+        docker,
+        &container_name,
+        vec!["redis-cli".to_string(), "SAVE".to_string()],
+        vec![format!("REDISCLI_AUTH={}", connection.password)],
+        None,
+        None,
+    )
+    .await?;
+    if save_exec.exit_code != 0 {
+        return Err(anyhow!(
+            "redis SAVE failed with exit code {}: {}",
+            save_exec.exit_code,
+            String::from_utf8_lossy(&save_exec.stderr)
+        ));
+    }
+
+    let dump_exec = exec_in_container(
+        docker,
+        &container_name,
+        vec!["cat".to_string(), "/data/dump.rdb".to_string()],
+        Vec::new(),
+        None,
+        None,
+    )
+    .await?;
+    if dump_exec.exit_code != 0 {
+        return Err(anyhow!(
+            "reading redis dump.rdb failed with exit code {}: {}",
+            dump_exec.exit_code,
+            String::from_utf8_lossy(&dump_exec.stderr)
+        ));
+    }
+
+    let object_key = format!(
+        "{}backups/redis/{}/{}-{}.rdb",
+        object_store.normalized_prefix().unwrap_or_default(),
+        service_name,
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        Uuid::new_v4().simple()
+    );
+    crate::objectstore::put_bytes(object_store, &object_key, dump_exec.stdout.clone()).await?;
+
+    let sha256 = hex::encode(Sha256::digest(&dump_exec.stdout));
+    queries::create_service_backup(
+        pool,
+        &service.id,
+        &object_key,
+        "redis.rdb",
+        dump_exec.stdout.len() as i64,
+        &sha256,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn restore_redis(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+    backup_id: &str,
+) -> Result<queries::ServiceBackup> {
+    let object_store = cfg
+        .object_store
+        .as_ref()
+        .ok_or_else(|| anyhow!("object store is not configured"))?;
+    let service = queries::get_service_for_plugin(pool, service_name, "redis").await?;
+    let service_config = parse_service_config(&service.config)?;
+    let backup = queries::get_service_backup_for_service(pool, &service.id, backup_id).await?;
+    let payload = crate::objectstore::get_bytes(object_store, &backup.object_key).await?;
+    let payload_sha256 = hex::encode(Sha256::digest(&payload));
+    if payload_sha256 != backup.sha256 {
+        return Err(anyhow!(
+            "backup checksum mismatch for '{}': expected {}, got {}",
+            backup.id,
+            backup.sha256,
+            payload_sha256
+        ));
+    }
+
+    let container_name = format!("deku-redis-{service_name}");
+    let _ = docker
+        .stop_container(
+            &container_name,
+            None::<bollard::query_parameters::StopContainerOptions>,
+        )
+        .await;
+
+    let temp_dir = tempfile::tempdir()?;
+    let backup_path = temp_dir.path().join("dump.rdb");
+    std::fs::write(&backup_path, &payload)?;
+
+    let restore_cmd = concat!(
+        "rm -rf /data/appendonlydir /data/dump.rdb && ",
+        "cp /restore/dump.rdb /data/dump.rdb && ",
+        "chown redis:redis /data/dump.rdb 2>/dev/null || true"
+    );
+    let restore_output = run_helper_container(
+        docker,
+        "redis:7-alpine",
+        vec!["sh".to_string(), "-c".to_string(), restore_cmd.to_string()],
+        vec![
+            Mount {
+                source: Some(service_config.volume.clone()),
+                target: Some("/data".to_string()),
+                typ: Some(MountTypeEnum::VOLUME),
+                read_only: Some(false),
+                ..Default::default()
+            },
+            Mount {
+                source: Some(backup_path.to_string_lossy().to_string()),
+                target: Some("/restore/dump.rdb".to_string()),
+                typ: Some(MountTypeEnum::BIND),
+                read_only: Some(true),
+                ..Default::default()
+            },
+        ],
+    )
+    .await;
+
+    if let Err(error) = restore_output {
+        let _ = docker
+            .start_container(
+                &container_name,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await;
+        return Err(error);
+    }
+
+    docker
+        .start_container(
+            &container_name,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
+        .await?;
+    wait_for_tcp_port(service_config.host_port).await?;
+
+    queries::mark_service_backup_restored(pool, &backup.id).await?;
+    queries::get_service_backup_for_service(pool, &service.id, backup_id)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn verify_linked_services_post_deploy(
+    pool: &SqlitePool,
+    docker: &Docker,
+    app_id: &str,
+) -> Result<Vec<String>> {
+    let config_vars = queries::get_config_vars(pool, app_id).await?;
+    let config_by_key: HashMap<String, String> = config_vars
+        .into_iter()
+        .map(|entry| (entry.key, entry.value))
+        .collect();
+    let links = queries::list_service_links_for_app(pool, app_id).await?;
+    let mut lines = Vec::new();
+
+    for link in links {
+        let service = queries::get_service_by_id(pool, &link.service_id).await?;
+        match service.plugin.as_str() {
+            "postgres" => {
+                lines.push(
+                    verify_postgres_binding(
+                        docker,
+                        &service,
+                        &link.env_key,
+                        config_by_key.get(&link.env_key),
+                    )
+                    .await?,
+                );
+            }
+            "redis" => {
+                lines.push(
+                    verify_redis_binding(
+                        docker,
+                        &service,
+                        &link.env_key,
+                        config_by_key.get(&link.env_key),
+                    )
+                    .await?,
+                );
+            }
+            "mysql" => {
+                lines.push(
+                    verify_mysql_binding(
+                        docker,
+                        &service,
+                        &link.env_key,
+                        config_by_key.get(&link.env_key),
+                    )
+                    .await?,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    Ok(lines)
+}
+
 async fn exec_in_container(
     docker: &Docker,
     container_name: &str,
@@ -598,6 +813,219 @@ async fn exec_in_container(
         stderr,
         exit_code: inspect.exit_code.unwrap_or(-1) as i64,
     })
+}
+
+async fn run_helper_container(
+    docker: &Docker,
+    image: &str,
+    cmd: Vec<String>,
+    mounts: Vec<Mount>,
+) -> Result<ExecResult> {
+    let container_name = format!("deku-helper-{}", Uuid::new_v4().simple());
+    let body = bollard::models::ContainerCreateBody {
+        image: Some(image.to_string()),
+        cmd: Some(cmd),
+        host_config: Some(HostConfig {
+            mounts: Some(mounts),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let created = docker
+        .create_container(
+            Some(
+                CreateContainerOptionsBuilder::default()
+                    .name(&container_name)
+                    .build(),
+            ),
+            body,
+        )
+        .await?;
+
+    docker
+        .start_container(
+            &created.id,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
+        .await?;
+
+    let wait_opts = WaitContainerOptionsBuilder::default().build();
+    let mut wait_stream = docker.wait_container(&created.id, Some(wait_opts));
+    let wait_result = wait_stream.next().await;
+
+    let log_opts = LogsOptionsBuilder::default()
+        .stdout(true)
+        .stderr(true)
+        .build();
+    let mut log_stream = docker.logs(&created.id, Some(log_opts));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    while let Some(item) = log_stream.next().await {
+        match item? {
+            LogOutput::StdOut { message } | LogOutput::Console { message } => {
+                stdout.extend_from_slice(&message);
+            }
+            LogOutput::StdErr { message } => stderr.extend_from_slice(&message),
+            LogOutput::StdIn { .. } => {}
+        }
+    }
+
+    let _ = docker
+        .remove_container(
+            &created.id,
+            Some(RemoveContainerOptionsBuilder::default().force(true).build()),
+        )
+        .await;
+
+    let exit_code = wait_result
+        .and_then(|r| r.ok())
+        .map(|r| r.status_code)
+        .unwrap_or(1);
+    if exit_code != 0 {
+        return Err(anyhow!(
+            "helper container failed with exit code {}: {}",
+            exit_code,
+            String::from_utf8_lossy(&stderr)
+        ));
+    }
+
+    Ok(ExecResult {
+        stdout,
+        stderr,
+        exit_code,
+    })
+}
+
+async fn verify_postgres_binding(
+    docker: &Docker,
+    service: &queries::Service,
+    env_key: &str,
+    actual_config: Option<&String>,
+) -> Result<String> {
+    let connection = connection_info(&postgres_spec(), service)?;
+    let expected_url = connection.url.clone();
+    let config_state = match actual_config {
+        Some(value) if value == &expected_url => "config ok",
+        Some(_) => "config mismatch",
+        None => "config missing",
+    };
+
+    let container_name = format!("deku-postgres-{}", service.name);
+    let check = exec_in_container(
+        docker,
+        &container_name,
+        vec![
+            "pg_isready".to_string(),
+            "-U".to_string(),
+            connection
+                .username
+                .clone()
+                .unwrap_or_else(|| "deku".to_string()),
+            "-d".to_string(),
+            connection
+                .database
+                .clone()
+                .unwrap_or_else(|| service.name.clone()),
+        ],
+        vec![format!("PGPASSWORD={}", connection.password)],
+        None,
+        Some("postgres".to_string()),
+    )
+    .await?;
+
+    let connectivity = if check.exit_code == 0 {
+        "reachable"
+    } else {
+        "unreachable"
+    };
+
+    Ok(format!(
+        "linked postgres '{}' verified: {} via {}, {}",
+        service.name, env_key, config_state, connectivity
+    ))
+}
+
+async fn verify_redis_binding(
+    docker: &Docker,
+    service: &queries::Service,
+    env_key: &str,
+    actual_config: Option<&String>,
+) -> Result<String> {
+    let connection = connection_info(&redis_spec(), service)?;
+    let expected_url = connection.url.clone();
+    let config_state = match actual_config {
+        Some(value) if value == &expected_url => "config ok",
+        Some(_) => "config mismatch",
+        None => "config missing",
+    };
+
+    let container_name = format!("deku-redis-{}", service.name);
+    let check = exec_in_container(
+        docker,
+        &container_name,
+        vec!["redis-cli".to_string(), "PING".to_string()],
+        vec![format!("REDISCLI_AUTH={}", connection.password)],
+        None,
+        None,
+    )
+    .await?;
+    let connectivity =
+        if check.exit_code == 0 && String::from_utf8_lossy(&check.stdout).contains("PONG") {
+            "reachable"
+        } else {
+            "unreachable"
+        };
+
+    Ok(format!(
+        "linked redis '{}' verified: {} via {}, {}",
+        service.name, env_key, config_state, connectivity
+    ))
+}
+
+async fn verify_mysql_binding(
+    docker: &Docker,
+    service: &queries::Service,
+    env_key: &str,
+    actual_config: Option<&String>,
+) -> Result<String> {
+    let connection = connection_info(&mysql_spec(), service)?;
+    let expected_url = connection.url.clone();
+    let config_state = match actual_config {
+        Some(value) if value == &expected_url => "config ok",
+        Some(_) => "config mismatch",
+        None => "config missing",
+    };
+
+    let container_name = format!("deku-mysql-{}", service.name);
+    let check = exec_in_container(
+        docker,
+        &container_name,
+        vec![
+            "mysqladmin".to_string(),
+            "ping".to_string(),
+            "-u".to_string(),
+            connection
+                .username
+                .clone()
+                .unwrap_or_else(|| "deku".to_string()),
+            format!("-p{}", connection.password),
+        ],
+        Vec::new(),
+        None,
+        None,
+    )
+    .await?;
+    let connectivity = if check.exit_code == 0 {
+        "reachable"
+    } else {
+        "unreachable"
+    };
+
+    Ok(format!(
+        "linked mysql '{}' verified: {} via {}, {}",
+        service.name, env_key, config_state, connectivity
+    ))
 }
 
 pub async fn unlink(pool: &SqlitePool, service_name: &str, app_name: &str) -> Result<()> {

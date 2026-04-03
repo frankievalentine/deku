@@ -17,6 +17,7 @@ release_artifacts=(
   "dekud-linux-arm64"
   "install.sh"
   "deku.service"
+  "angie-deku.conf"
 )
 
 log() {
@@ -80,8 +81,10 @@ package_binaries() {
 package_support_files() {
   cp "${ROOT_DIR}/scripts/install.sh" "${DIST_DIR}/install.sh"
   cp "${ROOT_DIR}/scripts/package/deku.service" "${DIST_DIR}/deku.service"
+  cp "${ROOT_DIR}/scripts/package/angie-deku.conf" "${DIST_DIR}/angie-deku.conf"
   chmod 0755 "${DIST_DIR}/install.sh"
   chmod 0644 "${DIST_DIR}/deku.service"
+  chmod 0644 "${DIST_DIR}/angie-deku.conf"
 }
 
 write_checksums() {
