@@ -34,9 +34,9 @@ pub async fn run(args: LogsArgs, client: &DekuClient) -> Result<()> {
             .await?;
     } else {
         let data = client
-            .get(&format!("/api/apps/{app}/logs?tail={lines}"))
+            .get(&format!("/api/apps/{app}/logs?n={lines}"))
             .await?;
-        if let Some(log_lines) = data.as_array() {
+        if let Some(log_lines) = data["logs"].as_array() {
             for line in log_lines {
                 println!("{}", line.as_str().unwrap_or(""));
             }

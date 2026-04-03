@@ -8,6 +8,7 @@ mod container;
 mod db;
 mod deploy;
 mod events;
+mod objectstore;
 mod plugins;
 mod proxy;
 mod services;
@@ -15,10 +16,10 @@ mod ssh;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    config::init_logging()?;
+    let cfg = config::load()?;
+    config::init_logging(&cfg)?;
     info!("dekud starting");
 
-    let cfg = config::load()?;
     let pool = db::connect(&cfg).await?;
     db::migrate(&pool).await?;
 

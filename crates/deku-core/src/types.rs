@@ -194,6 +194,47 @@ pub struct NewApp {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectStoreConfig {
+    pub provider: String,
+    pub bucket: String,
+    pub region: String,
+    pub endpoint: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    #[serde(default = "default_object_store_path_style")]
+    pub path_style: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+impl ObjectStoreConfig {
+    pub fn redacted(&self) -> Self {
+        let mut clone = self.clone();
+        clone.secret_access_key = if self.secret_access_key.is_empty() {
+            String::new()
+        } else {
+            "********".to_string()
+        };
+        clone
+    }
+
+    pub fn normalized_prefix(&self) -> Option<String> {
+        self.prefix.as_ref().and_then(|prefix| {
+            let trimmed = prefix.trim().trim_matches('/');
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(format!("{trimmed}/"))
+            }
+        })
+    }
+}
+
+fn default_object_store_path_style() -> bool {
+    true
+}
+
 /// Optional project-level configuration file (`deku.toml`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DekuToml {

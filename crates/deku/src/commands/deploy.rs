@@ -37,19 +37,23 @@ enum DeployCommands {
 
 pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
     match args.command {
-        DeployCommands::Run { app, path, image, builder } => {
+        DeployCommands::Run {
+            app,
+            path,
+            image,
+            builder,
+        } => {
             if let Some(img) = image {
                 println!("Deploying image '{img}' to app '{app}'...");
                 let mut body = serde_json::json!({ "source": "image", "image": img });
                 if let Some(b) = builder {
                     body["builder"] = serde_json::Value::String(b);
                 }
-                let resp = client
+                client
                     .post(&format!("/api/apps/{app}/deploy"), body)
                     .await?;
-                let deploy_id = resp["deploy_id"].as_str().unwrap_or("?");
-                println!("Deploy started (id: {deploy_id}). Streaming logs:");
-                stream_deploy_logs(client, &app, deploy_id).await?;
+                println!("Deploy started. Streaming logs:");
+                stream_deploy_logs(client, &app).await?;
             } else {
                 // Build a tar.gz of the source directory and upload it
                 let src = std::path::Path::new(&path)
@@ -65,10 +69,9 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
                 if let Some(b) = builder {
                     query.push_str(&format!("?builder={b}"));
                 }
-                let resp = client.post_archive(&query, archive).await?;
-                let deploy_id = resp["deploy_id"].as_str().unwrap_or("?");
-                println!("Deploy started (id: {deploy_id}). Streaming logs:");
-                stream_deploy_logs(client, &app, deploy_id).await?;
+                client.post_archive(&query, archive).await?;
+                println!("Deploy started. Streaming logs:");
+                stream_deploy_logs(client, &app).await?;
             }
         }
 
@@ -78,14 +81,24 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
                 if deploys.is_empty() {
                     println!("No deployments found.");
                 } else {
-                    println!("{:<12} {:<12} {:<20} {}", "ID", "STATUS", "IMAGE", "CREATED");
+                    println!(
+                        "{:<12} {:<12} {:<20} {}",
+                        "ID", "STATUS", "IMAGE", "CREATED"
+                    );
                     println!("{}", "-".repeat(72));
                     for d in deploys {
-                        let id = &d["id"].as_str().unwrap_or("?")[..8.min(d["id"].as_str().unwrap_or("?").len())];
+                        let id = &d["id"].as_str().unwrap_or("?")
+                            [..8.min(d["id"].as_str().unwrap_or("?").len())];
                         let status = d["status"].as_str().unwrap_or("-");
                         let image = d["image_tag"].as_str().unwrap_or("-");
                         let created = d["created_at"].as_str().unwrap_or("-");
-                        println!("{:<12} {:<12} {:<20} {}", id, status, &image[..20.min(image.len())], &created[..19.min(created.len())]);
+                        println!(
+                            "{:<12} {:<12} {:<20} {}",
+                            id,
+                            status,
+                            &image[..20.min(image.len())],
+                            &created[..19.min(created.len())]
+                        );
                     }
                 }
             }
@@ -96,9 +109,10 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
             if let Some(id) = to {
                 body["deployment_id"] = serde_json::Value::String(id);
             }
-            let resp = client.post(&format!("/api/apps/{app}/rollback"), body).await?;
-            let deploy_id = resp["deploy_id"].as_str().unwrap_or("?");
-            println!("Rollback started (id: {deploy_id}).");
+            client
+                .post(&format!("/api/apps/{app}/rollback"), body)
+                .await?;
+            println!("Rollback started.");
         }
     }
     Ok(())
@@ -116,30 +130,29 @@ fn build_archive(source_dir: &std::path::Path) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-async fn stream_deploy_logs(client: &DekuClient, app: &str, deploy_id: &str) -> Result<()> {
+async fn stream_deploy_logs(client: &DekuClient, app: &str) -> Result<()> {
     client
-        .stream_sse(
-            &format!("/api/apps/{app}/events/stream?since=0"),
-            |data| {
-                if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
-                    let etype = evt["event_type"].as_str().unwrap_or("");
-                    if etype.starts_with("build.") || etype.starts_with("deploy.") {
-                        if let Some(line) = evt["payload"]["line"].as_str() {
-                            println!("  {line}");
-                        } else {
-                            println!("[{etype}]");
-                        }
-                        if etype == "deploy.live" || etype == "deploy.failed" || etype == "deploy.rollback" {
-                            // Signal to stop — we can't break out of a closure easily,
-                            // so just let the SSE stream end naturally or timeout.
-                            if let Some(url) = evt["payload"]["url"].as_str() {
-                                println!("\nApp deployed: {url}");
-                            }
+        .stream_sse(&format!("/api/apps/{app}/events/stream?since=0"), |data| {
+            if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
+                let etype = evt["event_type"].as_str().unwrap_or("");
+                if etype.starts_with("build.") || etype.starts_with("deploy.") {
+                    if let Some(line) = evt["payload"]["line"].as_str() {
+                        println!("  {line}");
+                    } else {
+                        println!("[{etype}]");
+                    }
+                    if etype == "deploy.live"
+                        || etype == "deploy.failed"
+                        || etype == "deploy.rollback"
+                    {
+                        // Signal to stop — we can't break out of a closure easily,
+                        // so just let the SSE stream end naturally or timeout.
+                        if let Some(url) = evt["payload"]["url"].as_str() {
+                            println!("\nApp deployed: {url}");
                         }
                     }
                 }
-                let _ = deploy_id; // bind to suppress warning
-            },
-        )
+            }
+        })
         .await
 }

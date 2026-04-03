@@ -9,6 +9,7 @@ ExecStart=/usr/local/bin/dekud
 Restart=always
 RestartSec=5
 User=root
+Environment=HOME=/root
 Environment=RUST_LOG=info
 
 [Install]

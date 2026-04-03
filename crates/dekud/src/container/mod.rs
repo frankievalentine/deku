@@ -84,9 +84,10 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
         env: Some(spec.env.clone()),
         host_config: Some(host_config),
         cmd: spec.cmd.clone(),
-        labels: Some(HashMap::from([
-            ("deku.managed".to_string(), "true".to_string()),
-        ])),
+        labels: Some(HashMap::from([(
+            "deku.managed".to_string(),
+            "true".to_string(),
+        )])),
         ..Default::default()
     };
 
@@ -96,7 +97,10 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
 
     let resp = docker.create_container(Some(options), config).await?;
     docker
-        .start_container(&resp.id, None::<bollard::query_parameters::StartContainerOptions>)
+        .start_container(
+            &resp.id,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
         .await?;
 
     tracing::info!(container_id = %resp.id, name = spec.name, "container started");
@@ -105,7 +109,9 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
 
 /// Stop a container gracefully. `timeout_secs` is seconds before SIGKILL.
 pub async fn stop_container(docker: &Docker, id: &str, timeout_secs: i32) -> anyhow::Result<()> {
-    let opts = StopContainerOptionsBuilder::default().t(timeout_secs).build();
+    let opts = StopContainerOptionsBuilder::default()
+        .t(timeout_secs)
+        .build();
     docker.stop_container(id, Some(opts)).await?;
     tracing::info!(container_id = id, "container stopped");
     Ok(())
@@ -131,11 +137,7 @@ pub struct ContainerInfo {
 pub async fn inspect_container(docker: &Docker, id: &str) -> anyhow::Result<ContainerInfo> {
     let resp = docker.inspect_container(id, None).await?;
 
-    let running = resp
-        .state
-        .as_ref()
-        .and_then(|s| s.running)
-        .unwrap_or(false);
+    let running = resp.state.as_ref().and_then(|s| s.running).unwrap_or(false);
 
     let exit_code = resp.state.as_ref().and_then(|s| s.exit_code);
 
@@ -207,15 +209,9 @@ pub async fn get_container_logs(
 }
 
 /// List Deku-managed container IDs for an app.
-pub async fn list_app_containers(
-    docker: &Docker,
-    app_name: &str,
-) -> anyhow::Result<Vec<String>> {
+pub async fn list_app_containers(docker: &Docker, app_name: &str) -> anyhow::Result<Vec<String>> {
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
-    filters.insert(
-        "name".to_string(),
-        vec![format!("deku.{app_name}.")],
-    );
+    filters.insert("name".to_string(), vec![format!("deku.{app_name}.")]);
     filters.insert("label".to_string(), vec!["deku.managed=true".to_string()]);
 
     let opts = ListContainersOptionsBuilder::default()
@@ -242,7 +238,10 @@ pub fn create_tar_gz(source_dir: &std::path::Path) -> anyhow::Result<Bytes> {
 
 /// Tag an existing image with a new repo:tag.
 pub async fn tag_image(docker: &Docker, source: &str, repo: &str, tag: &str) -> anyhow::Result<()> {
-    let opts = TagImageOptionsBuilder::default().repo(repo).tag(tag).build();
+    let opts = TagImageOptionsBuilder::default()
+        .repo(repo)
+        .tag(tag)
+        .build();
     docker.tag_image(source, Some(opts)).await?;
     Ok(())
 }

@@ -1,10 +1,4 @@
-use axum::{
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::IntoResponse, Json};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -67,7 +61,13 @@ pub async fn require_auth(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer ").map(str::to_owned));
 
-    match auth_header {
+    let query_token = request.uri().query().and_then(|query| {
+        query
+            .split('&')
+            .find_map(|part| part.strip_prefix("token=").map(str::to_owned))
+    });
+
+    match auth_header.or(query_token) {
         Some(token) if validate_token(&token, &secret).is_ok() => next.run(request).await,
         _ => (
             StatusCode::UNAUTHORIZED,

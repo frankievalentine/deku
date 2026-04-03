@@ -58,9 +58,7 @@ pub async fn run(args: CronArgs, client: &DekuClient) -> Result<()> {
             println!("Cron entry added to '{app}'.");
         }
         CronCommands::Remove { app, id } => {
-            client
-                .delete(&format!("/api/apps/{app}/cron/{id}"))
-                .await?;
+            client.delete(&format!("/api/apps/{app}/cron/{id}")).await?;
             println!("Cron entry '{id}' removed from '{app}'.");
         }
     }

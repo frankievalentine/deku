@@ -160,7 +160,10 @@ async fn run_git_command(channel: Channel<Msg>, state: &SharedState, cmd: &str) 
         }
     };
 
-    let git_dir = cfg.data_dir.join("git-repos").join(format!("{app_name}.git"));
+    let git_dir = cfg
+        .data_dir
+        .join("git-repos")
+        .join(format!("{app_name}.git"));
     if !git_dir.exists() {
         if let Err(e) = init_bare_repo(&git_dir).await {
             tracing::error!("SSH: failed to init git repo: {e}");
@@ -265,11 +268,7 @@ async fn pipe_read_to_write(
     let _ = writer.shutdown().await;
 }
 
-fn trigger_deploy_from_git(
-    state: &SharedState,
-    app: &deku_core::types::App,
-    git_dir: PathBuf,
-) {
+fn trigger_deploy_from_git(state: &SharedState, app: &deku_core::types::App, git_dir: PathBuf) {
     let pool = state.pool.clone();
     let docker = state.docker.clone();
     let events = state.events.clone();

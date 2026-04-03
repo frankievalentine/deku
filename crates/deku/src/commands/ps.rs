@@ -32,7 +32,10 @@ pub async fn run(args: PsArgs, client: &DekuClient) -> Result<()> {
                 if procs.is_empty() {
                     println!("No processes running.");
                 } else {
-                    println!("{:<16} {:<8} {:<12} {}", "PROCESS", "SCALE", "STATUS", "CONTAINER");
+                    println!(
+                        "{:<16} {:<8} {:<12} {}",
+                        "PROCESS", "SCALE", "STATUS", "CONTAINER"
+                    );
                     println!("{}", "-".repeat(60));
                     for p in procs {
                         let ptype = p["process_type"].as_str().unwrap_or("-");
@@ -59,8 +62,8 @@ pub async fn run(args: PsArgs, client: &DekuClient) -> Result<()> {
             }
             client
                 .post(
-                    &format!("/api/apps/{app}/ps/scale"),
-                    serde_json::Value::Object(scale_map),
+                    &format!("/api/apps/{app}/scale"),
+                    serde_json::json!({ "scales": scale_map }),
                 )
                 .await?;
             println!("Scaling updated for '{app}'.");

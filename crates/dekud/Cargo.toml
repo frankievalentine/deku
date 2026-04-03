@@ -43,3 +43,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 tempfile = "3"
 bytes = "1"
 reqwest = { workspace = true }
+hmac = "0.12"
+sha2 = "0.10"
+hex = { workspace = true }
+percent-encoding = { workspace = true }

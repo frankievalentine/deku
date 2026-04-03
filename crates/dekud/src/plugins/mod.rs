@@ -112,7 +112,10 @@ impl PluginRegistry {
         for plugin in guard.values() {
             if let Some(hook) = plugin.descriptor.pre_build() {
                 if let Err(e) = hook.pre_build(ctx).await {
-                    tracing::warn!(plugin = plugin.descriptor.name(), "pre_build hook error: {e}");
+                    tracing::warn!(
+                        plugin = plugin.descriptor.name(),
+                        "pre_build hook error: {e}"
+                    );
                 }
             }
         }
@@ -123,7 +126,10 @@ impl PluginRegistry {
         for plugin in guard.values() {
             if let Some(hook) = plugin.descriptor.post_build() {
                 if let Err(e) = hook.post_build(ctx).await {
-                    tracing::warn!(plugin = plugin.descriptor.name(), "post_build hook error: {e}");
+                    tracing::warn!(
+                        plugin = plugin.descriptor.name(),
+                        "post_build hook error: {e}"
+                    );
                 }
             }
         }
@@ -134,7 +140,10 @@ impl PluginRegistry {
         for plugin in guard.values() {
             if let Some(hook) = plugin.descriptor.pre_deploy() {
                 if let Err(e) = hook.pre_deploy(ctx).await {
-                    tracing::warn!(plugin = plugin.descriptor.name(), "pre_deploy hook error: {e}");
+                    tracing::warn!(
+                        plugin = plugin.descriptor.name(),
+                        "pre_deploy hook error: {e}"
+                    );
                 }
             }
         }
@@ -145,7 +154,10 @@ impl PluginRegistry {
         for plugin in guard.values() {
             if let Some(hook) = plugin.descriptor.post_deploy() {
                 if let Err(e) = hook.post_deploy(ctx).await {
-                    tracing::warn!(plugin = plugin.descriptor.name(), "post_deploy hook error: {e}");
+                    tracing::warn!(
+                        plugin = plugin.descriptor.name(),
+                        "post_deploy hook error: {e}"
+                    );
                 }
             }
         }
@@ -156,7 +168,10 @@ impl PluginRegistry {
         for plugin in guard.values() {
             if let Some(hook) = plugin.descriptor.app_create() {
                 if let Err(e) = hook.app_create(ctx).await {
-                    tracing::warn!(plugin = plugin.descriptor.name(), "app_create hook error: {e}");
+                    tracing::warn!(
+                        plugin = plugin.descriptor.name(),
+                        "app_create hook error: {e}"
+                    );
                 }
             }
         }
@@ -167,7 +182,10 @@ impl PluginRegistry {
         for plugin in guard.values() {
             if let Some(hook) = plugin.descriptor.app_destroy() {
                 if let Err(e) = hook.app_destroy(ctx).await {
-                    tracing::warn!(plugin = plugin.descriptor.name(), "app_destroy hook error: {e}");
+                    tracing::warn!(
+                        plugin = plugin.descriptor.name(),
+                        "app_destroy hook error: {e}"
+                    );
                 }
             }
         }

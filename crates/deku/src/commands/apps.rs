@@ -46,7 +46,12 @@ pub async fn run(args: AppsArgs, client: &DekuClient) -> Result<()> {
                         let name = app["name"].as_str().unwrap_or("-");
                         let status = app["status"].as_str().unwrap_or("-");
                         let created = app["created_at"].as_str().unwrap_or("-");
-                        println!("{:<20} {:<12} {}", name, status, &created[..19.min(created.len())]);
+                        println!(
+                            "{:<20} {:<12} {}",
+                            name,
+                            status,
+                            &created[..19.min(created.len())]
+                        );
                     }
                 }
             }

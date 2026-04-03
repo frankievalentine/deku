@@ -38,11 +38,13 @@ handlebars = "6"
 config = "0.15"
 toml = "1"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 libloading = "0.9"
 async-trait = "0.1"
+hex = "0.4"
+percent-encoding = "2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

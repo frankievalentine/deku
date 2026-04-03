@@ -47,19 +47,20 @@ pub async fn run(args: ConfigArgs, client: &DekuClient) -> Result<()> {
         }
 
         ConfigCommands::Set { app, pairs } => {
-            let mut vars = serde_json::Map::new();
             for pair in &pairs {
                 let (k, v) = pair
                     .split_once('=')
                     .ok_or_else(|| anyhow::anyhow!("invalid KEY=VALUE: {pair}"))?;
-                vars.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+                client
+                    .post(
+                        &format!("/api/apps/{app}/config"),
+                        serde_json::json!({
+                            "key": k,
+                            "value": v,
+                        }),
+                    )
+                    .await?;
             }
-            client
-                .post(
-                    &format!("/api/apps/{app}/config"),
-                    serde_json::Value::Object(vars),
-                )
-                .await?;
             println!("Config vars set for '{app}'.");
         }
 

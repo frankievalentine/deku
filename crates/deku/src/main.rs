@@ -15,7 +15,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// First-run setup wizard
-    Setup,
+    Setup(commands::setup::SetupArgs),
     /// Application management
     Apps(commands::apps::AppsArgs),
     /// Configuration variables
@@ -42,6 +42,8 @@ enum Commands {
     Letsencrypt(commands::letsencrypt::LetsencryptArgs),
     /// Docker network management
     Network(commands::network::NetworkArgs),
+    /// S3-compatible object storage configuration
+    Objectstore(commands::objectstore::ObjectStoreArgs),
     /// Persistent storage management
     Storage(commands::storage::StorageArgs),
     /// Cron job management
@@ -56,14 +58,14 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if let Commands::Setup = cli.command {
-        return commands::setup::run();
+    if let Commands::Setup(args) = cli.command {
+        return commands::setup::run(args);
     }
 
     let client = client::DekuClient::new()?;
 
     match cli.command {
-        Commands::Setup => unreachable!(),
+        Commands::Setup(_) => unreachable!(),
         Commands::Apps(args) => commands::apps::run(args, &client).await,
         Commands::Config(args) => commands::config::run(args, &client).await,
         Commands::Deploy(args) => commands::deploy::run(args, &client).await,
@@ -77,6 +79,7 @@ async fn main() -> Result<()> {
         Commands::Mysql(args) => commands::mysql::run(args, &client).await,
         Commands::Letsencrypt(args) => commands::letsencrypt::run(args, &client).await,
         Commands::Network(args) => commands::network::run(args, &client).await,
+        Commands::Objectstore(args) => commands::objectstore::run(args, &client).await,
         Commands::Storage(args) => commands::storage::run(args, &client).await,
         Commands::Cron(args) => commands::cron::run(args, &client).await,
         Commands::Git(args) => commands::git::run(args, &client).await,

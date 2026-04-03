@@ -4,6 +4,7 @@ use deku_core::types::{
     App, AppStatus, BuilderType, ConfigVar, ContainerRecord, DeployStatus, Deployment, Domain,
     Event, NewApp, PortMapping, ResourceLimit, StorageMount,
 };
+use sqlx::Row;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
@@ -94,18 +95,10 @@ pub async fn delete_app(pool: &SqlitePool, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn update_app_status(
-    pool: &SqlitePool,
-    app_id: &str,
-    status: AppStatus,
-) -> Result<()> {
-    sqlx::query!(
-        "UPDATE apps SET status = ?1 WHERE id = ?2",
-        status,
-        app_id
-    )
-    .execute(pool)
-    .await?;
+pub async fn update_app_status(pool: &SqlitePool, app_id: &str, status: AppStatus) -> Result<()> {
+    sqlx::query!("UPDATE apps SET status = ?1 WHERE id = ?2", status, app_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -483,7 +476,9 @@ pub async fn remove_port_mapping(pool: &SqlitePool, app_id: &str, id: &str) -> R
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(DekuError::Internal(format!("port mapping '{id}' not found")));
+        return Err(DekuError::Internal(format!(
+            "port mapping '{id}' not found"
+        )));
     }
     Ok(())
 }
@@ -712,12 +707,11 @@ pub async fn add_ssh_key(
 }
 
 pub async fn list_ssh_keys(pool: &SqlitePool) -> Result<Vec<SshKey>> {
-    let rows = sqlx::query!(
-        r#"SELECT id, name, public_key, fingerprint FROM ssh_keys ORDER BY name"#
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(DekuError::Database)?;
+    let rows =
+        sqlx::query!(r#"SELECT id, name, public_key, fingerprint FROM ssh_keys ORDER BY name"#)
+            .fetch_all(pool)
+            .await
+            .map_err(DekuError::Database)?;
 
     Ok(rows
         .into_iter()
@@ -804,11 +798,7 @@ pub async fn add_storage_mount(
     Ok(row)
 }
 
-pub async fn remove_storage_mount(
-    pool: &SqlitePool,
-    app_id: &str,
-    mount_id: &str,
-) -> Result<()> {
+pub async fn remove_storage_mount(pool: &SqlitePool, app_id: &str, mount_id: &str) -> Result<()> {
     let result = sqlx::query!(
         "DELETE FROM storage_mounts WHERE app_id = ?1 AND id = ?2",
         app_id,
@@ -817,7 +807,9 @@ pub async fn remove_storage_mount(
     .execute(pool)
     .await?;
     if result.rows_affected() == 0 {
-        return Err(DekuError::Internal(format!("storage mount '{mount_id}' not found")));
+        return Err(DekuError::Internal(format!(
+            "storage mount '{mount_id}' not found"
+        )));
     }
     Ok(())
 }
@@ -853,6 +845,17 @@ pub struct CronEntry {
     pub schedule: String,
     pub command: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub struct ServiceBackup {
+    pub id: String,
+    pub service_id: String,
+    pub object_key: String,
+    pub format: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub restored_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn create_service(
@@ -907,6 +910,21 @@ pub async fn get_service(pool: &SqlitePool, name: &str) -> Result<Service> {
         config: row.config,
         created_at: row.created_at,
     })
+}
+
+pub async fn get_service_for_plugin(
+    pool: &SqlitePool,
+    name: &str,
+    plugin: &str,
+) -> Result<Service> {
+    let service = get_service(pool, name).await?;
+    if service.plugin != plugin {
+        return Err(DekuError::Internal(format!(
+            "service '{name}' is a {} service, not {plugin}",
+            service.plugin
+        )));
+    }
+    Ok(service)
 }
 
 pub async fn list_services(pool: &SqlitePool, plugin: &str) -> Result<Vec<Service>> {
@@ -1035,6 +1053,102 @@ pub async fn unlink_service(pool: &SqlitePool, service_id: &str, app_id: &str) -
     Ok(())
 }
 
+pub async fn create_service_backup(
+    pool: &SqlitePool,
+    service_id: &str,
+    object_key: &str,
+    format: &str,
+    size_bytes: i64,
+    sha256: &str,
+) -> Result<ServiceBackup> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    sqlx::query(
+        r#"INSERT INTO service_backups
+           (id, service_id, object_key, format, size_bytes, sha256, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+    )
+    .bind(&id)
+    .bind(service_id)
+    .bind(object_key)
+    .bind(format)
+    .bind(size_bytes)
+    .bind(sha256)
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    Ok(ServiceBackup {
+        id,
+        service_id: service_id.to_string(),
+        object_key: object_key.to_string(),
+        format: format.to_string(),
+        size_bytes,
+        sha256: sha256.to_string(),
+        created_at: now,
+        restored_at: None,
+    })
+}
+
+pub async fn list_service_backups(
+    pool: &SqlitePool,
+    service_id: &str,
+) -> Result<Vec<ServiceBackup>> {
+    let rows = sqlx::query(
+        r#"SELECT id, service_id, object_key, format, size_bytes, sha256, created_at, restored_at
+           FROM service_backups
+           WHERE service_id = ?1
+           ORDER BY created_at DESC"#,
+    )
+    .bind(service_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter().map(service_backup_from_row).collect()
+}
+
+pub async fn get_service_backup_for_service(
+    pool: &SqlitePool,
+    service_id: &str,
+    backup_id: &str,
+) -> Result<ServiceBackup> {
+    let row = sqlx::query(
+        r#"SELECT id, service_id, object_key, format, size_bytes, sha256, created_at, restored_at
+           FROM service_backups
+           WHERE service_id = ?1 AND id = ?2"#,
+    )
+    .bind(service_id)
+    .bind(backup_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(service_backup_from_row)
+        .transpose()?
+        .ok_or_else(|| DekuError::Database(sqlx::Error::RowNotFound))
+}
+
+pub async fn mark_service_backup_restored(pool: &SqlitePool, backup_id: &str) -> Result<()> {
+    sqlx::query("UPDATE service_backups SET restored_at = ?1 WHERE id = ?2")
+        .bind(chrono::Utc::now())
+        .bind(backup_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+fn service_backup_from_row(row: sqlx::sqlite::SqliteRow) -> Result<ServiceBackup> {
+    Ok(ServiceBackup {
+        id: row.try_get("id")?,
+        service_id: row.try_get("service_id")?,
+        object_key: row.try_get("object_key")?,
+        format: row.try_get("format")?,
+        size_bytes: row.try_get("size_bytes")?,
+        sha256: row.try_get("sha256")?,
+        created_at: row.try_get("created_at")?,
+        restored_at: row.try_get("restored_at")?,
+    })
+}
+
 // ── Networks ──────────────────────────────────────────────────────────────────
 
 pub async fn create_network(pool: &SqlitePool, name: &str) -> Result<Network> {
@@ -1048,7 +1162,11 @@ pub async fn create_network(pool: &SqlitePool, name: &str) -> Result<Network> {
     )
     .execute(pool)
     .await?;
-    Ok(Network { id, name: name.to_string(), created_at: now })
+    Ok(Network {
+        id,
+        name: name.to_string(),
+        created_at: now,
+    })
 }
 
 pub async fn get_network(pool: &SqlitePool, name: &str) -> Result<Network> {
@@ -1060,7 +1178,11 @@ pub async fn get_network(pool: &SqlitePool, name: &str) -> Result<Network> {
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| DekuError::Internal(format!("network '{name}' not found")))?;
-    Ok(Network { id: row.id, name: row.name, created_at: row.created_at })
+    Ok(Network {
+        id: row.id,
+        name: row.name,
+        created_at: row.created_at,
+    })
 }
 
 pub async fn list_networks(pool: &SqlitePool) -> Result<Vec<Network>> {
@@ -1072,7 +1194,11 @@ pub async fn list_networks(pool: &SqlitePool) -> Result<Vec<Network>> {
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| Network { id: r.id, name: r.name, created_at: r.created_at })
+        .map(|r| Network {
+            id: r.id,
+            name: r.name,
+            created_at: r.created_at,
+        })
         .collect())
 }
 
@@ -1132,7 +1258,11 @@ pub async fn list_app_networks(pool: &SqlitePool, app_id: &str) -> Result<Vec<Ne
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| Network { id: r.id, name: r.name, created_at: r.created_at })
+        .map(|r| Network {
+            id: r.id,
+            name: r.name,
+            created_at: r.created_at,
+        })
         .collect())
 }
 
@@ -1210,7 +1340,9 @@ pub async fn remove_cron_entry(pool: &SqlitePool, app_id: &str, entry_id: &str) 
     .execute(pool)
     .await?;
     if result.rows_affected() == 0 {
-        return Err(DekuError::Internal(format!("cron entry '{entry_id}' not found")));
+        return Err(DekuError::Internal(format!(
+            "cron entry '{entry_id}' not found"
+        )));
     }
     Ok(())
 }

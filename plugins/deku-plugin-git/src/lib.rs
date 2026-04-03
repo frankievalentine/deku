@@ -33,7 +33,10 @@ struct GitCreateHook;
 #[async_trait]
 impl AppCreateHook for GitCreateHook {
     async fn app_create(&self, ctx: &AppContext) -> Result<()> {
-        let repo_path = ctx.data_dir.join("git-repos").join(format!("{}.git", ctx.app.name));
+        let repo_path = ctx
+            .data_dir
+            .join("git-repos")
+            .join(format!("{}.git", ctx.app.name));
         let repo_path_str = repo_path.to_string_lossy().to_string();
         std::fs::create_dir_all(&repo_path)?;
         std::process::Command::new("git")
@@ -49,7 +52,10 @@ struct GitDestroyHook;
 #[async_trait]
 impl AppDestroyHook for GitDestroyHook {
     async fn app_destroy(&self, ctx: &AppContext) -> Result<()> {
-        let repo_path = ctx.data_dir.join("git-repos").join(format!("{}.git", ctx.app.name));
+        let repo_path = ctx
+            .data_dir
+            .join("git-repos")
+            .join(format!("{}.git", ctx.app.name));
         let _ = std::fs::remove_dir_all(&repo_path);
         tracing::info!(app = %ctx.app.name, "git: removed bare repo for app {}", ctx.app.name);
         Ok(())

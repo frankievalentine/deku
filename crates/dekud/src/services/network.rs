@@ -13,13 +13,17 @@ pub async fn create(pool: &SqlitePool, docker: &Docker, name: &str) -> Result<qu
             ..Default::default()
         })
         .await?;
-    queries::create_network(pool, name).await.map_err(Into::into)
+    queries::create_network(pool, name)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn destroy(pool: &SqlitePool, docker: &Docker, name: &str) -> Result<()> {
     let docker_name = format!("deku-{name}");
     let _ = docker.remove_network(&docker_name).await;
-    queries::delete_network(pool, name).await.map_err(Into::into)
+    queries::delete_network(pool, name)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn attach(

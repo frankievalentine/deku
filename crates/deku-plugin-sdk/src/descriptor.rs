@@ -1,4 +1,6 @@
-use crate::hooks::{AppCreateHook, AppDestroyHook, PostBuildHook, PostDeployHook, PreBuildHook, PreDeployHook};
+use crate::hooks::{
+    AppCreateHook, AppDestroyHook, PostBuildHook, PostDeployHook, PreBuildHook, PreDeployHook,
+};
 
 pub trait PluginDescriptor: Send + Sync {
     fn name(&self) -> &'static str;

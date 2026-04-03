@@ -9,6 +9,7 @@ pub mod letsencrypt;
 pub mod logs;
 pub mod mysql;
 pub mod network;
+pub mod objectstore;
 pub mod plugins;
 pub mod postgres;
 pub mod ps;

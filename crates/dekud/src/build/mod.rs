@@ -13,9 +13,9 @@ use deku_core::types::{parse_procfile, DekuToml, ProcfileEntry};
 use deku_plugin_sdk::context::BuildContext;
 use futures::StreamExt;
 
-use bollard::body_full;
 use crate::container::{create_tar_gz, tag_image};
 use crate::events::EventSender;
+use bollard::body_full;
 
 // ── Output types ──────────────────────────────────────────────────────────────
 
@@ -114,10 +114,7 @@ async fn extract_procfile(docker: &Docker, image_tag: &str) -> Vec<ProcfileEntry
     let id = &create_resp.id;
 
     let _ = docker
-        .start_container(
-            id,
-            None::<bollard::query_parameters::StartContainerOptions>,
-        )
+        .start_container(id, None::<bollard::query_parameters::StartContainerOptions>)
         .await;
 
     let wait_opts = WaitContainerOptionsBuilder::default().build();
@@ -457,9 +454,14 @@ impl Builder for ComposeBuilder {
     }
 
     fn detect(&self, source: &Path) -> bool {
-        ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]
-            .iter()
-            .any(|f| source.join(f).exists())
+        [
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.yml",
+            "compose.yaml",
+        ]
+        .iter()
+        .any(|f| source.join(f).exists())
     }
 
     async fn build(
@@ -471,11 +473,16 @@ impl Builder for ComposeBuilder {
     ) -> Result<BuiltImage> {
         let app_name = &ctx.app.name;
 
-        let compose_path = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]
-            .iter()
-            .map(|f| ctx.source_dir.join(f))
-            .find(|p| p.exists())
-            .ok_or_else(|| DekuError::BuildFailed("no compose file found".to_string()))?;
+        let compose_path = [
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.yml",
+            "compose.yaml",
+        ]
+        .iter()
+        .map(|f| ctx.source_dir.join(f))
+        .find(|p| p.exists())
+        .ok_or_else(|| DekuError::BuildFailed("no compose file found".to_string()))?;
 
         let compose_content = std::fs::read_to_string(&compose_path)
             .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
@@ -525,8 +532,8 @@ impl Builder for ComposeBuilder {
                 .unwrap_or("Dockerfile");
 
             let full_context = ctx.source_dir.join(build_context);
-            let tar_bytes = create_tar_gz(&full_context)
-                .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+            let tar_bytes =
+                create_tar_gz(&full_context).map_err(|e| DekuError::BuildFailed(e.to_string()))?;
 
             let build_opts = BuildImageOptionsBuilder::default()
                 .dockerfile(dockerfile)
@@ -557,9 +564,14 @@ impl Builder for ComposeBuilder {
             }
         } else if let Some(image) = web_service.get("image").and_then(|v| v.as_str()) {
             let (repo, tag) = image.rsplit_once(':').unwrap_or((image, "latest"));
-            tag_image(docker, &format!("{repo}:{tag}"), &format!("deku/{app_name}"), "latest")
-                .await
-                .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+            tag_image(
+                docker,
+                &format!("{repo}:{tag}"),
+                &format!("deku/{app_name}"),
+                "latest",
+            )
+            .await
+            .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
         }
 
         let exposed_ports = get_exposed_ports(docker, &image_tag).await;
