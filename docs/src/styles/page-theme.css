@@ -1,0 +1,31 @@
+@import url("https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+@import "@pelagornis/page/styles";
+
+:root {
+  --deku-font-heading: "Rubik", sans-serif;
+  --deku-font-body: "IBM Plex Sans", sans-serif;
+  --deku-font-mono: "IBM Plex Mono", monospace;
+  --page-font-family: var(--deku-font-body);
+  --sl-font: var(--deku-font-body);
+  --sl-font-mono: var(--deku-font-mono);
+}
+
+html,
+body {
+  font-family: var(--deku-font-body);
+}
+
+.page-title-text,
+.page-hero-title,
+.page-sidebar-group-title,
+.page-content-panel :is(h1, h2, h3, h4, h5, h6),
+.page-content .sl-markdown-content :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--deku-font-heading);
+  letter-spacing: -0.03em;
+}
+
+:where(code, kbd, samp, pre),
+.page-content-panel :is(code, kbd, samp, pre),
+.page-content .sl-markdown-content :is(code, kbd, samp, pre) {
+  font-family: var(--deku-font-mono);
+}

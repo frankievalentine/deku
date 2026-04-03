@@ -1,0 +1,129 @@
+---
+import ChatPane from '@pelagornis/page/components/ChatPane.astro';
+
+const chatProvider = (import.meta.env.PUBLIC_DOC_CHAT_PROVIDER ?? 'openai') as
+  | 'openai'
+  | 'claude'
+  | 'gemini';
+const chatModel = import.meta.env.PUBLIC_DOC_CHAT_MODEL;
+const showChat = process.env.PAGE_DOC_CHAT_ENABLED === '1';
+const chatBase = (process.env.PAGE_BASE ?? '').replace(/\/$/, '') || '';
+const locale =
+  (Astro.locals.starlightRoute as { locale?: string } | undefined)?.locale ?? 'en';
+---
+
+{
+  showChat ? (
+    <div class="page page-has-chat sl-flex">
+      <div class="page-nav-wrap">
+        <header class="header">
+          <slot name="header" />
+        </header>
+        <div class="page-scroll-wrap">
+          <main class="main-frame">
+            <slot />
+          </main>
+        </div>
+      </div>
+      <ChatPane
+        basePath={chatBase}
+        provider={chatProvider}
+        model={chatModel}
+        locale={locale}
+      />
+    </div>
+  ) : (
+    <div class="page sl-flex">
+      <header class="header">
+        <slot name="header" />
+      </header>
+      <div class="page-scroll-wrap">
+        <main class="main-frame">
+          <slot />
+        </main>
+      </div>
+    </div>
+  )
+}
+
+<style>
+  .page {
+    height: 100vh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .page-has-chat {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: hidden;
+  }
+
+  .page-nav-wrap {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  :global(body.page-chat-open) .page-nav-wrap {
+    overflow-x: auto;
+    min-width: 0;
+  }
+
+  @media (min-width: 1025px) {
+    :global(body.page-chat-open) .page-nav-wrap {
+      width: calc(100% - var(--page-chat-pane-width, 360px)) !important;
+      max-width: calc(100% - var(--page-chat-pane-width, 360px)) !important;
+      flex: 0 0 auto;
+    }
+  }
+
+  .page-scroll-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .main-frame {
+    width: 100% !important;
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  @media (max-width: 1024px) {
+    :global(body.page-chat-open) .page-nav-wrap {
+      padding-bottom: 70vh;
+    }
+  }
+
+  .header {
+    position: relative;
+    top: 0;
+    left: 0;
+    z-index: 100;
+    flex-shrink: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  @media (min-width: 1025px) {
+    :global(body.page-chat-open) .header {
+      width: calc(100vw - var(--page-chat-pane-width, 360px));
+      max-width: calc(100vw - var(--page-chat-pane-width, 360px));
+    }
+  }
+</style>

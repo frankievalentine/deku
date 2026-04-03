@@ -1,0 +1,18 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Page Not Found',
+    description: 'The page you requested does not exist in the Deku docs.',
+  }}
+  hasSidebar={false}
+>
+  <p>The page you requested does not exist, or the URL is out of date.</p>
+  <ul>
+    <li><a href="/">Go back to the docs home</a></li>
+    <li><a href="/introduction/">Start with the introduction</a></li>
+    <li><a href="/reference/cli-reference/">Open the CLI reference</a></li>
+  </ul>
+</StarlightPage>

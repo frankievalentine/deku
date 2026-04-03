@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
+    "generate:cli": "node ./scripts/generate-cli-reference.mjs",
+    "prebuild": "node ./scripts/generate-cli-reference.mjs",
+    "precheck": "node ./scripts/generate-cli-reference.mjs",
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check"
   },
   "dependencies": {
+    "@pelagornis/page": "^1.2.2",
     "astro": "^6.1.3",
     "@astrojs/starlight": "^0.38.2"
   },
