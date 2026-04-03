@@ -7,17 +7,18 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     middleware,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use futures::Stream;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::net::{TcpListener, UnixListener};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -26,7 +27,7 @@ use crate::container::DockerClient;
 use crate::db::queries;
 use crate::deploy::{DeployRequest, DeploySource};
 use crate::events::EventSender;
-use deku_core::types::{NewApp, Upstream};
+use deku_core::types::{NewApp, ObjectStoreConfig, Upstream};
 
 pub mod auth;
 mod services;
@@ -61,6 +62,7 @@ impl AppState {
 pub type SharedState = Arc<AppState>;
 
 fn build_router(state: SharedState) -> Router {
+    let dashboard_dir = state.config.dashboard_dir.clone();
     Router::new()
         // Health
         .route("/healthz", get(health_check))
@@ -70,15 +72,13 @@ fn build_router(state: SharedState) -> Router {
         // Events
         .route("/api/events", get(list_events))
         .route("/api/events/stream", get(stream_events))
+        .route("/api/apps/{name}/events/stream", get(stream_app_events))
         // Domains
         .route(
             "/api/apps/{name}/domains",
             get(list_domains).post(add_domain),
         )
-        .route(
-            "/api/apps/{name}/domains/{domain}",
-            delete(remove_domain),
-        )
+        .route("/api/apps/{name}/domains/{domain}", delete(remove_domain))
         // Ports
         .route("/api/apps/{name}/ports", get(list_ports).post(add_port))
         .route("/api/apps/{name}/ports/{id}", delete(remove_port))
@@ -89,15 +89,18 @@ fn build_router(state: SharedState) -> Router {
         // Logs
         .route("/api/apps/{name}/logs", get(get_logs))
         // Config vars
-        .route(
-            "/api/apps/{name}/config",
-            get(list_config).post(set_config),
-        )
+        .route("/api/apps/{name}/config", get(list_config).post(set_config))
         .route("/api/apps/{name}/config/{key}", delete(unset_config))
         // Process scale
+        .route("/api/apps/{name}/ps", get(list_processes))
         .route("/api/apps/{name}/scale", get(get_scale).post(set_scale))
         // Routing table
         .route("/api/routing", get(list_routing))
+        .route("/api/routing/status", get(get_routing_status))
+        .route(
+            "/api/routing/status/{name}",
+            get(get_routing_status_for_app),
+        )
         .route("/api/routing/{name}", post(update_routing))
         // SSH keys
         .route("/api/ssh-keys", get(list_ssh_keys).post(add_ssh_key))
@@ -105,41 +108,108 @@ fn build_router(state: SharedState) -> Router {
         // Plugins
         .route("/api/plugins", get(list_plugins).post(install_plugin))
         .route("/api/plugins/{name}", delete(uninstall_plugin))
+        // Object store
+        .route(
+            "/api/objectstore",
+            get(get_object_store_config)
+                .post(set_object_store_config)
+                .delete(unset_object_store_config),
+        )
+        .route("/api/objectstore/test", post(test_object_store_config))
         // Archive deploy
         .route("/api/apps/{name}/deploy/archive", post(deploy_archive))
         // Postgres
-        .route("/api/postgres/services", get(services::pg_list).post(services::pg_create))
-        .route("/api/postgres/services/{name}", get(services::pg_info).delete(services::pg_destroy))
-        .route("/api/postgres/services/{name}/link/{app}", post(services::pg_link).delete(services::pg_unlink))
+        .route(
+            "/api/postgres/services",
+            get(services::pg_list).post(services::pg_create),
+        )
+        .route(
+            "/api/postgres/services/{name}",
+            get(services::pg_info).delete(services::pg_destroy),
+        )
+        .route(
+            "/api/postgres/services/{name}/backups",
+            get(services::pg_backups).post(services::pg_backup),
+        )
+        .route(
+            "/api/postgres/services/{name}/restore/{backup_id}",
+            post(services::pg_restore),
+        )
+        .route(
+            "/api/postgres/services/{name}/link/{app}",
+            post(services::pg_link).delete(services::pg_unlink),
+        )
         .route("/api/postgres/services/{name}/logs", get(services::pg_logs))
         // Redis
-        .route("/api/redis/services", get(services::rd_list).post(services::rd_create))
-        .route("/api/redis/services/{name}", get(services::rd_info).delete(services::rd_destroy))
-        .route("/api/redis/services/{name}/link/{app}", post(services::rd_link).delete(services::rd_unlink))
+        .route(
+            "/api/redis/services",
+            get(services::rd_list).post(services::rd_create),
+        )
+        .route(
+            "/api/redis/services/{name}",
+            get(services::rd_info).delete(services::rd_destroy),
+        )
+        .route(
+            "/api/redis/services/{name}/link/{app}",
+            post(services::rd_link).delete(services::rd_unlink),
+        )
         .route("/api/redis/services/{name}/logs", get(services::rd_logs))
         // MySQL
-        .route("/api/mysql/services", get(services::my_list).post(services::my_create))
-        .route("/api/mysql/services/{name}", get(services::my_info).delete(services::my_destroy))
-        .route("/api/mysql/services/{name}/link/{app}", post(services::my_link).delete(services::my_unlink))
+        .route(
+            "/api/mysql/services",
+            get(services::my_list).post(services::my_create),
+        )
+        .route(
+            "/api/mysql/services/{name}",
+            get(services::my_info).delete(services::my_destroy),
+        )
+        .route(
+            "/api/mysql/services/{name}/link/{app}",
+            post(services::my_link).delete(services::my_unlink),
+        )
         .route("/api/mysql/services/{name}/logs", get(services::my_logs))
         // Letsencrypt
         .route("/api/letsencrypt/enable/{app}", post(services::le_enable))
         .route("/api/letsencrypt/disable/{app}", post(services::le_disable))
-        .route("/api/letsencrypt/config", post(services::le_config))
+        .route("/api/letsencrypt/status/{app}", get(services::le_status))
+        .route(
+            "/api/letsencrypt/config",
+            get(services::le_get_config).post(services::le_config),
+        )
         // Networks
-        .route("/api/networks", get(services::net_list).post(services::net_create))
+        .route(
+            "/api/networks",
+            get(services::net_list).post(services::net_create),
+        )
         .route("/api/networks/{name}", delete(services::net_destroy))
         .route("/api/apps/{app}/networks", get(services::net_list_for_app))
-        .route("/api/apps/{app}/networks/{network}", post(services::net_attach).delete(services::net_detach))
+        .route(
+            "/api/apps/{app}/networks/{network}",
+            post(services::net_attach).delete(services::net_detach),
+        )
         // Storage
-        .route("/api/apps/{app}/storage", get(services::storage_list).post(services::storage_add))
-        .route("/api/apps/{app}/storage/ensure", post(services::storage_ensure))
-        .route("/api/apps/{app}/storage/{id}", delete(services::storage_remove))
+        .route(
+            "/api/apps/{app}/storage",
+            get(services::storage_list).post(services::storage_add),
+        )
+        .route(
+            "/api/apps/{app}/storage/ensure",
+            post(services::storage_ensure),
+        )
+        .route(
+            "/api/apps/{app}/storage/{id}",
+            delete(services::storage_remove),
+        )
         // Cron
-        .route("/api/apps/{app}/cron", get(services::cron_list).post(services::cron_add))
+        .route(
+            "/api/apps/{app}/cron",
+            get(services::cron_list).post(services::cron_add),
+        )
         .route("/api/apps/{app}/cron/{id}", delete(services::cron_remove))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
+        // Dashboard static files — fallback so API routes take precedence
+        .fallback_service(ServeDir::new(dashboard_dir).append_index_html_on_directories(true))
 }
 
 pub async fn serve(state: SharedState) -> anyhow::Result<()> {
@@ -212,6 +282,76 @@ async fn health_check() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok", "service": "dekud" }))
 }
 
+// ── Object Store ──────────────────────────────────────────────────────────────
+
+async fn get_object_store_config() -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => {
+            let payload = cfg.object_store.map(|object_store| object_store.redacted());
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "configured": payload.is_some(),
+                    "object_store": payload,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn set_object_store_config(Json(body): Json<ObjectStoreConfig>) -> impl IntoResponse {
+    let response_body = body.redacted();
+    match crate::config::load().and_then(|mut cfg| {
+        cfg.object_store = Some(body);
+        crate::config::save(&cfg)?;
+        Ok(())
+    }) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "configured": true,
+                "object_store": response_body,
+            })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn unset_object_store_config() -> impl IntoResponse {
+    match crate::config::load().and_then(|mut cfg| {
+        cfg.object_store = None;
+        crate::config::save(&cfg)?;
+        Ok(())
+    }) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn test_object_store_config() -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => match cfg.object_store {
+            Some(object_store) => match crate::objectstore::test_config(&object_store).await {
+                Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+                Err(e) => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response(),
+            },
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "object store is not configured" })),
+            )
+                .into_response(),
+        },
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
 // ── Apps ──────────────────────────────────────────────────────────────────────
 
 async fn list_apps(State(state): State<SharedState>) -> impl IntoResponse {
@@ -261,9 +401,7 @@ async fn delete_app(
 ) -> impl IntoResponse {
     match queries::delete_app(&state.pool, &name).await {
         Ok(()) => {
-            if let Err(e) =
-                crate::proxy::remove_app_config(&state.config.angie_conf_dir, &name)
-            {
+            if let Err(e) = crate::proxy::remove_app_config(&state.config.angie_conf_dir, &name) {
                 tracing::warn!("failed to remove angie config for {name}: {e}");
             }
             if let Err(e) = crate::proxy::reload().await {
@@ -314,6 +452,41 @@ async fn stream_events(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+#[derive(Debug, Deserialize)]
+struct StreamQuery {
+    since: Option<String>,
+}
+
+async fn stream_app_events(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Query(params): Query<StreamQuery>,
+) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Response> {
+    let _ = params.since;
+    let app = queries::get_app(&state.pool, &name)
+        .await
+        .map_err(|err| match err {
+            deku_core::error::DekuError::AppNotFound(_) => {
+                not_found(format!("app '{name}' not found")).into_response()
+            }
+            other => internal_error(other).into_response(),
+        })?;
+
+    let app_id = app.id;
+    let rx = state.events.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(move |result| {
+        let app_id = app_id.clone();
+        match result {
+            Ok(event) if event.app_id.as_ref() == Some(&app_id) => serde_json::to_string(&event)
+                .ok()
+                .map(|data| Ok(SseEvent::default().data(data))),
+            _ => None,
+        }
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
 // ── Domains ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -353,7 +526,18 @@ async fn add_domain(
 
     match queries::add_domain(&state.pool, &app.id, &body.domain).await {
         Ok(domain) => {
-            rewrite_and_reload(&state, &app.id, &name).await;
+            if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+                if let Err(rollback_error) =
+                    queries::remove_domain(&state.pool, &app.id, &body.domain).await
+                {
+                    tracing::error!(
+                        app = %app.id,
+                        domain = %body.domain,
+                        "failed to roll back domain add after proxy reconciliation error: {rollback_error}"
+                    );
+                }
+                return internal_error(e).into_response();
+            }
             state.events.emit(
                 Some(app.id.clone()),
                 "domain.added",
@@ -381,9 +565,27 @@ async fn remove_domain(
         Err(e) => return internal_error(e).into_response(),
     };
 
+    let domain_record = match queries::list_domains(&state.pool, &app.id).await {
+        Ok(domains) => domains.into_iter().find(|item| item.domain == domain),
+        Err(e) => return internal_error(e).into_response(),
+    };
+
     match queries::remove_domain(&state.pool, &app.id, &domain).await {
         Ok(()) => {
-            rewrite_and_reload(&state, &app.id, &name).await;
+            if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+                if let Some(previous) = domain_record {
+                    if let Err(rollback_error) =
+                        queries::add_domain(&state.pool, &app.id, &previous.domain).await
+                    {
+                        tracing::error!(
+                            app = %app.id,
+                            domain = %previous.domain,
+                            "failed to roll back domain removal after proxy reconciliation error: {rollback_error}"
+                        );
+                    }
+                }
+                return internal_error(e).into_response();
+            }
             state.events.emit(
                 Some(app.id.clone()),
                 "domain.removed",
@@ -449,6 +651,18 @@ async fn add_port(
     .await
     {
         Ok(port) => {
+            if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+                if let Err(rollback_error) =
+                    queries::remove_port_mapping(&state.pool, &app.id, &port.id).await
+                {
+                    tracing::error!(
+                        app = %app.id,
+                        port_id = %port.id,
+                        "failed to roll back port add after proxy reconciliation error: {rollback_error}"
+                    );
+                }
+                return internal_error(e).into_response();
+            }
             state.events.emit(
                 Some(app.id.clone()),
                 "port.added",
@@ -476,8 +690,34 @@ async fn remove_port(
         Err(e) => return internal_error(e).into_response(),
     };
 
+    let existing_port = match queries::list_port_mappings(&state.pool, &app.id).await {
+        Ok(ports) => ports.into_iter().find(|port| port.id == id),
+        Err(e) => return internal_error(e).into_response(),
+    };
+
     match queries::remove_port_mapping(&state.pool, &app.id, &id).await {
         Ok(()) => {
+            if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+                if let Some(previous) = existing_port {
+                    if let Err(rollback_error) = queries::add_port_mapping(
+                        &state.pool,
+                        &app.id,
+                        previous.host_port,
+                        previous.container_port,
+                        &previous.protocol,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            app = %app.id,
+                            host_port = previous.host_port,
+                            container_port = previous.container_port,
+                            "failed to roll back port removal after proxy reconciliation error: {rollback_error}"
+                        );
+                    }
+                }
+                return internal_error(e).into_response();
+            }
             state.events.emit(
                 Some(app.id),
                 "port.removed",
@@ -494,6 +734,73 @@ async fn remove_port(
 async fn list_routing(State(state): State<SharedState>) -> impl IntoResponse {
     match build_routing_table(&state).await {
         Ok(table) => (StatusCode::OK, Json(serde_json::json!(table))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AngieConfigStatus {
+    config_valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    validation_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RoutingAppStatus {
+    app: String,
+    status: String,
+    domains: Vec<String>,
+    upstreams: Vec<Upstream>,
+    tls_enabled: bool,
+    proxy_config_path: String,
+    proxy_config_present: bool,
+    certificate: crate::services::letsencrypt::FileStatus,
+    private_key: crate::services::letsencrypt::FileStatus,
+    tls_ready: bool,
+    issues: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RoutingStatusResponse {
+    angie: AngieConfigStatus,
+    apps: Vec<RoutingAppStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct SingleRoutingStatusResponse {
+    angie: AngieConfigStatus,
+    app: RoutingAppStatus,
+}
+
+async fn get_routing_status(State(state): State<SharedState>) -> impl IntoResponse {
+    match build_routing_status_response(&state).await {
+        Ok(status) => (StatusCode::OK, Json(serde_json::json!(status))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn get_routing_status_for_app(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let angie = angie_config_status().await;
+    match build_routing_status_for_app(&state, &app).await {
+        Ok(app_status) => (
+            StatusCode::OK,
+            Json(serde_json::json!(SingleRoutingStatusResponse {
+                angie,
+                app: app_status,
+            })),
+        )
+            .into_response(),
         Err(e) => internal_error(e).into_response(),
     }
 }
@@ -522,20 +829,20 @@ async fn update_routing(
         Err(e) => return internal_error(e).into_response(),
     };
 
-    let result = crate::proxy::write_app_config(
-        &state.config.angie_conf_dir,
-        &name,
-        &domains,
-        &body.upstreams,
-        false, // TLS managed separately
-    );
+    let desired = if domains.is_empty() || body.upstreams.is_empty() {
+        None
+    } else {
+        Some(crate::proxy::DesiredAppConfig {
+            domains: &domains,
+            upstreams: &body.upstreams,
+            tls: app.tls_enabled,
+        })
+    };
 
-    if let Err(e) = result {
+    if let Err(e) =
+        crate::proxy::apply_app_config(&state.config.angie_conf_dir, &name, desired).await
+    {
         return internal_error(e).into_response();
-    }
-
-    if let Err(e) = crate::proxy::reload().await {
-        tracing::warn!("angie reload failed: {e}");
     }
 
     state.events.emit(
@@ -549,52 +856,47 @@ async fn update_routing(
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/// Rewrite the Angie config for an app after domain/port changes.
-/// Errors are logged but not propagated — config writes should not fail user-facing ops.
-async fn rewrite_and_reload(state: &AppState, app_id: &str, app_name: &str) {
+/// Reconcile the Angie config for an app after domain/port changes.
+async fn reconcile_proxy_for_app(
+    state: &AppState,
+    app_id: &str,
+    app_name: &str,
+) -> anyhow::Result<()> {
     let tls = match queries::get_app_by_id(&state.pool, app_id).await {
         Ok(app) => app.tls_enabled,
-        Err(_) => false,
+        Err(e) => return Err(e.into()),
     };
 
-    let domains = match queries::list_domain_names(&state.pool, app_id).await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("failed to fetch domains for angie rewrite: {e}");
-            return;
-        }
-    };
-
-    let ports = match queries::list_port_mappings(&state.pool, app_id).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("failed to fetch ports for angie rewrite: {e}");
-            return;
-        }
-    };
+    let domains = queries::list_domain_names(&state.pool, app_id).await?;
+    let ports = queries::list_port_mappings(&state.pool, app_id).await?;
 
     if domains.is_empty() || ports.is_empty() {
-        return;
+        crate::proxy::apply_app_config(&state.config.angie_conf_dir, app_name, None).await?;
+        return Ok(());
     }
 
-    let upstreams: Vec<Upstream> = ports
+    let upstreams = upstreams_from_ports(&ports);
+    crate::proxy::apply_app_config(
+        &state.config.angie_conf_dir,
+        app_name,
+        Some(crate::proxy::DesiredAppConfig {
+            domains: &domains,
+            upstreams: &upstreams,
+            tls,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+fn upstreams_from_ports(ports: &[deku_core::types::PortMapping]) -> Vec<Upstream> {
+    ports
         .iter()
         .map(|p| Upstream {
             host: "127.0.0.1".to_string(),
             port: p.host_port as u16,
         })
-        .collect();
-
-    if let Err(e) =
-        crate::proxy::write_app_config(&state.config.angie_conf_dir, app_name, &domains, &upstreams, tls)
-    {
-        tracing::error!("failed to write angie config: {e}");
-        return;
-    }
-
-    if let Err(e) = crate::proxy::reload().await {
-        tracing::warn!("angie reload failed: {e}");
-    }
+        .collect()
 }
 
 // ── Deployments ───────────────────────────────────────────────────────────────
@@ -798,7 +1100,11 @@ async fn get_logs(
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({ "logs": all_logs }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "logs": all_logs })),
+    )
+        .into_response()
 }
 
 // ── Config vars ───────────────────────────────────────────────────────────────
@@ -879,7 +1185,48 @@ async fn unset_config(
     }
 }
 
-// ── Process scale ─────────────────────────────────────────────────────────────
+// ── Process inspection / scale ────────────────────────────────────────────────
+
+async fn list_processes(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(a) => a,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let scales = match queries::get_process_scales(&state.pool, &app.id).await {
+        Ok(scales) => scales,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    match queries::list_containers_for_app(&state.pool, &app.id).await {
+        Ok(containers) => {
+            let processes: Vec<_> = containers
+                .into_iter()
+                .map(|container| {
+                    let scale = scales.get(&container.process_type).copied().unwrap_or(1);
+                    serde_json::json!({
+                        "process_type": container.process_type,
+                        "scale": scale,
+                        "status": container.status,
+                        "container_id": container.id,
+                        "deployment_id": container.deployment_id,
+                        "host_port": container.host_port,
+                        "created_at": container.created_at,
+                    })
+                })
+                .collect();
+
+            (StatusCode::OK, Json(serde_json::json!(processes))).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
 
 async fn get_scale(
     State(state): State<SharedState>,
@@ -917,9 +1264,7 @@ async fn set_scale(
         Err(e) => return internal_error(e).into_response(),
     };
     for (proc_type, count) in &body.scales {
-        if let Err(e) =
-            queries::set_process_scale(&state.pool, &app.id, proc_type, *count).await
-        {
+        if let Err(e) = queries::set_process_scale(&state.pool, &app.id, proc_type, *count).await {
             return internal_error(e).into_response();
         }
     }
@@ -933,9 +1278,7 @@ async fn set_scale(
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-async fn build_routing_table(
-    state: &AppState,
-) -> anyhow::Result<Vec<serde_json::Value>> {
+async fn build_routing_table(state: &AppState) -> anyhow::Result<Vec<serde_json::Value>> {
     let apps = queries::list_apps(&state.pool).await?;
     let mut table = Vec::new();
 
@@ -953,6 +1296,98 @@ async fn build_routing_table(
     }
 
     Ok(table)
+}
+
+async fn build_routing_status_response(state: &AppState) -> anyhow::Result<RoutingStatusResponse> {
+    let apps = queries::list_apps(&state.pool).await?;
+    let angie = angie_config_status().await;
+    let mut statuses = Vec::with_capacity(apps.len());
+
+    for app in apps {
+        statuses.push(build_routing_status_for_app(state, &app).await?);
+    }
+
+    Ok(RoutingStatusResponse {
+        angie,
+        apps: statuses,
+    })
+}
+
+async fn build_routing_status_for_app(
+    state: &AppState,
+    app: &deku_core::types::App,
+) -> anyhow::Result<RoutingAppStatus> {
+    let domains = queries::list_domain_names(&state.pool, &app.id).await?;
+    let ports = queries::list_port_mappings(&state.pool, &app.id).await?;
+    let upstreams = upstreams_from_ports(&ports);
+    let proxy_config_path = crate::proxy::app_config_path(&state.config.angie_conf_dir, &app.name);
+    let proxy_config_present = proxy_config_path.exists();
+    let tls_status = crate::services::letsencrypt::status(&state.pool, &app.name).await?;
+    let mut issues = Vec::new();
+    let inputs_complete = !domains.is_empty() && !upstreams.is_empty();
+
+    if domains.is_empty() {
+        issues.push("no domains configured".to_string());
+    }
+    if upstreams.is_empty() {
+        issues.push("no upstreams configured".to_string());
+    }
+    if inputs_complete && !proxy_config_present {
+        issues.push("angie config fragment is missing".to_string());
+    }
+    if !inputs_complete && proxy_config_present {
+        issues.push("angie config fragment exists without complete routing inputs".to_string());
+    }
+    if app.tls_enabled && !tls_status.certificate.exists {
+        issues.push(format!(
+            "certificate file missing: {}",
+            tls_status.certificate.path
+        ));
+    }
+    if app.tls_enabled && !tls_status.private_key.exists {
+        issues.push(format!(
+            "private key file missing: {}",
+            tls_status.private_key.path
+        ));
+    }
+    if let Some(error) = &tls_status.inspection_error {
+        issues.push(format!("certificate inspection failed: {error}"));
+    }
+
+    let status = if issues.is_empty() {
+        "ready"
+    } else if !inputs_complete {
+        "pending"
+    } else {
+        "degraded"
+    };
+
+    Ok(RoutingAppStatus {
+        app: app.name.clone(),
+        status: status.to_string(),
+        domains,
+        upstreams,
+        tls_enabled: app.tls_enabled,
+        proxy_config_path: proxy_config_path.display().to_string(),
+        proxy_config_present,
+        certificate: tls_status.certificate,
+        private_key: tls_status.private_key,
+        tls_ready: tls_status.ready,
+        issues,
+    })
+}
+
+async fn angie_config_status() -> AngieConfigStatus {
+    match crate::proxy::reloader::validate().await {
+        Ok(()) => AngieConfigStatus {
+            config_valid: true,
+            validation_error: None,
+        },
+        Err(error) => AngieConfigStatus {
+            config_valid: false,
+            validation_error: Some(error.to_string()),
+        },
+    }
 }
 
 // ── SSH Keys ──────────────────────────────────────────────────────────────────
@@ -1120,15 +1555,13 @@ async fn deploy_archive(
     let mut archive_bytes: Option<Vec<u8>> = None;
     loop {
         match multipart.next_field().await {
-            Ok(Some(field)) if field.name() == Some("archive") => {
-                match field.bytes().await {
-                    Ok(b) => {
-                        archive_bytes = Some(b.to_vec());
-                        break;
-                    }
-                    Err(e) => return internal_error(e).into_response(),
+            Ok(Some(field)) if field.name() == Some("archive") => match field.bytes().await {
+                Ok(b) => {
+                    archive_bytes = Some(b.to_vec());
+                    break;
                 }
-            }
+                Err(e) => return internal_error(e).into_response(),
+            },
             Ok(Some(_)) => continue,
             Ok(None) => break,
             Err(e) => return internal_error(e).into_response(),
@@ -1155,7 +1588,9 @@ async fn deploy_archive(
     let req = DeployRequest {
         app_id: app.id.clone(),
         app_name: name.clone(),
-        source: DeploySource::Archive { path: path_str.clone() },
+        source: DeploySource::Archive {
+            path: path_str.clone(),
+        },
         force_builder: params.builder,
     };
 

@@ -5,6 +5,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use sqlx::SqlitePool;
 
 use super::{internal_error, not_found, SharedState};
 use crate::db::queries;
@@ -28,7 +29,57 @@ fn service_json(s: &queries::Service) -> serde_json::Value {
         "name": s.name,
         "status": s.status,
         "plugin": s.plugin,
+        "container_id": s.container_id,
+        "created_at": s.created_at,
     })
+}
+
+fn backup_json(backup: &queries::ServiceBackup) -> serde_json::Value {
+    serde_json::json!({
+        "id": backup.id,
+        "service_id": backup.service_id,
+        "object_key": backup.object_key,
+        "format": backup.format,
+        "size_bytes": backup.size_bytes,
+        "sha256": backup.sha256,
+        "created_at": backup.created_at,
+        "restored_at": backup.restored_at,
+    })
+}
+
+async fn linked_apps_json(
+    pool: &SqlitePool,
+    service_id: &str,
+) -> deku_core::error::Result<Vec<serde_json::Value>> {
+    let links = queries::list_service_links(pool, service_id).await?;
+    let mut linked_apps = Vec::with_capacity(links.len());
+    for link in links {
+        let app = queries::get_app_by_id(pool, &link.app_id).await?;
+        linked_apps.push(serde_json::json!({
+            "name": app.name,
+            "env_key": link.env_key,
+        }));
+    }
+    Ok(linked_apps)
+}
+
+async fn service_info_json(
+    pool: &SqlitePool,
+    service: &queries::Service,
+    spec: &database::DbServiceSpec,
+) -> anyhow::Result<serde_json::Value> {
+    let connection = database::connection_info(spec, service)?;
+    let linked_apps = linked_apps_json(pool, &service.id).await?;
+    Ok(serde_json::json!({
+        "id": service.id,
+        "name": service.name,
+        "status": service.status,
+        "plugin": service.plugin,
+        "container_id": service.container_id,
+        "created_at": service.created_at,
+        "connection": connection,
+        "links": linked_apps,
+    }))
 }
 
 // ── Postgres ──────────────────────────────────────────────────────────────────
@@ -47,7 +98,13 @@ pub async fn pg_create(
     State(state): State<SharedState>,
     Json(body): Json<CreateServiceBody>,
 ) -> impl IntoResponse {
-    match database::create(&state.pool, &state.docker, database::postgres_spec(), &body.name).await
+    match database::create(
+        &state.pool,
+        &state.docker,
+        database::postgres_spec(),
+        &body.name,
+    )
+    .await
     {
         Ok(svc) => (StatusCode::CREATED, Json(service_json(&svc))).into_response(),
         Err(e) => internal_error(e).into_response(),
@@ -58,8 +115,11 @@ pub async fn pg_info(
     State(state): State<SharedState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match queries::get_service(&state.pool, &name).await {
-        Ok(svc) => (StatusCode::OK, Json(service_json(&svc))).into_response(),
+    match queries::get_service_for_plugin(&state.pool, &name, "postgres").await {
+        Ok(svc) => match service_info_json(&state.pool, &svc, &database::postgres_spec()).await {
+            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+            Err(e) => internal_error(e).into_response(),
+        },
         Err(_) => not_found(format!("postgres service '{name}' not found")).into_response(),
     }
 }
@@ -105,6 +165,49 @@ pub async fn pg_logs(
     }
 }
 
+pub async fn pg_backups(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match database::list_backups(&state.pool, &name, "postgres").await {
+        Ok(backups) => {
+            let json: Vec<_> = backups.iter().map(backup_json).collect();
+            (StatusCode::OK, Json(serde_json::json!(json))).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+pub async fn pg_backup(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => match database::backup_postgres(&state.pool, &state.docker, &cfg, &name).await {
+            Ok(backup) => (StatusCode::CREATED, Json(backup_json(&backup))).into_response(),
+            Err(e) => internal_error(e).into_response(),
+        },
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+pub async fn pg_restore(
+    State(state): State<SharedState>,
+    Path((name, backup_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => {
+            match database::restore_postgres(&state.pool, &state.docker, &cfg, &name, &backup_id)
+                .await
+            {
+                Ok(backup) => (StatusCode::OK, Json(backup_json(&backup))).into_response(),
+                Err(e) => internal_error(e).into_response(),
+            }
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
 // ── Redis ─────────────────────────────────────────────────────────────────────
 
 pub async fn rd_list(State(state): State<SharedState>) -> impl IntoResponse {
@@ -121,7 +224,14 @@ pub async fn rd_create(
     State(state): State<SharedState>,
     Json(body): Json<CreateServiceBody>,
 ) -> impl IntoResponse {
-    match database::create(&state.pool, &state.docker, database::redis_spec(), &body.name).await {
+    match database::create(
+        &state.pool,
+        &state.docker,
+        database::redis_spec(),
+        &body.name,
+    )
+    .await
+    {
         Ok(svc) => (StatusCode::CREATED, Json(service_json(&svc))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -131,8 +241,11 @@ pub async fn rd_info(
     State(state): State<SharedState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match queries::get_service(&state.pool, &name).await {
-        Ok(svc) => (StatusCode::OK, Json(service_json(&svc))).into_response(),
+    match queries::get_service_for_plugin(&state.pool, &name, "redis").await {
+        Ok(svc) => match service_info_json(&state.pool, &svc, &database::redis_spec()).await {
+            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+            Err(e) => internal_error(e).into_response(),
+        },
         Err(_) => not_found(format!("redis service '{name}' not found")).into_response(),
     }
 }
@@ -194,7 +307,14 @@ pub async fn my_create(
     State(state): State<SharedState>,
     Json(body): Json<CreateServiceBody>,
 ) -> impl IntoResponse {
-    match database::create(&state.pool, &state.docker, database::mysql_spec(), &body.name).await {
+    match database::create(
+        &state.pool,
+        &state.docker,
+        database::mysql_spec(),
+        &body.name,
+    )
+    .await
+    {
         Ok(svc) => (StatusCode::CREATED, Json(service_json(&svc))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -204,8 +324,11 @@ pub async fn my_info(
     State(state): State<SharedState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match queries::get_service(&state.pool, &name).await {
-        Ok(svc) => (StatusCode::OK, Json(service_json(&svc))).into_response(),
+    match queries::get_service_for_plugin(&state.pool, &name, "mysql").await {
+        Ok(svc) => match service_info_json(&state.pool, &svc, &database::mysql_spec()).await {
+            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+            Err(e) => internal_error(e).into_response(),
+        },
         Err(_) => not_found(format!("mysql service '{name}' not found")).into_response(),
     }
 }
@@ -273,9 +396,33 @@ pub async fn le_disable(
     }
 }
 
+pub async fn le_status(
+    State(state): State<SharedState>,
+    Path(app): Path<String>,
+) -> impl IntoResponse {
+    match letsencrypt::status(&state.pool, &app).await {
+        Ok(status) => (StatusCode::OK, Json(serde_json::json!(status))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct LeConfigBody {
     pub email: String,
+}
+
+pub async fn le_get_config(State(state): State<SharedState>) -> impl IntoResponse {
+    match letsencrypt::get_global_email(&state.config).await {
+        Ok(email) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "configured": email.is_some(),
+                "email": email,
+            })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
 }
 
 pub async fn le_config(
@@ -408,8 +555,13 @@ pub async fn storage_add(
         Ok(a) => a,
         Err(_) => return not_found(format!("app '{app}' not found")).into_response(),
     };
-    match storage::add_mount(&state.pool, &app_record.id, &body.host_path, &body.container_path)
-        .await
+    match storage::add_mount(
+        &state.pool,
+        &app_record.id,
+        &body.host_path,
+        &body.container_path,
+    )
+    .await
     {
         Ok(mount) => (StatusCode::CREATED, Json(serde_json::json!(mount))).into_response(),
         Err(e) => internal_error(e).into_response(),

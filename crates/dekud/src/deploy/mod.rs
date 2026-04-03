@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
-use deku_core::types::{AppStatus, BuilderType, DeployStatus, DekuToml, ProcfileEntry};
+use deku_core::types::{AppStatus, BuilderType, DekuToml, DeployStatus, ProcfileEntry};
 use deku_plugin_sdk::context::BuildContext;
 use sqlx::SqlitePool;
 
 use crate::build::{select_builder, BuiltImage};
+use crate::config::DekuConfig;
 use crate::container::{self, ContainerSpec, DockerClient};
 use crate::db::queries;
 use crate::events::EventSender;
 use crate::proxy;
-use crate::config::DekuConfig;
 
 // ── Deploy request types ──────────────────────────────────────────────────────
 
@@ -33,12 +33,7 @@ pub struct DeployRequest {
 
 // ── Health check ──────────────────────────────────────────────────────────────
 
-async fn run_health_check(
-    host_port: u16,
-    path: &str,
-    timeout_secs: u64,
-    attempts: u32,
-) -> bool {
+async fn run_health_check(host_port: u16, path: &str, timeout_secs: u64, attempts: u32) -> bool {
     let url = format!("http://127.0.0.1:{host_port}{path}");
 
     for attempt in 1..=attempts {
@@ -92,14 +87,12 @@ pub async fn run_deploy(
     let builder_type = match &req.source {
         DeploySource::Image { .. } => BuilderType::Image,
         DeploySource::Archive { .. } => BuilderType::Archive,
-        DeploySource::Source { .. } => {
-            match req.force_builder.as_deref() {
-                Some("nixpacks") => BuilderType::Nixpacks,
-                Some("pack") => BuilderType::Pack,
-                Some("compose") => BuilderType::Compose,
-                _ => BuilderType::Dockerfile,
-            }
-        }
+        DeploySource::Source { .. } => match req.force_builder.as_deref() {
+            Some("nixpacks") => BuilderType::Nixpacks,
+            Some("pack") => BuilderType::Pack,
+            Some("compose") => BuilderType::Compose,
+            _ => BuilderType::Dockerfile,
+        },
     };
 
     // Step 1: Create deployment record
@@ -131,13 +124,7 @@ pub async fn run_deploy(
             );
         }
         Err(ref e) => {
-            let _ = queries::update_deployment(
-                pool,
-                &deploy_id,
-                DeployStatus::Failed,
-                None,
-            )
-            .await;
+            let _ = queries::update_deployment(pool, &deploy_id, DeployStatus::Failed, None).await;
             queries::update_app_status(pool, app_id, AppStatus::Error).await?;
             events.emit(
                 Some(app_id.clone()),
@@ -240,7 +227,9 @@ async fn do_deploy(
             };
 
             let builder = select_builder(&source_path, req.force_builder.as_deref());
-            builder.build(&ctx, deku_toml.as_ref(), docker, events).await
+            builder
+                .build(&ctx, deku_toml.as_ref(), docker, events)
+                .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?
         }
 
@@ -251,13 +240,17 @@ async fn do_deploy(
                 source_dir: path.clone(),
                 data_dir: cfg.data_dir.clone(),
             };
-            let forced = req
-                .force_builder
-                .as_deref()
-                .or_else(|| deku_toml.as_ref().and_then(|t| t.build.as_ref()).and_then(|b| b.builder.as_deref()));
+            let forced = req.force_builder.as_deref().or_else(|| {
+                deku_toml
+                    .as_ref()
+                    .and_then(|t| t.build.as_ref())
+                    .and_then(|b| b.builder.as_deref())
+            });
 
             let builder = select_builder(path, forced);
-            builder.build(&ctx, deku_toml.as_ref(), docker, events).await
+            builder
+                .build(&ctx, deku_toml.as_ref(), docker, events)
+                .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?
         }
     };
@@ -338,19 +331,13 @@ async fn do_deploy(
                 0 // non-web processes don't need host port binding
             };
 
-            let container_name = format!(
-                "deku.{app_name}.{proc_type}.{}-{i}",
-                &deploy_id[..8]
-            );
+            let container_name = format!("deku.{app_name}.{proc_type}.{}-{i}", &deploy_id[..8]);
 
             let mut port_bindings = HashMap::new();
             if is_web && host_port > 0 {
                 // Bind the first exposed container port to our host port
                 if let Some(&container_port) = built.exposed_ports.first() {
-                    port_bindings.insert(
-                        format!("{container_port}/tcp"),
-                        host_port,
-                    );
+                    port_bindings.insert(format!("{container_port}/tcp"), host_port);
                 } else {
                     // Default to 3000 if no EXPOSE directive
                     port_bindings.insert("3000/tcp".to_string(), host_port);
@@ -396,7 +383,11 @@ async fn do_deploy(
                 app_id,
                 deploy_id,
                 proc_type,
-                if is_web && host_port > 0 { Some(host_port as i64) } else { None },
+                if is_web && host_port > 0 {
+                    Some(host_port as i64)
+                } else {
+                    None
+                },
             )
             .await?;
 
@@ -406,8 +397,13 @@ async fn do_deploy(
 
     // ── Health check phase ────────────────────────────────────────────────────
 
-    queries::update_deployment(pool, deploy_id, DeployStatus::HealthChecking, Some(&built.tag))
-        .await?;
+    queries::update_deployment(
+        pool,
+        deploy_id,
+        DeployStatus::HealthChecking,
+        Some(&built.tag),
+    )
+    .await?;
 
     if let Some(port) = web_host_port {
         let health_wait = 5u64;
@@ -439,7 +435,9 @@ async fn do_deploy(
             }
             queries::update_deployment(pool, deploy_id, DeployStatus::Failed, Some(&built.tag))
                 .await?;
-            return Err(anyhow::anyhow!("health checks failed after {health_attempts} attempts"));
+            return Err(anyhow::anyhow!(
+                "health checks failed after {health_attempts} attempts"
+            ));
         }
 
         // Update port mapping in DB
@@ -456,27 +454,34 @@ async fn do_deploy(
 
         // Update Angie upstream
         let domains = queries::list_domain_names(pool, app_id).await?;
+        let tls_enabled = queries::get_app_by_id(pool, app_id)
+            .await
+            .map(|app| app.tls_enabled)
+            .unwrap_or(false);
         if !domains.is_empty() {
             let upstreams = vec![deku_core::types::Upstream {
                 host: "127.0.0.1".to_string(),
                 port,
             }];
-            if let Err(e) = proxy::write_app_config(
+            if let Err(e) = proxy::apply_app_config(
                 &cfg.angie_conf_dir,
                 app_name,
-                &domains,
-                &upstreams,
-                false,
-            ) {
+                Some(proxy::DesiredAppConfig {
+                    domains: &domains,
+                    upstreams: &upstreams,
+                    tls: tls_enabled,
+                }),
+            )
+            .await
+            {
                 tracing::warn!("failed to write angie config: {e}");
-            } else if let Err(e) = proxy::reload().await {
-                tracing::warn!("angie reload failed: {e}");
             }
         }
 
         // Emit deploy URL info
+        let scheme = if tls_enabled { "https" } else { "http" };
         let url = if let Some(domain) = domains.first() {
-            format!("http://{domain}")
+            format!("{scheme}://{domain}")
         } else {
             format!("http://127.0.0.1:{port}")
         };
@@ -547,7 +552,10 @@ async fn run_release_phase(
         .map(|cv| format!("{}={}", cv.key, cv.value))
         .collect();
 
-    let container_name = format!("deku.release.{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let container_name = format!(
+        "deku.release.{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    );
 
     let create_opts = CreateContainerOptionsBuilder::default()
         .name(container_name.as_str())
@@ -555,7 +563,11 @@ async fn run_release_phase(
 
     let body = ContainerCreateBody {
         image: Some(image_tag.to_string()),
-        cmd: Some(vec!["sh".to_string(), "-c".to_string(), command.to_string()]),
+        cmd: Some(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            command.to_string(),
+        ]),
         env: Some(env),
         ..Default::default()
     };
@@ -563,7 +575,10 @@ async fn run_release_phase(
     let resp = docker.create_container(Some(create_opts), body).await?;
 
     docker
-        .start_container(&resp.id, None::<bollard::query_parameters::StartContainerOptions>)
+        .start_container(
+            &resp.id,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
         .await?;
 
     let wait_opts = WaitContainerOptionsBuilder::default().build();
@@ -600,7 +615,9 @@ async fn run_release_phase(
     docker.remove_container(&resp.id, Some(remove_opts)).await?;
 
     if exit_code != 0 {
-        return Err(anyhow::anyhow!("release phase failed with exit code {exit_code}"));
+        return Err(anyhow::anyhow!(
+            "release phase failed with exit code {exit_code}"
+        ));
     }
 
     Ok(())
@@ -618,7 +635,8 @@ pub async fn rollback(
     app_name: &str,
     to_deployment_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let current = queries::get_latest_deployment(pool, app_id).await?
+    let current = queries::get_latest_deployment(pool, app_id)
+        .await?
         .ok_or_else(|| anyhow::anyhow!("no live deployment to roll back from"))?;
 
     let target = if let Some(id) = to_deployment_id {

@@ -15,6 +15,8 @@ enum LetsencryptCommands {
     Enable { app: String },
     /// Disable TLS for an app
     Disable { app: String },
+    /// Show TLS/certificate status for an app
+    Status { app: String },
     /// Set global ACME email address
     Config {
         #[arg(long)]
@@ -41,6 +43,12 @@ pub async fn run(args: LetsencryptArgs, client: &DekuClient) -> Result<()> {
                 )
                 .await?;
             println!("TLS disabled for '{app}'.");
+        }
+        LetsencryptCommands::Status { app } => {
+            let status = client
+                .get(&format!("/api/letsencrypt/status/{app}"))
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&status)?);
         }
         LetsencryptCommands::Config { email } => {
             client
