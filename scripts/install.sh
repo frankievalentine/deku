@@ -111,7 +111,7 @@ download_checksums() {
   local base_url
   base_url="$(release_base_url)"
 
-  if curl --fail --location --silent --show-error --retry 3 \
+  if curl --fail --location --silent --retry 3 \
     "${base_url}/SHA256SUMS" \
     -o "${CHECKSUMS_FILE}"; then
     return 0
@@ -153,8 +153,21 @@ install_prerequisites() {
   apt-get install -y ca-certificates curl gnupg tar
 }
 
+angie_repo_line() {
+  local distro="$1"
+  local version_id="$2"
+  local codename="$3"
+
+  if [[ -z "$distro" || -z "$version_id" || -z "$codename" ]]; then
+    fail "could not determine distro/version/codename for Angie repository"
+  fi
+
+  printf '%s\n' \
+    "deb [signed-by=/usr/share/keyrings/angie-signing.gpg] https://download.angie.software/angie/${distro}/${version_id} ${codename} main"
+}
+
 install_angie() {
-  local distro codename repo_line
+  local distro version_id codename repo_line
 
   if [[ ! -r /etc/os-release ]]; then
     fail "/etc/os-release is required to install Angie"
@@ -163,13 +176,9 @@ install_angie() {
   # shellcheck disable=SC1091
   source /etc/os-release
   distro="${ID:-}"
+  version_id="${VERSION_ID:-}"
   codename="${VERSION_CODENAME:-}"
-
-  if [[ -z "$distro" || -z "$codename" ]]; then
-    fail "could not determine distro/codename for Angie repository"
-  fi
-
-  repo_line="deb [signed-by=/usr/share/keyrings/angie-signing.gpg] https://download.angie.software/angie/${distro}/${codename} free main"
+  repo_line="$(angie_repo_line "$distro" "$version_id" "$codename")"
 
   log "Installing Angie"
   curl --fail --location --silent --show-error https://angie.software/keys/angie-signing.gpg \

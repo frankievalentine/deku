@@ -287,6 +287,11 @@ mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")"
 
 source "${ROOT_DIR}/scripts/install.sh"
 
+[[ "$(angie_repo_line debian 13 trixie)" == \
+  "deb [signed-by=/usr/share/keyrings/angie-signing.gpg] https://download.angie.software/angie/debian/13 trixie main" ]]
+[[ "$(angie_repo_line ubuntu 24.04 noble)" == \
+  "deb [signed-by=/usr/share/keyrings/angie-signing.gpg] https://download.angie.software/angie/ubuntu/24.04 noble main" ]]
+
 require_root() { :; }
 require_linux() { :; }
 install_prerequisites() { :; }
