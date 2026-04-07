@@ -18,3 +18,4 @@ pub mod redis;
 pub mod setup;
 pub mod ssh;
 pub mod storage;
+pub mod uninstall;

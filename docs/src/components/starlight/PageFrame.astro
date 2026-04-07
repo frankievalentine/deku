@@ -8,8 +8,7 @@ const chatProvider = (import.meta.env.PUBLIC_DOC_CHAT_PROVIDER ?? 'openai') as
 const chatModel = import.meta.env.PUBLIC_DOC_CHAT_MODEL;
 const showChat = process.env.PAGE_DOC_CHAT_ENABLED === '1';
 const chatBase = (process.env.PAGE_BASE ?? '').replace(/\/$/, '') || '';
-const locale =
-  (Astro.locals.starlightRoute as { locale?: string } | undefined)?.locale ?? 'en';
+const locale = (Astro.locals.starlightRoute as { locale?: string } | undefined)?.locale ?? 'en';
 ---
 
 {

@@ -19,6 +19,8 @@ enum Commands {
     Setup(commands::setup::SetupArgs),
     /// Show dashboard access details
     Dashboard(commands::dashboard::DashboardArgs),
+    /// Remove a packaged Deku install from this host
+    Uninstall(commands::uninstall::UninstallArgs),
     /// Application management
     Apps(commands::apps::AppsArgs),
     /// Configuration variables
@@ -61,32 +63,33 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if let Commands::Setup(args) = cli.command {
-        return commands::setup::run(args);
-    }
-
-    let client = client::DekuClient::new()?;
-
     match cli.command {
-        Commands::Setup(_) => unreachable!(),
-        Commands::Dashboard(args) => commands::dashboard::run(args, &client).await,
-        Commands::Apps(args) => commands::apps::run(args, &client).await,
-        Commands::Config(args) => commands::config::run(args, &client).await,
-        Commands::Deploy(args) => commands::deploy::run(args, &client).await,
-        Commands::Ps(args) => commands::ps::run(args, &client).await,
-        Commands::Domains(args) => commands::domains::run(args, &client).await,
-        Commands::Ssh(args) => commands::ssh::run(args, &client).await,
-        Commands::Logs(args) => commands::logs::run(args, &client).await,
-        Commands::Plugins(args) => commands::plugins::run(args, &client).await,
-        Commands::Postgres(args) => commands::postgres::run(args, &client).await,
-        Commands::Redis(args) => commands::redis::run(args, &client).await,
-        Commands::Mysql(args) => commands::mysql::run(args, &client).await,
-        Commands::Letsencrypt(args) => commands::letsencrypt::run(args, &client).await,
-        Commands::Network(args) => commands::network::run(args, &client).await,
-        Commands::Objectstore(args) => commands::objectstore::run(args, &client).await,
-        Commands::Storage(args) => commands::storage::run(args, &client).await,
-        Commands::Cron(args) => commands::cron::run(args, &client).await,
-        Commands::Git(args) => commands::git::run(args, &client).await,
-        Commands::Checks(args) => commands::checks::run(args, &client).await,
+        Commands::Setup(args) => commands::setup::run(args),
+        Commands::Uninstall(args) => commands::uninstall::run(args).await,
+        command => {
+            let client = client::DekuClient::new()?;
+            match command {
+                Commands::Setup(_) | Commands::Uninstall(_) => unreachable!(),
+                Commands::Dashboard(args) => commands::dashboard::run(args, &client).await,
+                Commands::Apps(args) => commands::apps::run(args, &client).await,
+                Commands::Config(args) => commands::config::run(args, &client).await,
+                Commands::Deploy(args) => commands::deploy::run(args, &client).await,
+                Commands::Ps(args) => commands::ps::run(args, &client).await,
+                Commands::Domains(args) => commands::domains::run(args, &client).await,
+                Commands::Ssh(args) => commands::ssh::run(args, &client).await,
+                Commands::Logs(args) => commands::logs::run(args, &client).await,
+                Commands::Plugins(args) => commands::plugins::run(args, &client).await,
+                Commands::Postgres(args) => commands::postgres::run(args, &client).await,
+                Commands::Redis(args) => commands::redis::run(args, &client).await,
+                Commands::Mysql(args) => commands::mysql::run(args, &client).await,
+                Commands::Letsencrypt(args) => commands::letsencrypt::run(args, &client).await,
+                Commands::Network(args) => commands::network::run(args, &client).await,
+                Commands::Objectstore(args) => commands::objectstore::run(args, &client).await,
+                Commands::Storage(args) => commands::storage::run(args, &client).await,
+                Commands::Cron(args) => commands::cron::run(args, &client).await,
+                Commands::Git(args) => commands::git::run(args, &client).await,
+                Commands::Checks(args) => commands::checks::run(args, &client).await,
+            }
+        }
     }
 }

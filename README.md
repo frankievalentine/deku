@@ -40,6 +40,8 @@ Install on the server:
 curl -fsSL https://raw.githubusercontent.com/frankievalentine/deku/main/scripts/install.sh | bash
 ```
 
+Uninstall guidance, including `deku uninstall`, lives in [docs/src/content/docs/installation.md](docs/src/content/docs/installation.md).
+
 After install:
 
 ```bash

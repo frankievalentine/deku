@@ -9,6 +9,7 @@ This page summarizes the current `deku` command surface.
 
 - `deku setup`
 - `deku dashboard`
+- `deku uninstall`
 - `deku apps list|create|destroy|info`
 - `deku checks run|routing`
 - `deku config list|set|unset`
@@ -39,6 +40,14 @@ This page summarizes the current `deku` command surface.
 - `dashboard` — print the dashboard URL, token status, and reset guidance
 - `dashboard --json` — print non-secret access metadata as JSON
 - `dashboard reset-token [--yes]` — rotate the dashboard token and print the new value once
+
+### `deku uninstall`
+
+- `uninstall` — interactive packaged-install removal flow
+- `uninstall --keep-data` — remove host install artifacts and keep local state and Docker volumes
+- `uninstall --full-remove` — remove host install artifacts and Deku-owned persisted state
+- `uninstall --yes` — skip the destructive confirmation prompt
+- `uninstall --dry-run` — print the uninstall plan without making changes
 
 ### `deku apps`
 

@@ -66,3 +66,26 @@ deku dashboard reset-token
 ```
 
 Continue with [Get Started](/get-started/) for the first app flow, or read [Dashboard Overview](/dashboard-overview/) for the web interface.
+
+## Uninstall
+
+Use the packaged uninstall command from the server:
+
+```bash
+deku uninstall
+```
+
+The command is root-only and interactive by default. It supports two modes:
+
+- `keep persisted data` removes the Deku service, binaries, and Deku-managed Angie config, but keeps your local config, SQLite database, dashboard assets, logs, SSH host key, and Docker volumes
+- `full uninstall` removes the same host install artifacts and also removes Deku-owned local state and built-in service volumes
+
+Useful non-interactive variants:
+
+```bash
+deku uninstall --keep-data
+deku uninstall --full-remove --yes
+deku uninstall --full-remove --dry-run
+```
+
+`deku uninstall` is currently intended for the packaged Linux install path only. It does not uninstall Angie itself.

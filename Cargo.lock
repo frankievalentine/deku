@@ -922,6 +922,8 @@ name = "deku"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "bollard",
  "chrono",
  "clap",
  "cliclack",
@@ -934,6 +936,7 @@ dependencies = [
  "russh",
  "serde",
  "serde_json",
+ "sqlx",
  "tar",
  "tokio",
  "toml",
