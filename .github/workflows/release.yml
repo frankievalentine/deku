@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-release:
     name: Build release artifacts
@@ -29,7 +32,7 @@ jobs:
         env:
           DEKU_INSTALL_SMOKE_RELEASE_DIR: ${{ github.workspace }}/dist
         run: ./scripts/test-install-smoke.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-dist
           path: dist/
@@ -41,7 +44,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: release-dist
           path: dist/
