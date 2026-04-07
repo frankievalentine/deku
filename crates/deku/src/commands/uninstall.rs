@@ -1022,6 +1022,7 @@ mod tests {
         sync::{Arc, Mutex, OnceLock},
         time::{SystemTime, UNIX_EPOCH},
     };
+    use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
     #[derive(Default)]
     struct FakeSystemManager {
@@ -1115,15 +1116,13 @@ mod tests {
         angie_ssl_dir: PathBuf,
         systemd_unit: PathBuf,
         angie_base_conf: PathBuf,
-        _guard: std::sync::MutexGuard<'static, ()>,
+        _guard: AsyncMutexGuard<'static, ()>,
         old_env: Vec<(&'static str, Option<OsString>)>,
     }
 
     #[tokio::test]
     async fn packaged_install_detection_rejects_custom_layout() {
-        let _guard = test_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = test_mutex().lock().await;
         let temp = temp_root("unsupported");
         fs::create_dir_all(&temp).unwrap();
         let old_env = capture_env();
@@ -1273,9 +1272,7 @@ mod tests {
     }
 
     async fn create_fixture(include_packaged_artifacts: bool) -> TestLayout {
-        let guard = test_mutex()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let guard = test_mutex().lock().await;
         let root = temp_root("uninstall");
         let config_dir = root.join("config");
         let data_dir = root.join("data");
@@ -1416,9 +1413,9 @@ mod tests {
         }
     }
 
-    fn test_mutex() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    fn test_mutex() -> &'static AsyncMutex<()> {
+        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
     impl TestLayout {
