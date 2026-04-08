@@ -11,7 +11,7 @@ ANGIE_BASE_CONF="${ANGIE_BASE_CONF:-/etc/angie/conf.d/deku-default.conf}"
 SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/deku.service}"
 DEKU_GLOBAL_DOMAIN="${DEKU_GLOBAL_DOMAIN:-}"
 DEKU_API_PORT="${DEKU_API_PORT:-2810}"
-DEKU_SSH_PORT="${DEKU_SSH_PORT:-22}"
+DEKU_SSH_PORT="${DEKU_SSH_PORT:-2222}"
 DEKU_DATA_DIR="${DEKU_DATA_DIR:-${CONFIG_DIR}}"
 
 TMP_DIR="$(mktemp -d)"
@@ -239,6 +239,27 @@ print_dashboard_access() {
   "${INSTALL_DIR}/deku" dashboard
 }
 
+detect_server_ip() {
+  if [[ -n "${DEKU_DASHBOARD_HOST:-}" ]]; then
+    printf '%s\n' "${DEKU_DASHBOARD_HOST}"
+    return
+  fi
+
+  local host_ip=""
+
+  if command -v hostname >/dev/null 2>&1; then
+    host_ip="$(hostname -I 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i !~ /^127\./) { print $i; exit }}')"
+  fi
+
+  if [[ -z "$host_ip" ]] && command -v ip >/dev/null 2>&1; then
+    host_ip="$(ip -4 route get 192.0.2.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+  fi
+
+  if [[ -n "$host_ip" ]]; then
+    printf '%s\n' "$host_ip"
+  fi
+}
+
 configured_data_dir() {
   local config_path="${CONFIG_DIR}/config.toml"
 
@@ -271,6 +292,23 @@ configured_api_port() {
   fi
 
   printf '%s\n' "$api_port"
+}
+
+configured_ssh_port() {
+  local config_path="${CONFIG_DIR}/config.toml"
+
+  if [[ ! -f "$config_path" ]]; then
+    fail "expected config at ${CONFIG_DIR}/config.toml after setup"
+  fi
+
+  local ssh_port
+  ssh_port="$(sed -n 's/^ssh_port = \([0-9][0-9]*\)$/\1/p' "$config_path" | head -n 1)"
+
+  if [[ -z "$ssh_port" ]]; then
+    fail "could not read ssh_port from ${config_path}"
+  fi
+
+  printf '%s\n' "$ssh_port"
 }
 
 install_dashboard_assets() {
@@ -325,6 +363,7 @@ socket_exists() {
 verify_installation() {
   local data_dir="$1"
   local api_port="$2"
+  local ssh_port="$3"
   local socket_path="${data_dir}/deku.sock"
   local health_url="http://127.0.0.1:${api_port}/healthz"
 
@@ -355,6 +394,11 @@ verify_installation() {
   done
 
   if [[ "$response" != *'"status":"ok"'* ]]; then
+    if [[ "$ssh_port" == "22" ]]; then
+      printf 'warning: Deku is configured to bind its embedded SSH deploy server to port 22.\n' >&2
+      printf 'warning: if OpenSSH already owns port 22, dekud will stay offline until you move Deku to another port such as 2222.\n' >&2
+      printf 'warning: update %s/config.toml, set ssh_port = 2222, then restart the deku service.\n' "$CONFIG_DIR" >&2
+    fi
     fail "Deku API did not become healthy at ${health_url}"
   fi
 
@@ -388,16 +432,27 @@ main() {
   data_dir="$(configured_data_dir)"
   local api_port
   api_port="$(configured_api_port)"
+  local ssh_port
+  ssh_port="$(configured_ssh_port)"
   install_dashboard_assets "$data_dir"
 
   enable_services
-  verify_installation "$data_dir" "$api_port"
+  verify_installation "$data_dir" "$api_port" "$ssh_port"
   warn_if_missing_docker
   print_dashboard_access
 
   log "Install complete"
+  local dashboard_host
+  dashboard_host="$(detect_server_ip || true)"
   printf 'Deku config: %s/config.toml\n' "$CONFIG_DIR"
   printf 'Dashboard assets: %s/dashboard\n' "$data_dir"
+  if [[ -n "$dashboard_host" ]]; then
+    printf 'Dashboard URL: http://%s:%s\n' "$dashboard_host" "$api_port"
+  fi
+  printf 'Local dashboard URL: http://127.0.0.1:%s\n' "$api_port"
+  printf 'Dashboard reachability: allow %s/tcp or use ssh -L %s:127.0.0.1:%s root@%s\n' \
+    "$api_port" "$api_port" "$api_port" "${dashboard_host:-YOUR_SERVER_IP}"
+  printf 'SSH deploy port: %s\n' "$ssh_port"
   printf 'If you missed the one-time token shown during setup, run `deku dashboard reset-token`.\n'
 }
 

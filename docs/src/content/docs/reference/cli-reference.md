@@ -37,7 +37,7 @@ This page summarizes the current `deku` command surface.
 
 ### `deku dashboard`
 
-- `dashboard` — print the dashboard URL, token status, and reset guidance
+- `dashboard` — print the server-reachable dashboard URL, local loopback URL, token status, SSH tunnel / firewall guidance, and reset guidance
 - `dashboard --json` — print non-secret access metadata as JSON
 - `dashboard reset-token [--yes]` — rotate the dashboard token and print the new value once
 

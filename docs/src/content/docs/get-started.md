@@ -15,11 +15,13 @@ deku dashboard
 
 This prints:
 
-- the dashboard URL
+- the server-reachable dashboard URL
+- the local loopback dashboard URL
 - whether dashboard access is configured
+- SSH tunnel and firewall guidance for remote access
 - the reset command if you need a new token
 
-Open the dashboard URL in your browser, then sign in with the one-time token from setup. If you lost it, run `deku dashboard reset-token`.
+If your browser is on another machine, either make TCP port `2810` reachable or use the SSH tunnel command printed by `deku dashboard`. Then open the dashboard URL in your browser and sign in with the one-time token from setup. If you lost it, run `deku dashboard reset-token`.
 
 ## 2. Create Your First App
 
@@ -62,6 +64,8 @@ After the first deploy, open the app in the dashboard and continue there for day
 - adjust scale and review live logs and events
 - manage networks, storage mounts, and cron entries
 - review host routing, services, object store, SSH keys, and plugins
+
+If you want to use `git push` deploys later, Deku's embedded SSH endpoint defaults to port `2222` on new installs.
 
 ## 5. Common Next Commands
 

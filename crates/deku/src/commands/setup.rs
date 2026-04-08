@@ -58,11 +58,12 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
     let ssh_port = match args.ssh_port {
         Some(value) => value,
-        None if use_defaults => 22,
+        None if use_defaults => 2222,
         None => {
-            let ssh_port_str: String =
-                cliclack::input("SSH port").default_input("22").interact()?;
-            ssh_port_str.parse().unwrap_or(22)
+            let ssh_port_str: String = cliclack::input("SSH port")
+                .default_input("2222")
+                .interact()?;
+            ssh_port_str.parse().unwrap_or(2222)
         }
     };
 
@@ -188,7 +189,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let _ = skip_systemd;
 
     println!();
-    print_token_notice(&cfg.effective_dashboard_url(), &dashboard_token, false);
+    print_token_notice(&cfg, &dashboard_token, false);
     println!("Config file:      {}", normalize_path_string(&config_path));
     println!(
         "Dashboard assets: {}",

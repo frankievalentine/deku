@@ -96,8 +96,10 @@ case "${1:-}" in
       count="$(cat "$count_file")"
     fi
     printf '%s' "$((count + 1))" > "$count_file"
+    dashboard_host="${DEKU_DASHBOARD_HOST:-203.0.113.10}"
     cat <<OUT
-Dashboard URL: http://127.0.0.1:${api_port}
+Dashboard URL: http://${dashboard_host}:${api_port}
+Local URL:     http://127.0.0.1:${api_port}
 
 Save this dashboard token now. It will only be shown once.
 The token is stored hashed at rest and cannot be recovered later.
@@ -105,13 +107,25 @@ The token is stored hashed at rest and cannot be recovered later.
 Dashboard token: dku_SETUPTOKEN123456789
 Reset command:   deku dashboard reset-token
 Status:          saved to config; restart \`dekud\` if it is not already running
+
+Remote access:  make TCP port ${api_port} reachable from your browser, or use an SSH tunnel
+SSH tunnel:     ssh -L ${api_port}:127.0.0.1:${api_port} root@${dashboard_host}
+UFW allow:      sudo ufw allow ${api_port}/tcp
+UFW restrict:   sudo ufw allow from YOUR_PUBLIC_IP to any port ${api_port} proto tcp
 OUT
     ;;
   dashboard)
-    printf 'Dashboard URL: http://127.0.0.1:%s\n' "$(sed -n 's/^api_port = \([0-9][0-9]*\)$/\1/p' "${DEKU_CONFIG_DIR}/config.toml" | head -n 1)"
+    api_port="$(sed -n 's/^api_port = \([0-9][0-9]*\)$/\1/p' "${DEKU_CONFIG_DIR}/config.toml" | head -n 1)"
+    dashboard_host="${DEKU_DASHBOARD_HOST:-203.0.113.10}"
+    printf 'Dashboard URL: http://%s:%s\n' "$dashboard_host" "$api_port"
+    printf 'Local URL:     http://127.0.0.1:%s\n' "$api_port"
     printf 'Config path:   %s/config.toml\n' "${DEKU_CONFIG_DIR}"
     printf 'Token status:  configured (stored hashed at rest)\n'
     printf 'Reset token:   deku dashboard reset-token\n'
+    printf '\nRemote access:  make TCP port %s reachable from your browser, or use an SSH tunnel\n' "$api_port"
+    printf 'SSH tunnel:     ssh -L %s:127.0.0.1:%s root@%s\n' "$api_port" "$api_port" "$dashboard_host"
+    printf 'UFW allow:      sudo ufw allow %s/tcp\n' "$api_port"
+    printf 'UFW restrict:   sudo ufw allow from YOUR_PUBLIC_IP to any port %s proto tcp\n' "$api_port"
     printf '\nDashboard tokens are only shown when first created or reset.\n'
     ;;
   *)
@@ -282,6 +296,7 @@ export SYSTEMD_UNIT_PATH="${TEST_ROOT}/systemd/deku.service"
 export DEKU_SETUP_COUNT_FILE="${TEST_ROOT}/state/setup-count"
 export DEKU_SYSTEMCTL_STATE_DIR="${TEST_ROOT}/state/systemctl"
 export DEKU_REPO="local/deku"
+export DEKU_DASHBOARD_HOST="203.0.113.10"
 
 mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")"
 
@@ -338,13 +353,17 @@ if [[ -z "$DIST_RELEASE_DIR" ]]; then
 else
   [[ -f "${TEST_ROOT}/config/dashboard/index.html" ]]
 fi
+grep -q 'ssh_port = 2222' "${DEKU_CONFIG_DIR}/config.toml"
 grep -q "${INSTALL_DIR}/dekud" "${SYSTEMD_UNIT_PATH}"
 if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
   [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
 fi
 [[ "$first_output" == *"Dashboard token:"* ]]
 [[ "$first_output" == *"Reset token:   deku dashboard reset-token"* ]]
-[[ "$first_output" == *"Dashboard URL: http://127.0.0.1:2810"* ]]
+[[ "$first_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
+[[ "$first_output" == *"Local URL:     http://127.0.0.1:2810"* ]]
+[[ "$first_output" == *"Dashboard reachability: allow 2810/tcp or use ssh -L 2810:127.0.0.1:2810 root@203.0.113.10"* ]]
+[[ "$first_output" == *"SSH deploy port: 2222"* ]]
 cp "${DEKU_CONFIG_DIR}/config.toml" "${TEST_ROOT}/config.first"
 
 CURRENT_RELEASE_DIR="${TEST_ROOT}/fixtures/v2"
@@ -369,5 +388,8 @@ if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
 fi
 [[ "$second_output" != *"Dashboard token:"* ]]
 [[ "$second_output" == *"Reset token:   deku dashboard reset-token"* ]]
+[[ "$second_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
+[[ "$second_output" == *"Local dashboard URL: http://127.0.0.1:2810"* ]]
+[[ "$second_output" == *"SSH deploy port: 2222"* ]]
 
 echo "install smoke passed"

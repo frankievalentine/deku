@@ -13,7 +13,7 @@ Run:
 deku dashboard
 ```
 
-That command prints the dashboard URL plus reset guidance. Open the URL in a browser, then sign in with the one-time dashboard token shown during `deku setup` or a later `deku dashboard reset-token`.
+That command prints a server-reachable dashboard URL, a local loopback URL, and remote-access guidance. If your browser is on another machine, either use the printed SSH tunnel command or make TCP port `2810` reachable through your firewall. Then open the dashboard URL in a browser and sign in with the one-time dashboard token shown during `deku setup` or a later `deku dashboard reset-token`.
 
 ## Pages and Workflows
 

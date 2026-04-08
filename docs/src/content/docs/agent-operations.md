@@ -44,6 +44,8 @@ For most agent-driven deployments, archive and image deploys are a better fit th
 
 SSH `git push` deploys remain supported, but they are not the recommended default path for agents in v1.
 
+On packaged installs, Deku's embedded SSH deploy endpoint defaults to port `2222` so the daemon can coexist with a host `sshd` on port `22`.
+
 ## Canonical Agent Workflow
 
 The standard agent flow is:

@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Result};
 use deku_core::{auth::DashboardTokenState, types::ObjectStoreConfig};
 use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LocalDekuConfig {
@@ -85,11 +87,19 @@ impl LocalDekuConfig {
     }
 
     pub fn effective_ssh_port(&self) -> u16 {
-        self.ssh_port.unwrap_or(22)
+        self.ssh_port.unwrap_or(2222)
     }
 
     pub fn effective_dashboard_url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.effective_api_port())
+        format_dashboard_url(&self.effective_dashboard_host(), self.effective_api_port())
+    }
+
+    pub fn effective_dashboard_host(&self) -> String {
+        detect_dashboard_host().unwrap_or_else(|| Ipv4Addr::LOCALHOST.to_string())
+    }
+
+    pub fn local_dashboard_url(&self) -> String {
+        format_dashboard_url(&Ipv4Addr::LOCALHOST.to_string(), self.effective_api_port())
     }
 
     pub fn token_configured(&self) -> bool {
@@ -124,4 +134,74 @@ impl LocalDekuConfig {
 
 pub fn normalize_path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+fn format_dashboard_url(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("http://[{host}]:{port}")
+    } else {
+        format!("http://{host}:{port}")
+    }
+}
+
+fn detect_dashboard_host() -> Option<String> {
+    std::env::var("DEKU_DASHBOARD_HOST")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(detect_dashboard_host_udp)
+        .or_else(detect_dashboard_host_hostname)
+}
+
+fn detect_dashboard_host_udp() -> Option<String> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 80)).ok()?;
+    match socket.local_addr().ok()? {
+        SocketAddr::V4(addr) if !addr.ip().is_loopback() && !addr.ip().is_unspecified() => {
+            Some(addr.ip().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn detect_dashboard_host_hostname() -> Option<String> {
+    let output = Command::new("hostname").arg("-I").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()?
+        .split_whitespace()
+        .find_map(|candidate| {
+            candidate.parse::<Ipv4Addr>().ok().and_then(|ip| {
+                if ip.is_loopback() || ip.is_unspecified() {
+                    None
+                } else {
+                    Some(ip.to_string())
+                }
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_dashboard_url, LocalDekuConfig};
+
+    #[test]
+    fn local_dashboard_url_always_uses_loopback() {
+        let config = LocalDekuConfig {
+            api_port: Some(2810),
+            ..LocalDekuConfig::default()
+        };
+        assert_eq!(config.local_dashboard_url(), "http://127.0.0.1:2810");
+    }
+
+    #[test]
+    fn formats_ipv6_hosts_with_brackets() {
+        assert_eq!(
+            format_dashboard_url("2001:db8::10", 2810),
+            "http://[2001:db8::10]:2810"
+        );
+    }
 }
