@@ -1,12 +1,18 @@
-import { type FormEvent, useEffect, useState } from 'react';
-import { type Plugin, deletePlugin, fetchPlugins, getToken, installPlugin } from '../lib/api';
+import { type SubmitEvent, useCallback, useEffect, useState } from 'react';
+import { useTokenAccess } from '../hooks/useHasToken';
+import { deletePlugin, fetchPlugins, installPlugin, type Plugin } from '../lib/api';
 import ConnectScreen from './ConnectScreen';
+import TableScroll from './TableScroll';
 
 export default function PluginsPage() {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
+  const tokenAccess = useTokenAccess();
 
-  if (!hasToken) {
-    return <ConnectScreen onConnected={() => setHasToken(true)} />;
+  if (tokenAccess === 'unknown') {
+    return null;
+  }
+
+  if (tokenAccess === 'locked') {
+    return <ConnectScreen />;
   }
 
   return <PluginsInner />;
@@ -19,11 +25,7 @@ function PluginsInner() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -33,9 +35,13 @@ function PluginsInner() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  async function handleInstall(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function handleInstall(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextPath = path.trim();
     if (!nextPath) return;
@@ -65,12 +71,7 @@ function PluginsInner() {
   }
 
   if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading plugins…</span>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -120,35 +121,37 @@ function PluginsInner() {
         {plugins.length === 0 ? (
           <p className="text-muted">No plugins are currently loaded.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Version</th>
-                <th>Path</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {plugins.map((plugin) => (
-                <tr key={plugin.name}>
-                  <td>{plugin.name}</td>
-                  <td className="font-mono">{plugin.version ?? 'unknown'}</td>
-                  <td className="font-mono">{plugin.path}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      disabled={busy === plugin.name}
-                      onClick={() => handleDelete(plugin.name)}
-                    >
-                      Remove
-                    </button>
-                  </td>
+          <TableScroll>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Version</th>
+                  <th>Path</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {plugins.map((plugin) => (
+                  <tr key={plugin.name}>
+                    <td>{plugin.name}</td>
+                    <td className="font-mono">{plugin.version ?? 'unknown'}</td>
+                    <td className="font-mono">{plugin.path}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        disabled={busy === plugin.name}
+                        onClick={() => handleDelete(plugin.name)}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
       </article>
     </div>

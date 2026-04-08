@@ -47,7 +47,7 @@ export default function StatusBadge({ status, size = 'md' }: StatusBadgeProps) {
         textTransform: 'uppercase',
         letterSpacing: '0.08em',
       }}
-      aria-label={`Status: ${label}`}
+      title={`Status: ${label}`}
     >
       <span
         style={{

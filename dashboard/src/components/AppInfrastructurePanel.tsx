@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { type SubmitEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import type { CronEntry, NetworkRecord, StorageMount } from '../lib/api';
 import {
   addCronEntry,
@@ -15,6 +15,7 @@ import {
   removeCronEntry,
   removeStorageMount,
 } from '../lib/api';
+import TableScroll from './TableScroll';
 
 interface AppInfrastructurePanelProps {
   appName: string;
@@ -72,7 +73,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     return state.networks.filter((network) => !attached.has(network.name));
   }, [state]);
 
-  async function handleCreateNetwork(event: FormEvent<HTMLFormElement>) {
+  async function handleCreateNetwork(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = networkName.trim();
     if (!name) return;
@@ -92,7 +93,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     }
   }
 
-  async function handleAttachNetwork(event: FormEvent<HTMLFormElement>) {
+  async function handleAttachNetwork(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = attachNetworkName.trim();
     if (!name) return;
@@ -142,7 +143,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     }
   }
 
-  async function handleAddMount(event: FormEvent<HTMLFormElement>) {
+  async function handleAddMount(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextHostPath = hostPath.trim();
     const nextContainerPath = containerPath.trim();
@@ -179,7 +180,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     }
   }
 
-  async function handleEnsureDirectory(event: FormEvent<HTMLFormElement>) {
+  async function handleEnsureDirectory(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const path = ensurePath.trim();
     if (!path) return;
@@ -200,7 +201,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     }
   }
 
-  async function handleAddCron(event: FormEvent<HTMLFormElement>) {
+  async function handleAddCron(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const schedule = cronSchedule.trim();
     const command = cronCommand.trim();
@@ -238,12 +239,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
   }
 
   if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading app infrastructure…</span>
-      </div>
-    );
+    return <InfrastructurePanelSkeleton />;
   }
 
   if (!state) {
@@ -325,48 +321,52 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
             </div>
           </form>
 
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>State</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {state.networks.map((network) => {
-                const attached = state.attachedNetworks.some((item) => item.name === network.name);
-                return (
-                  <tr key={network.id}>
-                    <td>{network.name}</td>
-                    <td>{attached ? 'Attached' : 'Available'}</td>
-                    <td>
-                      <div className="button-row">
-                        {attached ? (
+          <TableScroll>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>State</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {state.networks.map((network) => {
+                  const attached = state.attachedNetworks.some(
+                    (item) => item.name === network.name
+                  );
+                  return (
+                    <tr key={network.id}>
+                      <td>{network.name}</td>
+                      <td>{attached ? 'Attached' : 'Available'}</td>
+                      <td>
+                        <div className="button-row">
+                          {attached ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={locked || busy === `network-detach-${network.name}`}
+                              onClick={() => handleDetachNetwork(network.name)}
+                            >
+                              Detach
+                            </button>
+                          ) : null}
                           <button
                             type="button"
-                            className="btn btn-secondary btn-sm"
-                            disabled={locked || busy === `network-detach-${network.name}`}
-                            onClick={() => handleDetachNetwork(network.name)}
+                            className="btn btn-danger btn-sm"
+                            disabled={locked || busy === `network-delete-${network.name}`}
+                            onClick={() => handleDeleteNetwork(network.name)}
                           >
-                            Detach
+                            Delete
                           </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="btn btn-danger btn-sm"
-                          disabled={locked || busy === `network-delete-${network.name}`}
-                          onClick={() => handleDeleteNetwork(network.name)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </TableScroll>
         </article>
 
         <article className="panel stack-md">
@@ -441,33 +441,35 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
           {state.mounts.length === 0 ? (
             <p className="text-muted">No storage mounts have been configured for this app.</p>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Host path</th>
-                  <th>Container path</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {state.mounts.map((mount) => (
-                  <tr key={mount.id}>
-                    <td className="font-mono">{mount.host_path}</td>
-                    <td className="font-mono">{mount.container_path}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-sm"
-                        disabled={locked || busy === `mount-remove-${mount.id}`}
-                        onClick={() => handleRemoveMount(mount)}
-                      >
-                        Remove
-                      </button>
-                    </td>
+            <TableScroll>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Host path</th>
+                    <th>Container path</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {state.mounts.map((mount) => (
+                    <tr key={mount.id}>
+                      <td className="font-mono">{mount.host_path}</td>
+                      <td className="font-mono">{mount.container_path}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-sm"
+                          disabled={locked || busy === `mount-remove-${mount.id}`}
+                          onClick={() => handleRemoveMount(mount)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </article>
       </div>
@@ -521,35 +523,149 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
         {state.cron.length === 0 ? (
           <p className="text-muted">No cron entries have been added for this app.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Schedule</th>
-                <th>Command</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {state.cron.map((entry) => (
-                <tr key={entry.id}>
-                  <td className="font-mono">{entry.schedule}</td>
-                  <td className="font-mono">{entry.command}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      disabled={locked || busy === `cron-remove-${entry.id}`}
-                      onClick={() => handleRemoveCron(entry)}
-                    >
-                      Remove
-                    </button>
-                  </td>
+          <TableScroll>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Schedule</th>
+                  <th>Command</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {state.cron.map((entry) => (
+                  <tr key={entry.id}>
+                    <td className="font-mono">{entry.schedule}</td>
+                    <td className="font-mono">{entry.command}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        disabled={locked || busy === `cron-remove-${entry.id}`}
+                        onClick={() => handleRemoveCron(entry)}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
       </article>
     </section>
   );
+}
+
+function InfrastructurePanelSkeleton() {
+  return (
+    <section className="stack-lg">
+      <div className="panel-grid">
+        <article className="panel stack-md">
+          <div className="panel-heading">
+            <div className="stack-sm panel-heading-copy">
+              <SkeletonBlock className="h-3 w-20" />
+              <SkeletonBlock className="h-7 w-40" />
+              <SkeletonBlock className="h-4 w-full max-w-md" />
+              <SkeletonBlock className="h-4 w-4/5 max-w-sm" />
+            </div>
+            <SkeletonBlock className="h-5 w-24" />
+          </div>
+
+          <div className="stack-md">
+            {skeletonItems('network-field', 2).map((item) => (
+              <div key={item} className="form-group">
+                <SkeletonBlock className="h-3 w-28" />
+                <SkeletonBlock className="h-11 w-full" />
+                <div className="form-actions">
+                  <SkeletonBlock className="h-10 w-32" />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="stack-sm">
+            {skeletonItems('network-row', 3).map((item) => (
+              <SkeletonBlock key={item} className="h-12 w-full" />
+            ))}
+          </div>
+        </article>
+
+        <article className="panel stack-md">
+          <div className="stack-sm">
+            <SkeletonBlock className="h-3 w-20" />
+            <SkeletonBlock className="h-7 w-48" />
+            <SkeletonBlock className="h-4 w-full max-w-md" />
+            <SkeletonBlock className="h-4 w-4/5 max-w-sm" />
+          </div>
+
+          <div className="stack-md">
+            {skeletonItems('storage-field', 2).map((item) => (
+              <div key={item} className="form-group">
+                <SkeletonBlock className="h-3 w-28" />
+                <SkeletonBlock className="h-11 w-full" />
+              </div>
+            ))}
+            <div className="form-actions">
+              <SkeletonBlock className="h-10 w-32" />
+            </div>
+          </div>
+
+          <div className="stack-md">
+            <div className="form-group">
+              <SkeletonBlock className="h-3 w-32" />
+              <SkeletonBlock className="h-11 w-full" />
+            </div>
+            <div className="form-actions">
+              <SkeletonBlock className="h-10 w-36" />
+            </div>
+          </div>
+
+          <div className="stack-sm">
+            {skeletonItems('storage-row', 2).map((item) => (
+              <SkeletonBlock key={item} className="h-12 w-full" />
+            ))}
+          </div>
+        </article>
+      </div>
+
+      <article className="panel stack-md">
+        <div className="panel-heading">
+          <div className="stack-sm panel-heading-copy">
+            <SkeletonBlock className="h-3 w-16" />
+            <SkeletonBlock className="h-7 w-52" />
+            <SkeletonBlock className="h-4 w-full max-w-md" />
+          </div>
+          <SkeletonBlock className="h-5 w-24" />
+        </div>
+
+        <div className="stack-md">
+          {skeletonItems('cron-field', 2).map((item) => (
+            <div key={item} className="form-group">
+              <SkeletonBlock className="h-3 w-28" />
+              <SkeletonBlock className="h-11 w-full" />
+            </div>
+          ))}
+          <div className="form-actions">
+            <SkeletonBlock className="h-10 w-28" />
+          </div>
+        </div>
+
+        <div className="stack-sm">
+          {skeletonItems('cron-row', 3).map((item) => (
+            <SkeletonBlock key={item} className="h-12 w-full" />
+          ))}
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function SkeletonBlock({ className }: { className: string }) {
+  return <div className={`app-skeleton-block animate-pulse rounded-md ${className}`} />;
+}
+
+function skeletonItems(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `${prefix}-${index}`);
 }

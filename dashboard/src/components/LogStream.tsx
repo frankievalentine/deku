@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { type EventRecord, appEventStreamUrl, fetchLogs, getToken } from '../lib/api';
+import { appEventStreamUrl, type EventRecord, fetchLogs, getToken } from '../lib/api';
 
 interface LogStreamProps {
   appName: string;
 }
+
+type LogTrackingState = 'live' | 'retrying' | 'not_live';
 
 interface LogEntry {
   id: string;
@@ -14,7 +16,7 @@ interface LogEntry {
 
 export default function LogStream({ appName }: LogStreamProps) {
   const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [connected, setConnected] = useState(false);
+  const [trackingState, setTrackingState] = useState<LogTrackingState>('not_live');
   const [autoScroll, setAutoScroll] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -24,6 +26,10 @@ export default function LogStream({ appName }: LogStreamProps) {
 
   useEffect(() => {
     let cancelled = false;
+    setEntries([]);
+    setAutoScroll(true);
+    setError(null);
+    setTrackingState('not_live');
 
     async function loadRecentLogs() {
       try {
@@ -49,10 +55,10 @@ export default function LogStream({ appName }: LogStreamProps) {
       const token = getToken();
       const source = new EventSource(appEventStreamUrl(appName, token ?? undefined));
       eventSourceRef.current = source;
-      setError(null);
 
       source.onopen = () => {
-        setConnected(true);
+        setError(null);
+        setTrackingState('live');
       };
 
       source.onmessage = (message) => {
@@ -68,7 +74,7 @@ export default function LogStream({ appName }: LogStreamProps) {
       };
 
       source.onerror = () => {
-        setConnected(false);
+        setTrackingState('retrying');
         setError('Stream interrupted. Retrying…');
         source.close();
         if (reconnectRef.current !== null) {
@@ -103,13 +109,27 @@ export default function LogStream({ appName }: LogStreamProps) {
     setAutoScroll(nearBottom);
   }
 
+  const statusLabel =
+    trackingState === 'live' ? 'Live' : trackingState === 'retrying' ? 'Retrying…' : 'Not live';
+  const statusTone = trackingState === 'live' ? 'live' : 'danger';
+  const emptyMessage =
+    trackingState === 'live'
+      ? 'Waiting for log events…'
+      : trackingState === 'retrying'
+        ? 'Retrying live stream…'
+        : (error ?? 'Live tracking is not active.');
+
   return (
     <div className="panel log-panel">
       <div className="log-toolbar">
-        <div className="cluster">
-          <span className="log-status-dot" data-connected={connected} />
-          <span className="text-muted">{connected ? 'Live' : (error ?? 'Connecting…')}</span>
-          <span className="font-mono text-muted">{entries.length} entries</span>
+        <div className="log-status">
+          <span className="log-status-dot" data-state={statusTone} />
+          <div className="log-status-copy">
+            <span className="log-status-label" data-state={trackingState}>
+              {statusLabel}
+            </span>
+            <span className="log-status-meta">{entries.length} entries</span>
+          </div>
         </div>
         <div className="cluster">
           <button
@@ -134,11 +154,7 @@ export default function LogStream({ appName }: LogStreamProps) {
         aria-live="polite"
         aria-atomic="false"
       >
-        {entries.length === 0 && (
-          <div className="log-empty">
-            {connected ? 'Waiting for log events…' : 'Connecting to log stream…'}
-          </div>
-        )}
+        {entries.length === 0 && <div className="log-empty">{emptyMessage}</div>}
         {entries.map((entry, index) => (
           <div key={entry.id} className="log-line">
             <span className="log-gutter">{String(index + 1).padStart(4, '0')}</span>

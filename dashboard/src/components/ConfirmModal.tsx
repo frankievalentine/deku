@@ -37,12 +37,16 @@ export default function ConfirmModal({
   if (!open) return null;
 
   return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={() => {
-        if (!busy) onClose();
-      }}
-    >
+    <div className="modal-backdrop">
+      <button
+        type="button"
+        className="modal-overlay"
+        aria-label="Close dialog"
+        disabled={busy}
+        onMouseDown={() => {
+          if (!busy) onClose();
+        }}
+      />
       <dialog
         className="modal-shell"
         open

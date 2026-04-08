@@ -1,4 +1,5 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { type SubmitEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useTokenAccess } from '../hooks/useHasToken';
 import type {
   App,
   ManagedServiceDetail,
@@ -14,7 +15,6 @@ import {
   fetchManagedServiceLogs,
   fetchManagedServices,
   fetchServiceBackups,
-  getToken,
   linkManagedService,
   restoreServiceBackup,
   triggerServiceBackup,
@@ -22,6 +22,7 @@ import {
 } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
+import TableScroll from './TableScroll';
 
 const SERVICE_KINDS: ManagedServiceKind[] = ['postgres', 'redis', 'mysql'];
 
@@ -52,10 +53,14 @@ type ServiceMap<T> = Record<string, T>;
 type KindRecord<T> = Record<ManagedServiceKind, T>;
 
 export default function ServicesPage() {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
+  const tokenAccess = useTokenAccess();
 
-  if (!hasToken) {
-    return <ConnectScreen onConnected={() => setHasToken(true)} />;
+  if (tokenAccess === 'unknown') {
+    return null;
+  }
+
+  if (tokenAccess === 'locked') {
+    return <ConnectScreen />;
   }
 
   return <ServicesInner />;
@@ -170,7 +175,7 @@ function ServicesInner() {
     [apps, linkedAppNames]
   );
 
-  async function handleCreate(event: FormEvent<HTMLFormElement>) {
+  async function handleCreate(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = createDrafts[activeKind].trim();
     if (!name) return;
@@ -229,7 +234,7 @@ function ServicesInner() {
     }
   }
 
-  async function handleLink(event: FormEvent<HTMLFormElement>) {
+  async function handleLink(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeServiceName) return;
 
@@ -328,12 +333,7 @@ function ServicesInner() {
   }
 
   if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading managed services…</span>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -575,35 +575,37 @@ function ServicesInner() {
                 {activeDetail.links.length === 0 ? (
                   <p className="text-muted">This service is not linked to any apps yet.</p>
                 ) : (
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>App</th>
-                        <th>Env key</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activeDetail.links.map((link) => (
-                        <tr key={`${link.name}-${link.env_key}`}>
-                          <td>{link.name}</td>
-                          <td className="font-mono">{link.env_key}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="btn btn-danger btn-sm"
-                              disabled={
-                                busy === `unlink-${activeKind}-${activeServiceName}-${link.name}`
-                              }
-                              onClick={() => handleUnlink(link.name)}
-                            >
-                              Unlink
-                            </button>
-                          </td>
+                  <TableScroll>
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>App</th>
+                          <th>Env key</th>
+                          <th />
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {activeDetail.links.map((link) => (
+                          <tr key={`${link.name}-${link.env_key}`}>
+                            <td>{link.name}</td>
+                            <td className="font-mono">{link.env_key}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn-danger btn-sm"
+                                disabled={
+                                  busy === `unlink-${activeKind}-${activeServiceName}-${link.name}`
+                                }
+                                onClick={() => handleUnlink(link.name)}
+                              >
+                                Unlink
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableScroll>
                 )}
               </div>
 
@@ -658,47 +660,49 @@ function ServicesInner() {
                   {activeBackups.length === 0 ? (
                     <p className="text-muted">No backups recorded yet.</p>
                   ) : (
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>ID</th>
-                          <th>Created</th>
-                          <th>Format</th>
-                          <th>Size</th>
-                          <th>Restored</th>
-                          <th />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {activeBackups.map((backup) => (
-                          <tr key={backup.id}>
-                            <td className="font-mono">{backup.id.slice(0, 8)}</td>
-                            <td className="font-mono">{formatDate(backup.created_at)}</td>
-                            <td className="font-mono">{backup.format}</td>
-                            <td className="font-mono">{formatBytes(backup.size_bytes)}</td>
-                            <td className="font-mono">
-                              {backup.restored_at ? formatDate(backup.restored_at) : 'No'}
-                            </td>
-                            <td>
-                              <button
-                                type="button"
-                                className="btn btn-danger btn-sm"
-                                onClick={() =>
-                                  setRestoreTarget({
-                                    kind: activeKind,
-                                    serviceName: activeServiceName,
-                                    backup,
-                                  })
-                                }
-                                disabled={busy !== null}
-                              >
-                                Restore
-                              </button>
-                            </td>
+                    <TableScroll>
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Created</th>
+                            <th>Format</th>
+                            <th>Size</th>
+                            <th>Restored</th>
+                            <th />
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {activeBackups.map((backup) => (
+                            <tr key={backup.id}>
+                              <td className="font-mono">{backup.id.slice(0, 8)}</td>
+                              <td className="font-mono">{formatDate(backup.created_at)}</td>
+                              <td className="font-mono">{backup.format}</td>
+                              <td className="font-mono">{formatBytes(backup.size_bytes)}</td>
+                              <td className="font-mono">
+                                {backup.restored_at ? formatDate(backup.restored_at) : 'No'}
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="btn btn-danger btn-sm"
+                                  onClick={() =>
+                                    setRestoreTarget({
+                                      kind: activeKind,
+                                      serviceName: activeServiceName,
+                                      backup,
+                                    })
+                                  }
+                                  disabled={busy !== null}
+                                >
+                                  Restore
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableScroll>
                   )}
                 </div>
               ) : null}
@@ -730,42 +734,47 @@ function ServicesInner() {
         {activeServices.length === 0 ? (
           <p className="text-muted">Nothing provisioned for this engine yet.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Container</th>
-                <th>Created</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {activeServices.map((service) => (
-                <tr key={service.id}>
-                  <td>{service.name}</td>
-                  <td>
-                    <ServiceState status={service.status} />
-                  </td>
-                  <td className="font-mono">
-                    {service.container_id ? truncateId(service.container_id) : 'pending'}
-                  </td>
-                  <td className="font-mono">{formatDate(service.created_at)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() =>
-                        setSelectedNames((current) => ({ ...current, [activeKind]: service.name }))
-                      }
-                    >
-                      Inspect
-                    </button>
-                  </td>
+          <TableScroll>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Container</th>
+                  <th>Created</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {activeServices.map((service) => (
+                  <tr key={service.id}>
+                    <td>{service.name}</td>
+                    <td>
+                      <ServiceState status={service.status} />
+                    </td>
+                    <td className="font-mono">
+                      {service.container_id ? truncateId(service.container_id) : 'pending'}
+                    </td>
+                    <td className="font-mono">{formatDate(service.created_at)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() =>
+                          setSelectedNames((current) => ({
+                            ...current,
+                            [activeKind]: service.name,
+                          }))
+                        }
+                      >
+                        Inspect
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
       </article>
 

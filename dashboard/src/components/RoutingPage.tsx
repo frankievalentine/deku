@@ -1,19 +1,31 @@
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useTokenAccess } from '../hooks/useHasToken';
 import type { LetsEncryptConfig, RoutingStatusResponse, RoutingTableEntry } from '../lib/api';
-import {
-  fetchLetsEncryptConfig,
-  fetchRoutingStatus,
-  fetchRoutingTable,
-  getToken,
-  setLetsEncryptConfig,
-} from '../lib/api';
+import { fetchLetsEncryptConfig, fetchRoutingStatus, fetchRoutingTable } from '../lib/api';
 import ConnectScreen from './ConnectScreen';
+import TableScroll from './TableScroll';
+
+const EMPTY_ROUTING_STATUS: RoutingStatusResponse = {
+  angie: {
+    config_valid: false,
+    validation_error: null,
+  },
+  apps: [],
+};
+const EMPTY_TLS_CONFIG: LetsEncryptConfig = {
+  configured: false,
+  email: null,
+};
 
 export default function RoutingPage() {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
+  const tokenAccess = useTokenAccess();
 
-  if (!hasToken) {
-    return <ConnectScreen onConnected={() => setHasToken(true)} />;
+  if (tokenAccess === 'unknown') {
+    return null;
+  }
+
+  if (tokenAccess === 'locked') {
+    return <ConnectScreen />;
   }
 
   return <RoutingInner />;
@@ -21,17 +33,12 @@ export default function RoutingPage() {
 
 function RoutingInner() {
   const [table, setTable] = useState<RoutingTableEntry[]>([]);
-  const [status, setStatus] = useState<RoutingStatusResponse | null>(null);
-  const [tlsConfig, setTlsConfig] = useState<LetsEncryptConfig | null>(null);
-  const [emailDraft, setEmailDraft] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [status, setStatus] = useState<RoutingStatusResponse>(EMPTY_ROUTING_STATUS);
+  const [tlsConfig, setTlsConfig] = useState<LetsEncryptConfig>(EMPTY_TLS_CONFIG);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setLoading(true);
       setError(null);
       const [nextTable, nextStatus, nextTlsConfig] = await Promise.all([
         fetchRoutingTable(),
@@ -42,58 +49,14 @@ function RoutingInner() {
       setTable(nextTable);
       setStatus(nextStatus);
       setTlsConfig(nextTlsConfig);
-      setEmailDraft(nextTlsConfig.email ?? '');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to load routing overview.');
-    } finally {
-      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function handleSaveEmail(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const email = emailDraft.trim();
-    if (!email) {
-      setError('Email is required.');
-      return;
-    }
-
-    try {
-      setBusy('tls-email');
-      setError(null);
-      setNotice(null);
-      await setLetsEncryptConfig(email);
-      await load();
-      setNotice(`Saved global Let's Encrypt email ${email}.`);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : 'Unable to save Let’s Encrypt email.'
-      );
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading routing overview…</span>
-      </div>
-    );
-  }
-
-  if (!status || !tlsConfig) {
-    return (
-      <div className="panel error-state">
-        Failed to load routing overview: {error ?? 'unknown error'}
-      </div>
-    );
-  }
 
   return (
     <div className="stack-lg">
@@ -117,7 +80,6 @@ function RoutingInner() {
         </div>
       </section>
 
-      {notice ? <p className="callout callout-success">{notice}</p> : null}
       {error ? <p className="callout callout-danger">{error}</p> : null}
 
       <section className="panel-grid">
@@ -140,31 +102,20 @@ function RoutingInner() {
             <p className="eyebrow">Global TLS</p>
             <h2 className="section-title">Let’s Encrypt email</h2>
           </div>
-          <form onSubmit={handleSaveEmail} className="stack-md">
-            <div className="form-group">
-              <label className="form-label" htmlFor="le-email">
-                Account email
-              </label>
-              <input
-                id="le-email"
-                className="input"
-                type="email"
-                value={emailDraft}
-                onChange={(event) => setEmailDraft(event.target.value)}
-                placeholder="ops@example.com"
-              />
-            </div>
-            <div className="form-actions">
-              <button className="btn btn-primary" type="submit" disabled={busy === 'tls-email'}>
-                {busy === 'tls-email' ? 'Saving…' : 'Save email'}
-              </button>
-            </div>
-          </form>
           <p className="text-muted">
             {tlsConfig.configured
               ? `Current email: ${tlsConfig.email}`
               : 'No global Let’s Encrypt email has been configured yet.'}
           </p>
+          <p className="page-copy">
+            Update the account email from Settings. Routing now links to that shared configuration
+            instead of editing it inline.
+          </p>
+          <div className="form-actions">
+            <a className="btn btn-primary" href="/settings">
+              Open settings
+            </a>
+          </div>
         </article>
       </section>
 
@@ -176,32 +127,34 @@ function RoutingInner() {
         {table.length === 0 ? (
           <p className="text-muted">No routing entries are currently published.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>App</th>
-                <th>Domains</th>
-                <th>Upstreams</th>
-              </tr>
-            </thead>
-            <tbody>
-              {table.map((entry) => (
-                <tr key={entry.app}>
-                  <td>{entry.app}</td>
-                  <td className="font-mono">
-                    {entry.domains.length === 0 ? 'none' : entry.domains.join(', ')}
-                  </td>
-                  <td className="font-mono">
-                    {entry.upstreams.length === 0
-                      ? 'none'
-                      : entry.upstreams
-                          .map((upstream) => `${upstream.host}:${upstream.port}`)
-                          .join(', ')}
-                  </td>
+          <TableScroll>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>App</th>
+                  <th>Domains</th>
+                  <th>Upstreams</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {table.map((entry) => (
+                  <tr key={entry.app}>
+                    <td>{entry.app}</td>
+                    <td className="font-mono">
+                      {entry.domains.length === 0 ? 'none' : entry.domains.join(', ')}
+                    </td>
+                    <td className="font-mono">
+                      {entry.upstreams.length === 0
+                        ? 'none'
+                        : entry.upstreams
+                            .map((upstream) => `${upstream.host}:${upstream.port}`)
+                            .join(', ')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
       </article>
 
@@ -213,32 +166,36 @@ function RoutingInner() {
         {status.apps.length === 0 ? (
           <p className="text-muted">No apps are available yet.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>App</th>
-                <th>Status</th>
-                <th>TLS</th>
-                <th>Proxy config</th>
-                <th>Issues</th>
-              </tr>
-            </thead>
-            <tbody>
-              {status.apps.map((app) => (
-                <tr key={app.app}>
-                  <td>
-                    <a href={`/app?name=${encodeURIComponent(app.app)}`}>{app.app}</a>
-                  </td>
-                  <td>
-                    <ServiceState status={app.status} />
-                  </td>
-                  <td>{app.tls_enabled ? (app.tls_ready ? 'Ready' : 'Enabled') : 'Off'}</td>
-                  <td className="font-mono">{app.proxy_config_present ? 'Present' : 'Missing'}</td>
-                  <td>{app.issues.length === 0 ? 'None' : app.issues.join(' | ')}</td>
+          <TableScroll>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>App</th>
+                  <th>Status</th>
+                  <th>TLS</th>
+                  <th>Proxy config</th>
+                  <th>Issues</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {status.apps.map((app) => (
+                  <tr key={app.app}>
+                    <td>
+                      <a href={`/app?name=${encodeURIComponent(app.app)}`}>{app.app}</a>
+                    </td>
+                    <td>
+                      <ServiceState status={app.status} />
+                    </td>
+                    <td>{app.tls_enabled ? (app.tls_ready ? 'Ready' : 'Enabled') : 'Off'}</td>
+                    <td className="font-mono">
+                      {app.proxy_config_present ? 'Present' : 'Missing'}
+                    </td>
+                    <td>{app.issues.length === 0 ? 'None' : app.issues.join(' | ')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
       </article>
     </div>

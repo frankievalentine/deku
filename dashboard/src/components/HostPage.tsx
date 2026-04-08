@@ -1,4 +1,5 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTokenAccess } from '../hooks/useHasToken';
 import type {
   App,
   EventRecord,
@@ -18,11 +19,11 @@ import {
   fetchPlugins,
   fetchRoutingStatus,
   fetchSshKeys,
-  getToken,
-  setLetsEncryptConfig,
   testObjectStoreConfig,
 } from '../lib/api';
+import { showToast } from '../lib/shell';
 import ConnectScreen from './ConnectScreen';
+import TableScroll from './TableScroll';
 
 interface HostState {
   apps: App[];
@@ -38,28 +39,54 @@ interface HostState {
     mysql: ManagedServiceSummary[];
   };
 }
+const EMPTY_HOST_STATE: HostState = {
+  apps: [],
+  routing: {
+    angie: {
+      config_valid: false,
+      validation_error: null,
+    },
+    apps: [],
+  },
+  tls: {
+    configured: false,
+    email: null,
+  },
+  objectStore: {
+    configured: false,
+    object_store: null,
+  },
+  sshKeys: [],
+  plugins: [],
+  recentEvents: [],
+  services: {
+    postgres: [],
+    redis: [],
+    mysql: [],
+  },
+};
 
 export default function HostPage() {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
+  const tokenAccess = useTokenAccess();
 
-  if (!hasToken) {
-    return <ConnectScreen onConnected={() => setHasToken(true)} />;
+  if (tokenAccess === 'unknown') {
+    return null;
+  }
+
+  if (tokenAccess === 'locked') {
+    return <ConnectScreen />;
   }
 
   return <HostInner />;
 }
 
 function HostInner() {
-  const [state, setState] = useState<HostState | null>(null);
-  const [emailDraft, setEmailDraft] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<HostState>(EMPTY_HOST_STATE);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setLoading(true);
       setError(null);
       const [
         apps,
@@ -101,11 +128,8 @@ function HostInner() {
       };
 
       setState(nextState);
-      setEmailDraft(tls.email ?? '');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to load host overview.');
-    } finally {
-      setLoading(false);
     }
   }, []);
 
@@ -113,37 +137,16 @@ function HostInner() {
     void load();
   }, [load]);
 
-  async function handleSaveEmail(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const email = emailDraft.trim();
-    if (!email) {
-      setError('Email is required.');
-      return;
-    }
-
-    try {
-      setBusy('tls-email');
-      setError(null);
-      setNotice(null);
-      await setLetsEncryptConfig(email);
-      await load();
-      setNotice(`Saved global Let's Encrypt email ${email}.`);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : 'Unable to save Let’s Encrypt email.'
-      );
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function handleTestObjectStore() {
     try {
       setBusy('objectstore-test');
       setError(null);
-      setNotice(null);
       await testObjectStoreConfig();
-      setNotice('Stored object store configuration passed the connectivity check.');
+      showToast({
+        title: 'Object store test passed',
+        description: 'Stored object store configuration passed the connectivity check.',
+        variant: 'success',
+      });
     } catch (nextError) {
       setError(
         nextError instanceof Error ? nextError.message : 'Unable to test object store config.'
@@ -154,10 +157,6 @@ function HostInner() {
   }
 
   const metrics = useMemo(() => {
-    if (!state) {
-      return null;
-    }
-
     const liveApps = state.apps.filter((app) => app.status === 'deployed').length;
     const lockedApps = state.apps.filter((app) => app.locked).length;
     const readyRoutes = state.routing.apps.filter((app) => app.status === 'ready').length;
@@ -172,23 +171,6 @@ function HostInner() {
       totalServices,
     };
   }, [state]);
-
-  if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading host overview…</span>
-      </div>
-    );
-  }
-
-  if (!state || !metrics) {
-    return (
-      <div className="panel error-state">
-        Failed to load host overview: {error ?? 'unknown error'}
-      </div>
-    );
-  }
 
   return (
     <div className="stack-lg">
@@ -209,116 +191,108 @@ function HostInner() {
         </div>
       </section>
 
-      {notice ? <p className="callout callout-success">{notice}</p> : null}
       {error ? <p className="callout callout-danger">{error}</p> : null}
 
       <section className="panel-grid">
-        <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Fleet</p>
-            <h2 className="section-title">App status</h2>
+        <article className="panel summary-card">
+          <div className="summary-card-body">
+            <div className="stack-sm">
+              <p className="eyebrow">Fleet</p>
+              <h2 className="section-title">App status</h2>
+            </div>
+            <dl className="data-grid">
+              <div>
+                <dt>Total apps</dt>
+                <dd>{metrics.totalApps}</dd>
+              </div>
+              <div>
+                <dt>Live apps</dt>
+                <dd>{metrics.liveApps}</dd>
+              </div>
+              <div>
+                <dt>Locked apps</dt>
+                <dd>{metrics.lockedApps}</dd>
+              </div>
+              <div>
+                <dt>TLS enabled</dt>
+                <dd>{state.apps.filter((app) => app.tls_enabled).length}</dd>
+              </div>
+            </dl>
           </div>
-          <dl className="data-grid">
-            <div>
-              <dt>Total apps</dt>
-              <dd>{metrics.totalApps}</dd>
-            </div>
-            <div>
-              <dt>Live apps</dt>
-              <dd>{metrics.liveApps}</dd>
-            </div>
-            <div>
-              <dt>Locked apps</dt>
-              <dd>{metrics.lockedApps}</dd>
-            </div>
-            <div>
-              <dt>TLS enabled</dt>
-              <dd>{state.apps.filter((app) => app.tls_enabled).length}</dd>
-            </div>
-          </dl>
-          <div className="button-row">
-            <a className="btn btn-secondary btn-sm" href="/">
+          <div className="form-actions summary-card-actions">
+            <a className="btn btn-secondary" href="/">
               Open apps
             </a>
           </div>
         </article>
 
-        <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Routing and TLS</p>
-            <h2 className="section-title">Global edge status</h2>
+        <article className="panel summary-card">
+          <div className="summary-card-body">
+            <div className="stack-sm">
+              <p className="eyebrow">Routing and TLS</p>
+              <h2 className="section-title">Global edge status</h2>
+            </div>
+            <dl className="data-grid">
+              <div>
+                <dt>Angie validation</dt>
+                <dd>{state.routing.angie.config_valid ? 'Valid' : 'Invalid'}</dd>
+              </div>
+              <div>
+                <dt>Ready routes</dt>
+                <dd>{metrics.readyRoutes}</dd>
+              </div>
+              <div>
+                <dt>TLS email</dt>
+                <dd className="font-mono">{state.tls.email ?? 'Unset'}</dd>
+              </div>
+              <div>
+                <dt>Apps with issues</dt>
+                <dd>{state.routing.apps.filter((app) => app.issues.length > 0).length}</dd>
+              </div>
+            </dl>
+            <p className="page-copy">
+              Global TLS configuration now lives in Settings so host overview stays focused on
+              runtime state.
+            </p>
           </div>
-          <dl className="data-grid">
-            <div>
-              <dt>Angie validation</dt>
-              <dd>{state.routing.angie.config_valid ? 'Valid' : 'Invalid'}</dd>
-            </div>
-            <div>
-              <dt>Ready routes</dt>
-              <dd>{metrics.readyRoutes}</dd>
-            </div>
-            <div>
-              <dt>TLS email</dt>
-              <dd className="font-mono">{state.tls.email ?? 'Unset'}</dd>
-            </div>
-            <div>
-              <dt>Apps with issues</dt>
-              <dd>{state.routing.apps.filter((app) => app.issues.length > 0).length}</dd>
-            </div>
-          </dl>
-
-          <form onSubmit={handleSaveEmail} className="stack-md">
-            <div className="form-group">
-              <label className="form-label" htmlFor="host-le-email">
-                Let’s Encrypt email
-              </label>
-              <input
-                id="host-le-email"
-                className="input"
-                type="email"
-                value={emailDraft}
-                onChange={(event) => setEmailDraft(event.target.value)}
-                placeholder="ops@example.com"
-                disabled={busy !== null}
-              />
-            </div>
-            <div className="form-actions">
-              <button className="btn btn-primary" type="submit" disabled={busy !== null}>
-                {busy === 'tls-email' ? 'Saving…' : 'Save email'}
-              </button>
-              <a className="btn btn-secondary" href="/routing">
-                Open routing
-              </a>
-            </div>
-          </form>
+          <div className="form-actions summary-card-actions">
+            <a className="btn btn-secondary" href="/routing">
+              Open routing
+            </a>
+            <a className="btn btn-primary" href="/settings">
+              Open settings
+            </a>
+          </div>
         </article>
       </section>
 
       <section className="panel-grid">
-        <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Durable storage</p>
-            <h2 className="section-title">Object store</h2>
+        <article className="panel summary-card">
+          <div className="summary-card-body">
+            <div className="stack-sm">
+              <p className="eyebrow">Durable storage</p>
+              <h2 className="section-title">Object store</h2>
+            </div>
+            <dl className="data-grid">
+              <div>
+                <dt>Configured</dt>
+                <dd>{state.objectStore.configured ? 'Yes' : 'No'}</dd>
+              </div>
+              <div>
+                <dt>Provider</dt>
+                <dd>{state.objectStore.object_store?.provider ?? 'Unset'}</dd>
+              </div>
+              <div>
+                <dt>Bucket</dt>
+                <dd className="font-mono">{state.objectStore.object_store?.bucket ?? 'Unset'}</dd>
+              </div>
+              <div>
+                <dt>Endpoint</dt>
+                <dd className="font-mono">{state.objectStore.object_store?.endpoint ?? 'Unset'}</dd>
+              </div>
+            </dl>
           </div>
-          <dl className="data-grid">
-            <div>
-              <dt>Configured</dt>
-              <dd>{state.objectStore.configured ? 'Yes' : 'No'}</dd>
-            </div>
-            <div>
-              <dt>Provider</dt>
-              <dd>{state.objectStore.object_store?.provider ?? 'Unset'}</dd>
-            </div>
-            <div>
-              <dt>Bucket</dt>
-              <dd className="font-mono">{state.objectStore.object_store?.bucket ?? 'Unset'}</dd>
-            </div>
-            <div>
-              <dt>Endpoint</dt>
-              <dd className="font-mono">{state.objectStore.object_store?.endpoint ?? 'Unset'}</dd>
-            </div>
-          </dl>
-          <div className="form-actions">
+          <div className="form-actions summary-card-actions">
             <button
               type="button"
               className="btn btn-secondary"
@@ -335,37 +309,39 @@ function HostInner() {
           </div>
         </article>
 
-        <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Managed services</p>
-            <h2 className="section-title">Datastores</h2>
+        <article className="panel summary-card">
+          <div className="summary-card-body">
+            <div className="stack-sm">
+              <p className="eyebrow">Managed services</p>
+              <h2 className="section-title">Datastores</h2>
+            </div>
+            <dl className="data-grid">
+              <div>
+                <dt>Postgres</dt>
+                <dd>{state.services.postgres.length}</dd>
+              </div>
+              <div>
+                <dt>Redis</dt>
+                <dd>{state.services.redis.length}</dd>
+              </div>
+              <div>
+                <dt>MySQL</dt>
+                <dd>{state.services.mysql.length}</dd>
+              </div>
+              <div>
+                <dt>Total</dt>
+                <dd>{metrics.totalServices}</dd>
+              </div>
+            </dl>
+            <div className="button-row">
+              {state.services.postgres.slice(0, 2).map((service) => (
+                <span key={service.name} className="service-state service-state-warning">
+                  {service.name}
+                </span>
+              ))}
+            </div>
           </div>
-          <dl className="data-grid">
-            <div>
-              <dt>Postgres</dt>
-              <dd>{state.services.postgres.length}</dd>
-            </div>
-            <div>
-              <dt>Redis</dt>
-              <dd>{state.services.redis.length}</dd>
-            </div>
-            <div>
-              <dt>MySQL</dt>
-              <dd>{state.services.mysql.length}</dd>
-            </div>
-            <div>
-              <dt>Total</dt>
-              <dd>{metrics.totalServices}</dd>
-            </div>
-          </dl>
-          <div className="button-row">
-            {state.services.postgres.slice(0, 2).map((service) => (
-              <span key={service.name} className="service-state service-state-warning">
-                {service.name}
-              </span>
-            ))}
-          </div>
-          <div className="form-actions">
+          <div className="form-actions summary-card-actions">
             <a className="btn btn-secondary" href="/services">
               Open services
             </a>
@@ -407,26 +383,28 @@ function HostInner() {
           {state.recentEvents.length === 0 ? (
             <p className="text-muted">No daemon events have been recorded yet.</p>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Type</th>
-                  <th>App</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.recentEvents.map((event) => (
-                  <tr key={event.id}>
-                    <td className="font-mono">{formatDate(event.created_at)}</td>
-                    <td className="font-mono">{event.event_type}</td>
-                    <td className="font-mono">
-                      {event.app_id ? event.app_id.slice(0, 8) : 'host'}
-                    </td>
+            <TableScroll>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Type</th>
+                    <th>App</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {state.recentEvents.map((event) => (
+                    <tr key={event.id}>
+                      <td className="font-mono">{formatDate(event.created_at)}</td>
+                      <td className="font-mono">{event.event_type}</td>
+                      <td className="font-mono">
+                        {event.app_id ? event.app_id.slice(0, 8) : 'host'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </article>
       </section>

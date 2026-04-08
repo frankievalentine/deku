@@ -1,7 +1,10 @@
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
-import { type App, createApp, deleteApp, fetchApps, getToken } from '../lib/api';
+import { type SubmitEvent, useCallback, useEffect, useState } from 'react';
+import { useTokenAccess } from '../hooks/useHasToken';
+import { type App, createApp, deleteApp, fetchApps } from '../lib/api';
+import { showToast } from '../lib/shell';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
+import Icon from './Icon';
 import StatusBadge from './StatusBadge';
 
 function formatRelativeTime(value: string): string {
@@ -17,10 +20,14 @@ function formatRelativeTime(value: string): string {
 }
 
 export default function AppList() {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
+  const tokenAccess = useTokenAccess();
 
-  if (!hasToken) {
-    return <ConnectScreen onConnected={() => setHasToken(true)} />;
+  if (tokenAccess === 'unknown') {
+    return null;
+  }
+
+  if (tokenAccess === 'locked') {
+    return <ConnectScreen />;
   }
 
   return <AppListInner />;
@@ -57,7 +64,17 @@ function AppListInner() {
     return () => window.clearInterval(timer);
   }, [loadApps]);
 
-  async function handleCreate(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('create') === '1') {
+      setShowCreate(true);
+      query.delete('create');
+      const next = query.toString();
+      window.history.replaceState({}, '', next ? `/?${next}` : '/');
+    }
+  }, []);
+
+  async function handleCreate(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newAppName.trim();
     if (!name) return;
@@ -69,6 +86,11 @@ function AppListInner() {
       setNewAppName('');
       setCreateError(null);
       await loadApps();
+      showToast({
+        title: 'App created',
+        description: `${name} is now available in the fleet.`,
+        variant: 'success',
+      });
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : 'Unable to create app.');
     } finally {
@@ -83,6 +105,11 @@ function AppListInner() {
       await deleteApp(deleteTarget);
       setDeleteTarget(null);
       await loadApps();
+      showToast({
+        title: 'App deleted',
+        description: `${deleteTarget} was removed from the dashboard.`,
+        variant: 'success',
+      });
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Unable to delete app.');
     } finally {
@@ -90,16 +117,7 @@ function AppListInner() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading the app deck…</span>
-      </div>
-    );
-  }
-
-  if (loadError) {
+  if (loadError && !loading) {
     return <div className="panel error-state">Failed to load apps: {loadError}</div>;
   }
 
@@ -114,8 +132,8 @@ function AppListInner() {
           <p className="eyebrow">Mission control</p>
           <h1 className="page-title">Application fleet</h1>
           <p className="page-copy">
-            Track deploy readiness, jump into per-app controls, and keep runtime state visible at a
-            glance.
+            Track deploy readiness, jump into per-app controls, and use the command palette to move
+            across the dashboard without losing context.
           </p>
         </div>
         <div className="metrics-grid">
@@ -131,16 +149,23 @@ function AppListInner() {
           <p className="eyebrow">Fleet actions</p>
           <h2 className="section-title">Manage apps</h2>
         </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => {
-            setShowCreate(true);
-            setCreateError(null);
-          }}
-        >
-          New app
-        </button>
+        <div className="cluster">
+          <a className="btn btn-secondary" href="/settings">
+            <Icon name="settings" size={16} />
+            <span>Settings</span>
+          </a>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setShowCreate(true);
+              setCreateError(null);
+            }}
+          >
+            <Icon name="create" size={16} />
+            <span>New app</span>
+          </button>
+        </div>
       </div>
 
       {showCreate && (
@@ -162,7 +187,7 @@ function AppListInner() {
                 autoComplete="off"
               />
             </div>
-            {createError && <p className="text-danger">{createError}</p>}
+            {createError ? <p className="callout callout-danger">{createError}</p> : null}
             <div className="form-actions">
               <button
                 type="button"
@@ -176,7 +201,8 @@ function AppListInner() {
                 Cancel
               </button>
               <button type="submit" className="btn btn-primary" disabled={submitting}>
-                {submitting ? 'Creating…' : 'Create'}
+                <Icon name="create" size={16} />
+                <span>{submitting ? 'Creating…' : 'Create'}</span>
               </button>
             </div>
           </form>

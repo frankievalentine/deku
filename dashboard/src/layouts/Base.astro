@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import ShellController from '../components/ShellController';
 
 export interface Props {
   title?: string;
@@ -17,18 +18,34 @@ const {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="description" content={description} />
     <title>{title}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <script is:inline>
+      const storageKey = 'deku_theme';
+      const stored = window.localStorage.getItem(storageKey);
+      const mode =
+        stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+      const resolved =
+        mode === 'system'
+          ? window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light'
+          : mode;
+
+      document.documentElement.classList.toggle('dark', resolved === 'dark');
+      document.documentElement.dataset.themeMode = mode;
+      document.documentElement.style.colorScheme = resolved;
+    </script>
   </head>
   <body>
-    <div class="site-atmosphere" aria-hidden="true"></div>
     <slot />
+    <ShellController client:load />
+    <script>
+      import 'basecoat-css/basecoat';
+      import 'basecoat-css/sidebar';
+      import 'basecoat-css/command';
+      import 'basecoat-css/toast';
+    </script>
   </body>
 </html>

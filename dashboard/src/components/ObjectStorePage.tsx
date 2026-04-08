@@ -1,17 +1,17 @@
 import {
   type Dispatch,
-  type FormEvent,
   type SetStateAction,
+  type SubmitEvent,
   useCallback,
   useEffect,
   useState,
 } from 'react';
+import { useTokenAccess } from '../hooks/useHasToken';
 import type { App, AppObjectStoreState, ObjectStoreConfig, ObjectStoreState } from '../lib/api';
 import {
   fetchAppObjectStoreLink,
   fetchApps,
   fetchObjectStoreConfig,
-  getToken,
   linkAppObjectStore,
   setObjectStoreConfig,
   testObjectStoreConfig,
@@ -44,10 +44,14 @@ const EMPTY_DRAFT: ObjectStoreDraft = {
 };
 
 export default function ObjectStorePage() {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
+  const tokenAccess = useTokenAccess();
 
-  if (!hasToken) {
-    return <ConnectScreen onConnected={() => setHasToken(true)} />;
+  if (tokenAccess === 'unknown') {
+    return null;
+  }
+
+  if (tokenAccess === 'locked') {
+    return <ConnectScreen />;
   }
 
   return <ObjectStoreInner />;
@@ -116,7 +120,7 @@ function ObjectStoreInner() {
     void loadAppLink(selectedApp);
   }, [loadAppLink, selectedApp]);
 
-  async function handleSave(event: FormEvent<HTMLFormElement>) {
+  async function handleSave(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const payload = buildPayload(draft);
 
@@ -177,7 +181,7 @@ function ObjectStoreInner() {
     }
   }
 
-  async function handleLink(event: FormEvent<HTMLFormElement>) {
+  async function handleLink(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedApp) {
       setError('Select an app first.');
@@ -220,12 +224,7 @@ function ObjectStoreInner() {
   }
 
   if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading object store settings…</span>
-      </div>
-    );
+    return null;
   }
 
   if (!state) {
@@ -264,8 +263,8 @@ function ObjectStoreInner() {
         {notice ? <p className="callout callout-success">{notice}</p> : null}
         {error ? <p className="callout callout-danger">{error}</p> : null}
 
-        <div className="panel-grid">
-          <article className="panel stack-md">
+        <div className="panel-grid object-store-layout">
+          <article className="panel stack-md panel-compact">
             <div className="stack-sm">
               <p className="eyebrow">Configuration</p>
               <h2 className="section-title">Connection details</h2>
@@ -398,91 +397,83 @@ function ObjectStoreInner() {
             </form>
           </article>
 
-          <article className="panel stack-md">
-            <div className="stack-sm">
-              <p className="eyebrow">Stored config</p>
-              <h2 className="section-title">Status and actions</h2>
-            </div>
+          <article className="panel summary-card summary-card-fit summary-card-roomy">
+            <div className="summary-card-body">
+              <div className="stack-sm">
+                <p className="eyebrow">Stored config</p>
+                <h2 className="section-title">Status and actions</h2>
+              </div>
 
-            {state.configured && config ? (
-              <>
-                <dl className="data-grid">
-                  <div>
-                    <dt>Provider</dt>
-                    <dd>{config.provider}</dd>
-                  </div>
-                  <div>
-                    <dt>Bucket</dt>
-                    <dd className="font-mono">{config.bucket}</dd>
-                  </div>
-                  <div>
-                    <dt>Region</dt>
-                    <dd className="font-mono">{config.region}</dd>
-                  </div>
-                  <div>
-                    <dt>Endpoint</dt>
-                    <dd className="font-mono">{config.endpoint}</dd>
-                  </div>
-                  <div>
-                    <dt>Access key ID</dt>
-                    <dd className="font-mono">{config.access_key_id}</dd>
-                  </div>
-                  <div>
-                    <dt>Secret</dt>
-                    <dd className="font-mono">{config.secret_access_key || 'Not stored'}</dd>
-                  </div>
-                  <div>
-                    <dt>Path style</dt>
-                    <dd>{config.path_style ? 'Enabled' : 'Disabled'}</dd>
-                  </div>
-                  <div>
-                    <dt>Prefix</dt>
-                    <dd className="font-mono">{config.prefix ?? 'None'}</dd>
-                  </div>
-                </dl>
+              {state.configured && config ? (
+                <>
+                  <dl className="data-grid">
+                    <div>
+                      <dt>Provider</dt>
+                      <dd>{config.provider}</dd>
+                    </div>
+                    <div>
+                      <dt>Bucket</dt>
+                      <dd className="font-mono">{config.bucket}</dd>
+                    </div>
+                    <div>
+                      <dt>Region</dt>
+                      <dd className="font-mono">{config.region}</dd>
+                    </div>
+                    <div>
+                      <dt>Endpoint</dt>
+                      <dd className="font-mono">{config.endpoint}</dd>
+                    </div>
+                    <div>
+                      <dt>Access key ID</dt>
+                      <dd className="font-mono">{config.access_key_id}</dd>
+                    </div>
+                    <div>
+                      <dt>Secret</dt>
+                      <dd className="font-mono">{config.secret_access_key || 'Not stored'}</dd>
+                    </div>
+                    <div>
+                      <dt>Path style</dt>
+                      <dd>{config.path_style ? 'Enabled' : 'Disabled'}</dd>
+                    </div>
+                    <div>
+                      <dt>Prefix</dt>
+                      <dd className="font-mono">{config.prefix ?? 'None'}</dd>
+                    </div>
+                  </dl>
 
-                <p className="callout callout-warning">
-                  Connectivity tests run against the saved host configuration, not the unsaved form
-                  draft.
-                </p>
-
-                <div className="form-actions">
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      void handleTest();
-                    }}
-                    disabled={busy !== null}
-                  >
-                    {busy === 'test' ? 'Testing…' : 'Test configuration'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    onClick={() => setConfirmUnset(true)}
-                    disabled={busy !== null}
-                  >
-                    Remove configuration
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
+                  <p className="callout callout-warning">
+                    Connectivity tests run against the saved host configuration, not the unsaved
+                    form draft.
+                  </p>
+                </>
+              ) : (
                 <p className="text-muted">
                   No object store has been configured yet. Save a provider, bucket, endpoint, and
                   credentials to enable backup storage.
                 </p>
-                <div className="form-actions">
-                  <button type="button" className="btn btn-secondary" disabled>
-                    Test configuration
-                  </button>
-                  <button type="button" className="btn btn-danger" disabled>
-                    Remove configuration
-                  </button>
-                </div>
-              </>
-            )}
+              )}
+            </div>
+
+            <div className="form-actions summary-card-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  void handleTest();
+                }}
+                disabled={!state.configured || busy !== null}
+              >
+                {busy === 'test' ? 'Testing…' : 'Test configuration'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => setConfirmUnset(true)}
+                disabled={!state.configured || busy !== null}
+              >
+                Remove configuration
+              </button>
+            </div>
           </article>
 
           <article className="panel stack-md">

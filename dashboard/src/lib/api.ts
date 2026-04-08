@@ -3,6 +3,9 @@ const BASE_URL =
     ? (import.meta.env.PUBLIC_API_URL as string)
     : '';
 
+export const TOKEN_STORAGE_KEY = 'deku_token';
+export const TOKEN_CHANGE_EVENT = 'deku:token-change';
+
 export interface App {
   id: string;
   name: string;
@@ -241,15 +244,22 @@ export type ScaleMap = Record<string, number>;
 
 export function getToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem('deku_token');
+  return window.localStorage.getItem(TOKEN_STORAGE_KEY);
+}
+
+function notifyTokenChange(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(TOKEN_CHANGE_EVENT));
 }
 
 export function setToken(token: string): void {
-  window.localStorage.setItem('deku_token', token);
+  window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  notifyTokenChange();
 }
 
 export function clearToken(): void {
-  window.localStorage.removeItem('deku_token');
+  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  notifyTokenChange();
 }
 
 async function apiFetch<T>(
@@ -290,6 +300,26 @@ export async function verifyToken(token: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function checkDaemonHealth(tokenOverride?: string): Promise<boolean> {
+  const token = tokenOverride ?? getToken();
+  const headers = new Headers();
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  try {
+    const response = await fetch(`${BASE_URL}/healthz`, { headers });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function rotateDashboardToken(): Promise<{ token: string }> {
+  return apiFetch<{ token: string }>('/api/dashboard/token', { method: 'POST' });
 }
 
 export function fetchApps(): Promise<App[]> {

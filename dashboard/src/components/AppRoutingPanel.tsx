@@ -1,16 +1,17 @@
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type SubmitEvent, useCallback, useEffect, useState } from 'react';
 import {
-  type CertificateStatus,
-  type PortMapping,
-  type RoutingAppStatus,
   addPortMapping,
+  type CertificateStatus,
   disableTls,
   enableTls,
   fetchAppRoutingStatus,
   fetchPorts,
   fetchTlsStatus,
+  type PortMapping,
+  type RoutingAppStatus,
   removePortMapping,
 } from '../lib/api';
+import TableScroll from './TableScroll';
 
 interface AppRoutingPanelProps {
   appName: string;
@@ -61,7 +62,7 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
     void load();
   }, [load]);
 
-  async function handleAddPort(event: FormEvent<HTMLFormElement>) {
+  async function handleAddPort(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextHostPort = Number(hostPort);
     const nextContainerPort = Number(containerPort);
@@ -131,12 +132,7 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
   }
 
   if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading routing and TLS…</span>
-      </div>
-    );
+    return <RoutingPanelSkeleton />;
   }
 
   if (!state) {
@@ -148,10 +144,10 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
   }
 
   return (
-    <section className="panel-grid">
-      <article className="panel panel-accent stack-md">
-        <div className="cluster justify-between align-start">
-          <div className="stack-sm">
+    <section className="panel-grid app-routing-grid">
+      <article className="panel panel-accent stack-md routing-input-card">
+        <div className="panel-heading">
+          <div className="stack-sm panel-heading-copy">
             <p className="eyebrow">Routing inputs</p>
             <h2 className="section-title">Ports and upstreams</h2>
             <p className="page-copy">
@@ -213,35 +209,37 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
             port is configured.
           </p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Host</th>
-                <th>Container</th>
-                <th>Protocol</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {state.ports.map((port) => (
-                <tr key={port.id}>
-                  <td className="font-mono">{port.host_port}</td>
-                  <td className="font-mono">{port.container_port}</td>
-                  <td className="font-mono">{port.protocol}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      disabled={locked || busy === `port-remove-${port.id}`}
-                      onClick={() => handleRemovePort(port)}
-                    >
-                      Remove
-                    </button>
-                  </td>
+          <TableScroll>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Host</th>
+                  <th>Container</th>
+                  <th>Protocol</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {state.ports.map((port) => (
+                  <tr key={port.id}>
+                    <td className="font-mono">{port.host_port}</td>
+                    <td className="font-mono">{port.container_port}</td>
+                    <td className="font-mono">{port.protocol}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        disabled={locked || busy === `port-remove-${port.id}`}
+                        onClick={() => handleRemovePort(port)}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         )}
 
         <div className="stack-sm">
@@ -265,8 +263,8 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
       </article>
 
       <article className="panel stack-md">
-        <div className="cluster justify-between align-start">
-          <div className="stack-sm">
+        <div className="panel-heading">
+          <div className="stack-sm panel-heading-copy">
             <p className="eyebrow">Proxy and TLS</p>
             <h2 className="section-title">Routing status</h2>
             <p className="page-copy">
@@ -374,4 +372,102 @@ function ServiceState({ status }: { status: string }) {
         : 'warning';
 
   return <span className={`service-state service-state-${tone}`}>{status}</span>;
+}
+
+function RoutingPanelSkeleton() {
+  return (
+    <section className="panel-grid app-routing-grid">
+      <article className="panel panel-accent stack-md routing-input-card">
+        <div className="panel-heading">
+          <div className="stack-sm panel-heading-copy">
+            <SkeletonBlock className="h-3 w-28" />
+            <SkeletonBlock className="h-7 w-52" />
+            <SkeletonBlock className="h-4 w-full max-w-md" />
+            <SkeletonBlock className="h-4 w-4/5 max-w-sm" />
+          </div>
+          <SkeletonBlock className="h-5 w-24" />
+        </div>
+
+        <div className="panel-grid">
+          <div className="stack-md">
+            <div className="form-group">
+              <SkeletonBlock className="h-3 w-20" />
+              <SkeletonBlock className="h-11 w-full" />
+            </div>
+          </div>
+          <div className="stack-md">
+            <div className="form-group">
+              <SkeletonBlock className="h-3 w-24" />
+              <SkeletonBlock className="h-11 w-full" />
+            </div>
+          </div>
+        </div>
+
+        <div className="form-actions">
+          <SkeletonBlock className="h-10 w-28" />
+        </div>
+
+        <div className="stack-sm">
+          <SkeletonBlock className="h-3 w-28" />
+          <SkeletonBlock className="h-6 w-40" />
+        </div>
+
+        <div className="connection-grid">
+          {skeletonItems('upstream', 2).map((item) => (
+            <div key={item} className="connection-card stack-sm">
+              <SkeletonBlock className="h-3 w-20" />
+              <SkeletonBlock className="h-4 w-full" />
+            </div>
+          ))}
+        </div>
+      </article>
+
+      <article className="panel stack-md">
+        <div className="panel-heading">
+          <div className="stack-sm panel-heading-copy">
+            <SkeletonBlock className="h-3 w-24" />
+            <SkeletonBlock className="h-7 w-44" />
+            <SkeletonBlock className="h-4 w-full max-w-md" />
+            <SkeletonBlock className="h-4 w-3/4 max-w-sm" />
+          </div>
+          <SkeletonBlock className="h-6 w-24 rounded-full" />
+        </div>
+
+        <div className="data-grid">
+          {skeletonItems('status', 4).map((item) => (
+            <div key={item} className="stack-sm">
+              <SkeletonBlock className="h-3 w-20" />
+              <SkeletonBlock className="h-4 w-24" />
+            </div>
+          ))}
+        </div>
+
+        <div className="form-actions">
+          <SkeletonBlock className="h-10 w-32" />
+        </div>
+
+        <div className="stack-sm">
+          <SkeletonBlock className="h-3 w-28" />
+          <SkeletonBlock className="h-6 w-40" />
+        </div>
+
+        <div className="connection-grid">
+          {skeletonItems('certificate', 4).map((item) => (
+            <div key={item} className="connection-card stack-sm">
+              <SkeletonBlock className="h-3 w-24" />
+              <SkeletonBlock className="h-4 w-full" />
+            </div>
+          ))}
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function SkeletonBlock({ className }: { className: string }) {
+  return <div className={`app-skeleton-block animate-pulse rounded-md ${className}`} />;
+}
+
+function skeletonItems(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `${prefix}-${index}`);
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTokenAccess } from '../hooks/useHasToken';
 import {
   type App,
   type Deployment,
@@ -6,18 +7,22 @@ import {
   fetchApp,
   fetchDeployments,
   fetchEvents,
-  getToken,
   triggerRollback,
 } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import StatusBadge from './StatusBadge';
+import TableScroll from './TableScroll';
 
 export default function DeploymentDetailPage() {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
+  const tokenAccess = useTokenAccess();
 
-  if (!hasToken) {
-    return <ConnectScreen onConnected={() => setHasToken(true)} />;
+  if (tokenAccess === 'unknown') {
+    return null;
+  }
+
+  if (tokenAccess === 'locked') {
+    return <ConnectScreen />;
   }
 
   return <DeploymentDetailInner />;
@@ -143,12 +148,7 @@ function DeploymentDetailInner() {
   }
 
   if (loading) {
-    return (
-      <div className="panel loading-state">
-        <span className="loading-spinner" />
-        <span>Loading deployment history…</span>
-      </div>
-    );
+    return null;
   }
 
   if (error || !app || !selectedDeployment) {
@@ -311,35 +311,37 @@ function DeploymentDetailInner() {
               <p className="eyebrow">Deployment history</p>
               <h2 className="section-title">All deployments</h2>
             </div>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Status</th>
-                  <th>Builder</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedDeployments.map((deployment) => (
-                  <tr key={deployment.id}>
-                    <td>
-                      <a
-                        href={`/deployments?app=${encodeURIComponent(app.name)}&id=${deployment.id}`}
-                        className="font-mono"
-                      >
-                        {deployment.id.slice(0, 8)}
-                      </a>
-                    </td>
-                    <td>
-                      <StatusBadge status={deployment.status} size="sm" />
-                    </td>
-                    <td className="font-mono">{deployment.builder}</td>
-                    <td className="font-mono">{formatDate(deployment.created_at)}</td>
+            <TableScroll>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Status</th>
+                    <th>Builder</th>
+                    <th>Created</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {sortedDeployments.map((deployment) => (
+                    <tr key={deployment.id}>
+                      <td>
+                        <a
+                          href={`/deployments?app=${encodeURIComponent(app.name)}&id=${deployment.id}`}
+                          className="font-mono"
+                        >
+                          {deployment.id.slice(0, 8)}
+                        </a>
+                      </td>
+                      <td>
+                        <StatusBadge status={deployment.status} size="sm" />
+                      </td>
+                      <td className="font-mono">{deployment.builder}</td>
+                      <td className="font-mono">{formatDate(deployment.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           </article>
 
           <article className="panel stack-md">
@@ -352,24 +354,26 @@ function DeploymentDetailInner() {
                 No deployment-tagged events were recorded for this deployment.
               </p>
             ) : (
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>When</th>
-                    <th>Type</th>
-                    <th>Payload</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {matchingEvents.map((event) => (
-                    <tr key={event.id}>
-                      <td className="font-mono">{formatDate(event.created_at)}</td>
-                      <td className="font-mono">{event.event_type}</td>
-                      <td className="font-mono">{summarisePayload(event.payload)}</td>
+              <TableScroll>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>When</th>
+                      <th>Type</th>
+                      <th>Payload</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {matchingEvents.map((event) => (
+                      <tr key={event.id}>
+                        <td className="font-mono">{formatDate(event.created_at)}</td>
+                        <td className="font-mono">{event.event_type}</td>
+                        <td className="font-mono">{summarisePayload(event.payload)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableScroll>
             )}
           </article>
         </section>

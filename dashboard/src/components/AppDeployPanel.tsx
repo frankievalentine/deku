@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { type SubmitEvent, useMemo, useRef, useState } from 'react';
 import {
   type Deployment,
   triggerArchiveDeploy,
@@ -7,6 +7,7 @@ import {
 } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import StatusBadge from './StatusBadge';
+import TableScroll from './TableScroll';
 
 interface AppDeployPanelProps {
   appName: string;
@@ -36,7 +37,7 @@ export default function AppDeployPanel({
     await onRefresh();
   }
 
-  async function handleImageDeploy(event: FormEvent<HTMLFormElement>) {
+  async function handleImageDeploy(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedImage = imageRef.trim();
     if (!trimmedImage || locked) return;
@@ -55,7 +56,7 @@ export default function AppDeployPanel({
     }
   }
 
-  async function handleArchiveDeploy(event: FormEvent<HTMLFormElement>) {
+  async function handleArchiveDeploy(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!archiveFile || locked) return;
 
@@ -98,8 +99,8 @@ export default function AppDeployPanel({
   return (
     <>
       <article className="panel panel-accent stack-md">
-        <div className="cluster justify-between align-start">
-          <div className="stack-sm">
+        <div className="panel-heading">
+          <div className="stack-sm panel-heading-copy">
             <p className="eyebrow">Deploy</p>
             <h2 className="section-title">Ship and recover</h2>
             <p className="page-copy">
@@ -164,11 +165,20 @@ export default function AppDeployPanel({
               <input
                 id="archive-input"
                 ref={archiveInputRef}
-                className="input file-input"
+                className="file-input-native"
                 type="file"
                 onChange={(event) => setArchiveFile(event.target.files?.[0] ?? null)}
                 disabled={locked || busyAction !== null}
               />
+              <label
+                className={`file-picker${locked || busyAction !== null ? ' is-disabled' : ''}`}
+                htmlFor="archive-input"
+              >
+                <span className="file-picker-button">Choose file</span>
+                <span className="file-picker-value">
+                  {archiveFile ? archiveFile.name : 'No file chosen'}
+                </span>
+              </label>
             </div>
 
             <p className="deploy-hint">
@@ -188,8 +198,8 @@ export default function AppDeployPanel({
         </div>
 
         <div className="stack-md">
-          <div className="cluster justify-between align-center">
-            <div className="stack-sm">
+          <div className="panel-heading panel-heading-top">
+            <div className="stack-sm panel-heading-copy">
               <p className="eyebrow">Rollback</p>
               <h3 className="deploy-title">Recent targets</h3>
             </div>
@@ -201,39 +211,41 @@ export default function AppDeployPanel({
               Rollback targets appear after the app has more than one deployment.
             </p>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Status</th>
-                  <th>Source</th>
-                  <th>Created</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {rollbackCandidates.map((deployment) => (
-                  <tr key={deployment.id}>
-                    <td className="font-mono">{deployment.id.slice(0, 8)}</td>
-                    <td>
-                      <StatusBadge status={deployment.status} size="sm" />
-                    </td>
-                    <td className="font-mono">{formatSourceLabel(deployment)}</td>
-                    <td className="font-mono">{formatDate(deployment.created_at)}</td>
-                    <td>
-                      <button
-                        className="btn btn-danger btn-sm"
-                        type="button"
-                        onClick={() => setRollbackTarget(deployment)}
-                        disabled={locked || busyAction !== null}
-                      >
-                        Roll back
-                      </button>
-                    </td>
+            <TableScroll>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Status</th>
+                    <th>Source</th>
+                    <th>Created</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rollbackCandidates.map((deployment) => (
+                    <tr key={deployment.id}>
+                      <td className="font-mono">{deployment.id.slice(0, 8)}</td>
+                      <td>
+                        <StatusBadge status={deployment.status} size="sm" />
+                      </td>
+                      <td className="font-mono">{formatSourceLabel(deployment)}</td>
+                      <td className="font-mono">{formatDate(deployment.created_at)}</td>
+                      <td>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          type="button"
+                          onClick={() => setRollbackTarget(deployment)}
+                          disabled={locked || busyAction !== null}
+                        >
+                          Roll back
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
           )}
         </div>
       </article>
