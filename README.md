@@ -50,6 +50,8 @@ deku apps create my-app
 deku deploy run my-app --path /absolute/path/to/app
 ```
 
+New installs bind Deku's optional SSH deploy server to port `2222` by default so the API/dashboard can coexist with a standard host `sshd` on port `22`.
+
 Useful follow-up commands:
 
 ```bash
@@ -73,11 +75,15 @@ deku dashboard
 
 That prints:
 
-- the dashboard URL
+- the server-reachable dashboard URL
+- the local loopback dashboard URL for on-host access
 - whether dashboard access is configured
+- SSH tunnel and firewall guidance for remote access
 - reset guidance if you need a new token
 
 The initial token is shown once during `deku setup` or `deku dashboard reset-token`.
+
+The dashboard and authenticated HTTP API listen on TCP port `2810` by default. If your browser is on another machine, either use an SSH tunnel or allow `2810/tcp` through your firewall.
 
 ## Core Command Surface
 
@@ -197,9 +203,12 @@ Full local CI gate:
 Frontend and docs:
 
 ```bash
+cd dashboard && bun run build
 cd dashboard && bun run check
 cd docs && bun run check
 ```
+
+The dashboard build output lives in `dashboard/dist`. Packaged installs consume that output through the release `deku-dashboard.tar.gz` artifact rather than embedding a compiled dashboard snapshot into `dekud`.
 
 Installer smoke coverage:
 

@@ -7,7 +7,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -231,9 +231,103 @@ fn build_api_router(state: SharedState) -> Router {
 
 fn build_public_router(state: SharedState) -> Router {
     let dashboard_dir = state.config.dashboard_dir.clone();
-    Router::new()
-        .route("/healthz", get(health_check))
-        .fallback_service(ServeDir::new(dashboard_dir).append_index_html_on_directories(true))
+    let router = Router::new().route("/healthz", get(health_check));
+
+    if crate::config::dashboard_assets_available(&state.config) {
+        router
+            .fallback_service(ServeDir::new(dashboard_dir).append_index_html_on_directories(true))
+            .with_state(state)
+    } else {
+        router.fallback(missing_dashboard_page).with_state(state)
+    }
+}
+
+async fn missing_dashboard_page(State(state): State<SharedState>) -> impl IntoResponse {
+    let dashboard_dir = escape_html(&state.config.dashboard_dir.display().to_string());
+    let body = format!(
+        r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deku Dashboard Assets Missing</title>
+    <style>
+      :root {{
+        color-scheme: light dark;
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }}
+      body {{
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0f172a;
+        color: #e2e8f0;
+      }}
+      main {{
+        width: min(42rem, calc(100vw - 2rem));
+        padding: 2rem;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 1rem;
+        background: rgba(15, 23, 42, 0.88);
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.45);
+      }}
+      h1 {{
+        margin: 0 0 0.75rem;
+        font-size: clamp(1.8rem, 5vw, 2.4rem);
+      }}
+      p, li {{
+        line-height: 1.6;
+        color: #cbd5e1;
+      }}
+      code, pre {{
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }}
+      pre {{
+        overflow-x: auto;
+        padding: 1rem;
+        border-radius: 0.75rem;
+        background: rgba(15, 23, 42, 0.92);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+      }}
+      .eyebrow {{
+        margin: 0 0 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 0.8rem;
+        color: #94a3b8;
+      }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Deku</p>
+      <h1>Dashboard assets are not staged</h1>
+      <p>
+        <code>dekud</code> is running, but it did not find a built dashboard bundle at
+        <code>{dashboard_dir}</code>.
+      </p>
+      <p>Restore the dashboard bundle in one of these ways:</p>
+      <ul>
+        <li>Packaged install: rerun the installer or restage the extracted <code>deku-dashboard.tar.gz</code> contents into the configured dashboard directory.</li>
+        <li>Source checkout: run <code>cd dashboard &amp;&amp; bun run build</code>, then copy <code>dashboard/dist</code> into the configured dashboard directory or point <code>dashboard_dir</code> at that build output in <code>~/.deku/config.toml</code>.</li>
+      </ul>
+      <pre>dashboard_dir = "{dashboard_dir}"</pre>
+    </main>
+  </body>
+</html>"#
+    );
+
+    (StatusCode::SERVICE_UNAVAILABLE, Html(body))
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 pub async fn serve(state: SharedState) -> anyhow::Result<()> {

@@ -56,7 +56,7 @@ build_dashboard() {
   )
 
   tar -czf "${DIST_DIR}/deku-dashboard.tar.gz" \
-    -C "${ROOT_DIR}/crates/dekud/assets/dashboard" .
+    -C "${ROOT_DIR}/dashboard/dist" .
 }
 
 build_binaries() {

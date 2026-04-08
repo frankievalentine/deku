@@ -12,7 +12,7 @@ Deku currently consists of two binaries:
 
 ## Dashboard Delivery
 
-The dashboard is served by `dekud` from the configured dashboard directory. In the packaged install path, the installer stages the built dashboard assets for you, and the daemon can seed that directory from its bundled dashboard assets if it starts without a staged runtime copy.
+The dashboard is served by `dekud` from the configured dashboard directory. In the packaged install path, the installer stages the built dashboard assets for you from the release bundle.
 
 When you run:
 
@@ -22,8 +22,10 @@ deku dashboard
 
 the CLI prints:
 
-- the dashboard URL derived from local CLI config
+- the server-reachable dashboard URL derived from local CLI config and host IP detection
+- the local loopback dashboard URL for on-host access
 - whether dashboard access is configured
+- SSH tunnel and firewall guidance for remote access
 - the reset command if a replacement token is needed
 
 ## Authentication Model
@@ -58,4 +60,6 @@ The current server runtime includes:
 
 Running Deku directly from a source checkout is a contributor or local-testing workflow, not the main packaged user flow.
 
-If you are working from the repo, building fresh dashboard assets is still the right contributor workflow. If you skip that step, `dekud` falls back to the bundled dashboard snapshot instead of failing to serve the UI.
+If you are working from the repo, build fresh dashboard assets with `cd dashboard && bun run build`. That writes the static site to `dashboard/dist`.
+
+`dekud` does not embed a compiled dashboard snapshot anymore. If the configured dashboard directory is missing or empty, the daemon stays online and serves a small fallback page that explains how to stage the dashboard bundle.

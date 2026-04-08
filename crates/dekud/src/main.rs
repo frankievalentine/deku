@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing::info;
+use tracing::{info, warn};
 
 mod api;
 mod build;
@@ -18,8 +18,13 @@ mod ssh;
 async fn main() -> Result<()> {
     let cfg = config::load()?;
     config::init_logging(&cfg)?;
-    if config::ensure_dashboard_assets(&cfg)? {
-        info!(dashboard_dir = %cfg.dashboard_dir.display(), "seeded bundled dashboard assets");
+    if config::dashboard_assets_available(&cfg) {
+        info!(dashboard_dir = %cfg.dashboard_dir.display(), "dashboard assets available");
+    } else {
+        warn!(
+            dashboard_dir = %cfg.dashboard_dir.display(),
+            "dashboard assets missing; serving a fallback page until a dashboard bundle is staged"
+        );
     }
     info!("dekud starting");
 
@@ -38,7 +43,17 @@ async fn main() -> Result<()> {
     let event_bus = events::EventBus::new(pool.clone());
     let state = api::AppState::new(cfg.clone(), pool, event_bus, docker, plugin_registry);
 
-    tokio::try_join!(api::serve(state.clone()), ssh::serve(state.clone()),)?;
+    tokio::try_join!(api::serve(state.clone()), async {
+        if let Err(error) = ssh::serve(state.clone()).await {
+            warn!(
+                error = %error,
+                ssh_port = state.config.ssh_port,
+                "SSH server unavailable; API remains online and CLI/API deploys still work"
+            );
+        }
+
+        Ok::<(), anyhow::Error>(())
+    },)?;
 
     Ok(())
 }

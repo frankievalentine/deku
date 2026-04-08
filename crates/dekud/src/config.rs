@@ -1,12 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use deku_core::{auth::DashboardTokenState, types::ObjectStoreConfig};
-use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-static EMBEDDED_DASHBOARD_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/dashboard");
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DekuConfig {
@@ -91,7 +88,7 @@ fn default_dashboard_port() -> u16 {
 }
 
 fn default_ssh_port() -> u16 {
-    22
+    2222
 }
 
 fn default_container_backend() -> String {
@@ -190,35 +187,6 @@ pub fn init_logging(cfg: &DekuConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn ensure_dashboard_assets(cfg: &DekuConfig) -> Result<bool> {
-    let index_path = cfg.dashboard_dir.join("index.html");
-    if index_path.exists() {
-        return Ok(false);
-    }
-
-    std::fs::create_dir_all(&cfg.dashboard_dir)?;
-    write_embedded_dir(&EMBEDDED_DASHBOARD_DIR, &cfg.dashboard_dir)?;
-    Ok(true)
-}
-
-fn write_embedded_dir(dir: &Dir<'_>, dest: &Path) -> Result<()> {
-    std::fs::create_dir_all(dest)?;
-
-    for file in dir.files() {
-        let file_name = file
-            .path()
-            .file_name()
-            .context("embedded dashboard file is missing a file name")?;
-        std::fs::write(dest.join(file_name), file.contents())?;
-    }
-
-    for subdir in dir.dirs() {
-        let dir_name = subdir
-            .path()
-            .file_name()
-            .context("embedded dashboard directory is missing a directory name")?;
-        write_embedded_dir(subdir, &dest.join(dir_name))?;
-    }
-
-    Ok(())
+pub fn dashboard_assets_available(cfg: &DekuConfig) -> bool {
+    cfg.dashboard_dir.join("index.html").is_file()
 }

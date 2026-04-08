@@ -2,6 +2,7 @@
 /dashboard/node_modules
 /dashboard/dist
 /dashboard/.astro
+/crates/dekud/assets/dashboard/
 /docs/node_modules
 /docs/dist
 /docs/.astro

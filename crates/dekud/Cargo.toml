@@ -46,4 +46,3 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = { workspace = true }
 percent-encoding = { workspace = true }
-include_dir = "0.7"
