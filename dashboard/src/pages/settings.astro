@@ -1,8 +1,11 @@
 ---
 import SettingsPage from '../components/SettingsPage';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Settings" activeNav="settings">
-  <SettingsPage client:load />
+  <DashboardQueryProvider client:load>
+    <SettingsPage />
+  </DashboardQueryProvider>
 </Shell>

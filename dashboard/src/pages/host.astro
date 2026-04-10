@@ -1,8 +1,11 @@
 ---
 import HostPage from '../components/HostPage';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Host" activeNav="host">
-  <HostPage client:load />
+  <DashboardQueryProvider client:load>
+    <HostPage />
+  </DashboardQueryProvider>
 </Shell>

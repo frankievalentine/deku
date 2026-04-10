@@ -1,25 +1,20 @@
-import { type SubmitEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { type SubmitEvent, useEffect, useMemo, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
-import type {
-  App,
-  ManagedServiceDetail,
-  ManagedServiceKind,
-  ManagedServiceSummary,
-  ServiceBackup,
-} from '../lib/api';
+import type { ManagedServiceKind, ManagedServiceSummary, ServiceBackup } from '../lib/api';
 import {
-  createManagedService,
-  deleteManagedService,
-  fetchApps,
-  fetchManagedService,
-  fetchManagedServiceLogs,
-  fetchManagedServices,
-  fetchServiceBackups,
-  linkManagedService,
-  restoreServiceBackup,
-  triggerServiceBackup,
-  unlinkManagedService,
-} from '../lib/api';
+  getErrorMessage,
+  getFirstQueryError,
+  useCreateManagedServiceMutation,
+  useDeleteManagedServiceMutation,
+  useLinkManagedServiceMutation,
+  useManagedServiceBackupsQuery,
+  useManagedServiceDetailQuery,
+  useManagedServiceLogsQuery,
+  useRestoreServiceBackupMutation,
+  useServicesOverviewQuery,
+  useTriggerServiceBackupMutation,
+  useUnlinkManagedServiceMutation,
+} from '../lib/query';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import TableScroll from './TableScroll';
@@ -49,7 +44,6 @@ interface RestoreTarget {
   backup: ServiceBackup;
 }
 
-type ServiceMap<T> = Record<string, T>;
 type KindRecord<T> = Record<ManagedServiceKind, T>;
 
 export default function ServicesPage() {
@@ -67,98 +61,55 @@ export default function ServicesPage() {
 }
 
 function ServicesInner() {
-  const [apps, setApps] = useState<App[]>([]);
-  const [servicesByKind, setServicesByKind] = useState<KindRecord<ManagedServiceSummary[]>>(
-    emptyKindRecord([])
-  );
   const [selectedNames, setSelectedNames] = useState<KindRecord<string>>(emptyKindRecord(''));
   const [createDrafts, setCreateDrafts] = useState<KindRecord<string>>(emptyKindRecord(''));
   const [linkDrafts, setLinkDrafts] = useState<KindRecord<string>>(emptyKindRecord(''));
   const [activeKind, setActiveKind] = useState<ManagedServiceKind>('postgres');
-  const [detailsByService, setDetailsByService] = useState<ServiceMap<ManagedServiceDetail>>({});
-  const [backupsByService, setBackupsByService] = useState<ServiceMap<ServiceBackup[]>>({});
-  const [logsByService, setLogsByService] = useState<ServiceMap<string[]>>({});
-  const [loading, setLoading] = useState(true);
-  const [detailLoadingKey, setDetailLoadingKey] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ServiceTarget | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null);
-
-  const loadOverview = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const [nextApps, postgres, redis, mysql] = await Promise.all([
-        fetchApps(),
-        fetchManagedServices('postgres'),
-        fetchManagedServices('redis'),
-        fetchManagedServices('mysql'),
-      ]);
-
-      const nextServices = {
-        postgres,
-        redis,
-        mysql,
-      };
-
-      setApps(nextApps);
-      setServicesByKind(nextServices);
-      setSelectedNames((current) => chooseSelectedNames(current, nextServices));
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to load managed services.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadServiceDetail = useCallback(async (kind: ManagedServiceKind, name: string) => {
-    if (!name) return;
-
-    const key = serviceKey(kind, name);
-
-    try {
-      setDetailLoadingKey(key);
-      setError(null);
-
-      const [detail, backups] = await Promise.all([
-        fetchManagedService(kind, name),
-        supportsBackups(kind) ? fetchServiceBackups(kind, name) : Promise.resolve(null),
-      ]);
-
-      setDetailsByService((current) => ({ ...current, [key]: detail }));
-      if (backups) {
-        setBackupsByService((current) => ({ ...current, [key]: backups }));
-      }
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : `Unable to load ${name} service detail.`
-      );
-    } finally {
-      setDetailLoadingKey((current) => (current === key ? null : current));
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadOverview();
-  }, [loadOverview]);
+  const overviewQuery = useServicesOverviewQuery();
+  const createManagedServiceMutation = useCreateManagedServiceMutation();
+  const deleteManagedServiceMutation = useDeleteManagedServiceMutation();
+  const linkManagedServiceMutation = useLinkManagedServiceMutation();
+  const unlinkManagedServiceMutation = useUnlinkManagedServiceMutation();
+  const triggerServiceBackupMutation = useTriggerServiceBackupMutation();
+  const restoreServiceBackupMutation = useRestoreServiceBackupMutation();
+  const apps = overviewQuery.data?.apps ?? [];
+  const servicesByKind = useMemo(
+    () => overviewQuery.data?.servicesByKind ?? emptyKindRecord<ManagedServiceSummary[]>([]),
+    [overviewQuery.data]
+  );
 
   const activeServices = servicesByKind[activeKind];
   const activeServiceName = selectedNames[activeKind];
   const activeServiceKey = activeServiceName ? serviceKey(activeKind, activeServiceName) : null;
-  const activeDetail = activeServiceKey ? (detailsByService[activeServiceKey] ?? null) : null;
+  const backupKind = supportsBackups(activeKind) ? activeKind : 'postgres';
+  const detailQuery = useManagedServiceDetailQuery(activeKind, activeServiceName || '__none__', {
+    enabled: Boolean(activeServiceName),
+  });
+  const backupsQuery = useManagedServiceBackupsQuery(backupKind, activeServiceName || '__none__', {
+    enabled: Boolean(activeServiceName) && supportsBackups(activeKind),
+  });
+  const logsQuery = useManagedServiceLogsQuery(activeKind, activeServiceName || '__none__', 120, {
+    enabled: false,
+  });
+  const activeDetail = activeServiceName ? (detailQuery.data ?? null) : null;
   const activeBackups =
-    supportsBackups(activeKind) && activeServiceKey
-      ? (backupsByService[activeServiceKey] ?? [])
-      : [];
-  const activeLogs = activeServiceKey ? (logsByService[activeServiceKey] ?? []) : [];
+    supportsBackups(activeKind) && activeServiceKey ? (backupsQuery.data ?? []) : [];
+  const activeLogs = activeServiceKey ? (logsQuery.data ?? []) : [];
+  const loading = overviewQuery.isPending;
+  const queryError = getFirstQueryError(
+    [overviewQuery.error, detailQuery.error, backupsQuery.error],
+    null
+  );
+  const error = actionError ?? queryError;
 
   useEffect(() => {
-    if (!activeServiceName) return;
-    void loadServiceDetail(activeKind, activeServiceName);
-  }, [activeKind, activeServiceName, loadServiceDetail]);
+    setSelectedNames((current) => chooseSelectedNames(current, servicesByKind));
+  }, [servicesByKind]);
 
   const totalServices = useMemo(
     () => SERVICE_KINDS.reduce((count, kind) => count + servicesByKind[kind].length, 0),
@@ -182,18 +133,14 @@ function ServicesInner() {
 
     try {
       setBusy(`create-${activeKind}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      const created = await createManagedService(activeKind, name);
+      const created = await createManagedServiceMutation.mutateAsync({ kind: activeKind, name });
       setCreateDrafts((current) => ({ ...current, [activeKind]: '' }));
       setSelectedNames((current) => ({ ...current, [activeKind]: created.name }));
-      await loadOverview();
-      await loadServiceDetail(activeKind, created.name);
       setNotice(`${KIND_LABELS[activeKind]} service ${created.name} created.`);
     } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : 'Unable to create managed service.'
-      );
+      setActionError(getErrorMessage(nextError, 'Unable to create managed service.'));
     } finally {
       setBusy(null);
     }
@@ -204,31 +151,14 @@ function ServicesInner() {
 
     try {
       setBusy(`delete-${deleteTarget.kind}-${deleteTarget.name}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      await deleteManagedService(deleteTarget.kind, deleteTarget.name);
+      await deleteManagedServiceMutation.mutateAsync(deleteTarget);
       setDeleteTarget(null);
-      setDetailsByService((current) => {
-        const next = { ...current };
-        delete next[serviceKey(deleteTarget.kind, deleteTarget.name)];
-        return next;
-      });
-      setBackupsByService((current) => {
-        const next = { ...current };
-        delete next[serviceKey(deleteTarget.kind, deleteTarget.name)];
-        return next;
-      });
-      setLogsByService((current) => {
-        const next = { ...current };
-        delete next[serviceKey(deleteTarget.kind, deleteTarget.name)];
-        return next;
-      });
-      await loadOverview();
+      setSelectedNames((current) => ({ ...current, [deleteTarget.kind]: '' }));
       setNotice(`${KIND_LABELS[deleteTarget.kind]} service ${deleteTarget.name} removed.`);
     } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : 'Unable to delete managed service.'
-      );
+      setActionError(getErrorMessage(nextError, 'Unable to delete managed service.'));
     } finally {
       setBusy(null);
     }
@@ -243,14 +173,17 @@ function ServicesInner() {
 
     try {
       setBusy(`link-${activeKind}-${activeServiceName}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      await linkManagedService(activeKind, activeServiceName, appName);
+      await linkManagedServiceMutation.mutateAsync({
+        kind: activeKind,
+        serviceName: activeServiceName,
+        appName,
+      });
       setLinkDrafts((current) => ({ ...current, [activeKind]: '' }));
-      await loadServiceDetail(activeKind, activeServiceName);
       setNotice(`${activeServiceName} linked to ${appName}.`);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to link app.');
+      setActionError(getErrorMessage(nextError, 'Unable to link app.'));
     } finally {
       setBusy(null);
     }
@@ -261,13 +194,16 @@ function ServicesInner() {
 
     try {
       setBusy(`unlink-${activeKind}-${activeServiceName}-${appName}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      await unlinkManagedService(activeKind, activeServiceName, appName);
-      await loadServiceDetail(activeKind, activeServiceName);
+      await unlinkManagedServiceMutation.mutateAsync({
+        kind: activeKind,
+        serviceName: activeServiceName,
+        appName,
+      });
       setNotice(`${appName} unlinked from ${activeServiceName}.`);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to unlink app.');
+      setActionError(getErrorMessage(nextError, 'Unable to unlink app.'));
     } finally {
       setBusy(null);
     }
@@ -278,14 +214,13 @@ function ServicesInner() {
 
     try {
       setBusy(`logs-${activeKind}-${activeServiceName}`);
-      setError(null);
-      const logs = await fetchManagedServiceLogs(activeKind, activeServiceName, 120);
-      setLogsByService((current) => ({
-        ...current,
-        [serviceKey(activeKind, activeServiceName)]: logs,
-      }));
+      setActionError(null);
+      const result = await logsQuery.refetch();
+      if (result.error) {
+        throw result.error;
+      }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to load service logs.');
+      setActionError(getErrorMessage(nextError, 'Unable to load service logs.'));
     } finally {
       setBusy(null);
     }
@@ -296,13 +231,12 @@ function ServicesInner() {
 
     try {
       setBusy(`backup-${activeServiceName}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      await triggerServiceBackup(activeKind, activeServiceName);
-      await loadServiceDetail(activeKind, activeServiceName);
+      await triggerServiceBackupMutation.mutateAsync({ kind: activeKind, name: activeServiceName });
       setNotice(`Backup started for ${activeServiceName}.`);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to create backup.');
+      setActionError(getErrorMessage(nextError, 'Unable to create backup.'));
     } finally {
       setBusy(null);
     }
@@ -313,20 +247,19 @@ function ServicesInner() {
 
     try {
       setBusy(`restore-${restoreTarget.backup.id}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      await restoreServiceBackup(
-        restoreTarget.kind,
-        restoreTarget.serviceName,
-        restoreTarget.backup.id
-      );
+      await restoreServiceBackupMutation.mutateAsync({
+        kind: restoreTarget.kind,
+        name: restoreTarget.serviceName,
+        backupId: restoreTarget.backup.id,
+      });
       setRestoreTarget(null);
-      await loadServiceDetail(restoreTarget.kind, restoreTarget.serviceName);
       setNotice(
         `Restore started for ${restoreTarget.serviceName} using backup ${restoreTarget.backup.id.slice(0, 8)}.`
       );
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to restore backup.');
+      setActionError(getErrorMessage(nextError, 'Unable to restore backup.'));
     } finally {
       setBusy(null);
     }
@@ -467,7 +400,7 @@ function ServicesInner() {
                 details, links, logs, and service-specific operations.
               </p>
             </>
-          ) : detailLoadingKey === activeServiceKey && !activeDetail ? (
+          ) : detailQuery.isPending && !activeDetail ? (
             <div className="loading-state service-detail-loading">
               <span className="loading-spinner" />
               <span>Loading {activeServiceName}…</span>

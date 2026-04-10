@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { deleteApp } from '../lib/api';
+import { getErrorMessage, useDeleteAppMutation } from '../lib/query';
 import ConfirmModal from './ConfirmModal';
 
 interface AppOperationsPanelProps {
@@ -17,6 +17,7 @@ export default function AppOperationsPanel({
   locked,
   status,
 }: AppOperationsPanelProps) {
+  const deleteAppMutation = useDeleteAppMutation();
   const [confirmName, setConfirmName] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,13 +31,13 @@ export default function AppOperationsPanel({
       setBusy('delete');
       setError(null);
       setNotice(null);
-      await deleteApp(appName);
+      await deleteAppMutation.mutateAsync(appName);
       setNotice(`Deleted app ${appName}. Redirecting to fleet view…`);
       window.setTimeout(() => {
         window.location.assign('/');
       }, 500);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to delete app.');
+      setError(getErrorMessage(nextError, 'Unable to delete app.'));
     } finally {
       setBusy(null);
       setConfirmDelete(false);

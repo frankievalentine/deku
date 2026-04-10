@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
 import type { LetsEncryptConfig, RoutingStatusResponse, RoutingTableEntry } from '../lib/api';
-import { fetchLetsEncryptConfig, fetchRoutingStatus, fetchRoutingTable } from '../lib/api';
+import {
+  getFirstQueryError,
+  useLetsEncryptConfigQuery,
+  useRoutingStatusQuery,
+  useRoutingTableQuery,
+} from '../lib/query';
 import ConnectScreen from './ConnectScreen';
 import TableScroll from './TableScroll';
 
@@ -32,31 +36,16 @@ export default function RoutingPage() {
 }
 
 function RoutingInner() {
-  const [table, setTable] = useState<RoutingTableEntry[]>([]);
-  const [status, setStatus] = useState<RoutingStatusResponse>(EMPTY_ROUTING_STATUS);
-  const [tlsConfig, setTlsConfig] = useState<LetsEncryptConfig>(EMPTY_TLS_CONFIG);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setError(null);
-      const [nextTable, nextStatus, nextTlsConfig] = await Promise.all([
-        fetchRoutingTable(),
-        fetchRoutingStatus(),
-        fetchLetsEncryptConfig(),
-      ]);
-
-      setTable(nextTable);
-      setStatus(nextStatus);
-      setTlsConfig(nextTlsConfig);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to load routing overview.');
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const tableQuery = useRoutingTableQuery({ refetchInterval: 30_000 });
+  const statusQuery = useRoutingStatusQuery({ refetchInterval: 30_000 });
+  const tlsConfigQuery = useLetsEncryptConfigQuery();
+  const table = tableQuery.data ?? EMPTY_ROUTING_TABLE;
+  const status = statusQuery.data ?? EMPTY_ROUTING_STATUS;
+  const tlsConfig = tlsConfigQuery.data ?? EMPTY_TLS_CONFIG;
+  const error = getFirstQueryError(
+    [tableQuery.error, statusQuery.error, tlsConfigQuery.error],
+    null
+  );
 
   return (
     <div className="stack-lg">
@@ -201,6 +190,8 @@ function RoutingInner() {
     </div>
   );
 }
+
+const EMPTY_ROUTING_TABLE: RoutingTableEntry[] = [];
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (

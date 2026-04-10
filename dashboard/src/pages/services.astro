@@ -1,8 +1,11 @@
 ---
 import ServicesPage from '../components/ServicesPage';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Services" activeNav="services">
-  <ServicesPage client:load />
+  <DashboardQueryProvider client:load>
+    <ServicesPage />
+  </DashboardQueryProvider>
 </Shell>

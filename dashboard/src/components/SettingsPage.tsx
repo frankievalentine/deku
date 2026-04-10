@@ -1,18 +1,15 @@
-import { type SubmitEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { type SubmitEvent, useEffect, useMemo, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
+import { clearToken, setToken } from '../lib/api';
 import {
-  checkDaemonHealth,
-  clearToken,
-  fetchApps,
-  fetchLetsEncryptConfig,
-  fetchManagedServices,
-  fetchObjectStoreConfig,
-  fetchPlugins,
-  fetchSshKeys,
-  rotateDashboardToken,
-  setLetsEncryptConfig,
-  setToken,
-} from '../lib/api';
+  getDashboardQueryClient,
+  getErrorMessage,
+  useDaemonHealthQuery,
+  useRotateDashboardTokenMutation,
+  useSetLetsEncryptConfigMutation,
+  useSettingsSummaryQuery,
+} from '../lib/query';
 import { copyText, showToast } from '../lib/shell';
 import ConnectScreen from './ConnectScreen';
 import Icon from './Icon';
@@ -53,74 +50,40 @@ export default function SettingsPage() {
 }
 
 function SettingsInner() {
-  const [state, setState] = useState<SettingsState>(EMPTY_SETTINGS_STATE);
+  const queryClient = useQueryClient();
   const [emailDraft, setEmailDraft] = useState('');
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [health, setHealth] = useState<'online' | 'offline' | 'checking'>('checking');
   const [latestToken, setLatestToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [apps, tls, objectStore, sshKeys, plugins, postgres, redis, mysql] = await Promise.all([
-        fetchApps(),
-        fetchLetsEncryptConfig(),
-        fetchObjectStoreConfig(),
-        fetchSshKeys(),
-        fetchPlugins(),
-        fetchManagedServices('postgres'),
-        fetchManagedServices('redis'),
-        fetchManagedServices('mysql'),
-      ]);
-
-      setState({
-        totalApps: apps.length,
-        tlsEmail: tls.email,
-        tlsConfigured: tls.configured,
-        objectStoreConfigured: objectStore.configured,
-        objectStoreProvider: objectStore.object_store?.provider ?? null,
-        sshKeyCount: sshKeys.length,
-        pluginCount: plugins.length,
-        totalServices: postgres.length + redis.length + mysql.length,
-      });
-      setEmailDraft(tls.email ?? '');
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : 'Unable to load dashboard settings.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const settingsQuery = useSettingsSummaryQuery();
+  const healthQuery = useDaemonHealthQuery({ refetchInterval: 30_000 });
+  const setLetsEncryptConfigMutation = useSetLetsEncryptConfigMutation();
+  const rotateDashboardTokenMutation = useRotateDashboardTokenMutation();
+  const state = settingsQuery.data ?? EMPTY_SETTINGS_STATE;
+  const loading = settingsQuery.isPending;
+  const health =
+    healthQuery.isPending || healthQuery.data === undefined
+      ? 'checking'
+      : healthQuery.data
+        ? 'online'
+        : 'offline';
 
   useEffect(() => {
-    void load();
     setLatestToken(window.sessionStorage.getItem('deku_rotated_token'));
-  }, [load]);
+  }, []);
 
   useEffect(() => {
-    let active = true;
-    const timer = window.setInterval(() => {
-      void pollHealth();
-    }, 30_000);
+    setEmailDraft(state.tlsEmail ?? '');
+  }, [state.tlsEmail]);
 
-    async function pollHealth() {
-      const isOnline = await checkDaemonHealth();
-      if (active) {
-        setHealth(isOnline ? 'online' : 'offline');
-      }
+  useEffect(() => {
+    if (settingsQuery.error) {
+      setError(getErrorMessage(settingsQuery.error, 'Unable to load dashboard settings.'));
+      return;
     }
 
-    void pollHealth();
-
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
+    setError(null);
+  }, [settingsQuery.error]);
 
   const connectionSummary = useMemo(() => {
     if (health === 'online') return 'Connected and reachable';
@@ -143,8 +106,7 @@ function SettingsInner() {
 
     try {
       setBusy('tls-email');
-      await setLetsEncryptConfig(email);
-      await load();
+      await setLetsEncryptConfigMutation.mutateAsync(email);
       showToast({
         title: 'TLS email saved',
         description: `Global Let's Encrypt email updated to ${email}.`,
@@ -169,7 +131,7 @@ function SettingsInner() {
 
     try {
       setBusy('rotate-token');
-      const payload = await rotateDashboardToken();
+      const payload = await rotateDashboardTokenMutation.mutateAsync();
       if (!payload?.token) {
         throw new Error('Daemon did not return a replacement token.');
       }
@@ -177,6 +139,7 @@ function SettingsInner() {
       setToken(payload.token);
       window.sessionStorage.setItem('deku_rotated_token', payload.token);
       setLatestToken(payload.token);
+      await queryClient.invalidateQueries();
       showToast({
         title: 'Access token rotated',
         description:
@@ -210,6 +173,7 @@ function SettingsInner() {
   function handleDisconnect() {
     clearToken();
     window.sessionStorage.removeItem('deku_rotated_token');
+    getDashboardQueryClient().clear();
     setLatestToken(null);
     showToast({
       title: 'Logged out successfully',

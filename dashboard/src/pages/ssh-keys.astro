@@ -1,8 +1,11 @@
 ---
 import SshKeysPage from '../components/SshKeysPage';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / SSH Keys" activeNav="ssh-keys">
-  <SshKeysPage client:load />
+  <DashboardQueryProvider client:load>
+    <SshKeysPage />
+  </DashboardQueryProvider>
 </Shell>

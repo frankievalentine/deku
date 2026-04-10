@@ -1,16 +1,22 @@
-import { type SubmitEvent, useCallback, useEffect, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { type SubmitEvent, useMemo, useState } from 'react';
 import {
   addPortMapping,
   type CertificateStatus,
   disableTls,
   enableTls,
-  fetchAppRoutingStatus,
-  fetchPorts,
-  fetchTlsStatus,
   type PortMapping,
   type RoutingAppStatus,
   removePortMapping,
 } from '../lib/api';
+import {
+  getErrorMessage,
+  getFirstQueryError,
+  invalidateAppRoutingQueries,
+  useAppPortsQuery,
+  useAppRoutingStatusQuery,
+  useAppTlsStatusQuery,
+} from '../lib/query';
 import TableScroll from './TableScroll';
 
 interface AppRoutingPanelProps {
@@ -26,41 +32,58 @@ interface RoutingState {
 }
 
 export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRoutingPanelProps) {
-  const [state, setState] = useState<RoutingState | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [hostPort, setHostPort] = useState('');
   const [containerPort, setContainerPort] = useState('');
+  const portsQuery = useAppPortsQuery(appName, { enabled: Boolean(appName) });
+  const routingQuery = useAppRoutingStatusQuery(appName, { enabled: Boolean(appName) });
+  const tlsQuery = useAppTlsStatusQuery(appName, { enabled: Boolean(appName) });
+  const addPortMutation = useMutation({
+    mutationFn: ({
+      nextHostPort,
+      nextContainerPort,
+    }: {
+      nextHostPort: number;
+      nextContainerPort: number;
+    }) => addPortMapping(appName, nextHostPort, nextContainerPort),
+    onSuccess: async () => {
+      await invalidateAppRoutingQueries(queryClient, appName);
+    },
+  });
+  const removePortMutation = useMutation({
+    mutationFn: (portId: string) => removePortMapping(appName, portId),
+    onSuccess: async () => {
+      await invalidateAppRoutingQueries(queryClient, appName);
+    },
+  });
+  const toggleTlsMutation = useMutation({
+    mutationFn: (enabled: boolean) => (enabled ? disableTls(appName) : enableTls(appName)),
+    onSuccess: async () => {
+      await Promise.all([invalidateAppRoutingQueries(queryClient, appName), onAppRefresh()]);
+    },
+  });
 
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [ports, routingStatus, tlsStatus] = await Promise.all([
-        fetchPorts(appName),
-        fetchAppRoutingStatus(appName),
-        fetchTlsStatus(appName),
-      ]);
-
-      setState({
-        ports,
-        routing: routingStatus.app,
-        tls: tlsStatus,
-      });
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : 'Unable to load routing and TLS state.'
-      );
-    } finally {
-      setLoading(false);
+  const state = useMemo<RoutingState | null>(() => {
+    if (!portsQuery.data || !routingQuery.data || !tlsQuery.data) {
+      return null;
     }
-  }, [appName]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+    return {
+      ports: portsQuery.data,
+      routing: routingQuery.data.app,
+      tls: tlsQuery.data,
+    };
+  }, [portsQuery.data, routingQuery.data, tlsQuery.data]);
+
+  const loading = !state && [portsQuery, routingQuery, tlsQuery].some((query) => query.isPending);
+  const queryError = getFirstQueryError(
+    [portsQuery.error, routingQuery.error, tlsQuery.error],
+    state ? null : 'Unable to load routing and TLS state.'
+  );
+  const error = actionError ?? queryError;
 
   async function handleAddPort(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -68,26 +91,25 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
     const nextContainerPort = Number(containerPort);
 
     if (!Number.isFinite(nextHostPort) || nextHostPort <= 0) {
-      setError('Host port must be a positive number.');
+      setActionError('Host port must be a positive number.');
       return;
     }
 
     if (!Number.isFinite(nextContainerPort) || nextContainerPort <= 0) {
-      setError('Container port must be a positive number.');
+      setActionError('Container port must be a positive number.');
       return;
     }
 
     try {
       setBusy('port-add');
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      await addPortMapping(appName, nextHostPort, nextContainerPort);
+      await addPortMutation.mutateAsync({ nextHostPort, nextContainerPort });
       setHostPort('');
       setContainerPort('');
-      await load();
       setNotice(`Added port ${nextHostPort} -> ${nextContainerPort}.`);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to add port mapping.');
+      setActionError(getErrorMessage(nextError, 'Unable to add port mapping.'));
     } finally {
       setBusy(null);
     }
@@ -96,13 +118,12 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
   async function handleRemovePort(port: PortMapping) {
     try {
       setBusy(`port-remove-${port.id}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
-      await removePortMapping(appName, port.id);
-      await load();
+      await removePortMutation.mutateAsync(port.id);
       setNotice(`Removed port ${port.host_port} -> ${port.container_port}.`);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to remove port mapping.');
+      setActionError(getErrorMessage(nextError, 'Unable to remove port mapping.'));
     } finally {
       setBusy(null);
     }
@@ -113,19 +134,12 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
 
     try {
       setBusy('tls-toggle');
-      setError(null);
+      setActionError(null);
       setNotice(null);
-
-      if (state.tls.enabled) {
-        await disableTls(appName);
-      } else {
-        await enableTls(appName);
-      }
-
-      await Promise.all([load(), onAppRefresh()]);
+      await toggleTlsMutation.mutateAsync(state.tls.enabled);
       setNotice(state.tls.enabled ? 'TLS disabled.' : 'TLS enabled.');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to update TLS.');
+      setActionError(getErrorMessage(nextError, 'Unable to update TLS.'));
     } finally {
       setBusy(null);
     }

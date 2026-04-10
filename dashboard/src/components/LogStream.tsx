@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { appEventStreamUrl, type EventRecord, fetchLogs, getToken } from '../lib/api';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { appEventStreamUrl, type EventRecord, getToken } from '../lib/api';
+import { type AppLogEntry, queryKeys, useAppLogsQuery } from '../lib/query';
 
 interface LogStreamProps {
   appName: string;
@@ -7,48 +9,47 @@ interface LogStreamProps {
 
 type LogTrackingState = 'live' | 'retrying' | 'not_live';
 
-interface LogEntry {
-  id: string;
-  createdAt: string | null;
-  message: string;
-  eventType: string;
-}
-
 export default function LogStream({ appName }: LogStreamProps) {
-  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const queryClient = useQueryClient();
   const [trackingState, setTrackingState] = useState<LogTrackingState>('not_live');
   const [autoScroll, setAutoScroll] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [clearedCount, setClearedCount] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectRef = useRef<number | null>(null);
+  const logsQuery = useAppLogsQuery(appName, 120, { enabled: Boolean(appName) });
+  const cachedEntries = logsQuery.data ?? [];
+  const entries = cachedEntries.slice(Math.min(clearedCount, cachedEntries.length));
+  const entryCount = entries.length;
+  const handleIncomingEvent = useEffectEvent((event: EventRecord) => {
+    const nextEntry = eventToEntry(event);
+    if (nextEntry) {
+      queryClient.setQueryData<AppLogEntry[]>(queryKeys.logs.app(appName, 120), (current = []) => {
+        const capped = current.length >= 500 ? current.slice(-499) : current;
+        return [...capped, nextEntry];
+      });
+    }
+
+    if (isTerminalDeployEvent(event.event_type)) {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.deployments(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.processes(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.scale(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.summary(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.list }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.routing.app(appName) }),
+      ]);
+    }
+  });
 
   useEffect(() => {
     let cancelled = false;
-    setEntries([]);
     setAutoScroll(true);
     setError(null);
     setTrackingState('not_live');
-
-    async function loadRecentLogs() {
-      try {
-        const lines = await fetchLogs(appName, 120);
-        if (cancelled) return;
-        setEntries(
-          lines.map((line, index) => ({
-            id: `tail-${index}-${line}`,
-            createdAt: null,
-            eventType: 'log.tail',
-            message: line,
-          }))
-        );
-      } catch {
-        if (!cancelled) {
-          setError('Unable to load historical logs.');
-        }
-      }
-    }
+    setClearedCount(0);
 
     function connect() {
       if (cancelled) return;
@@ -64,13 +65,7 @@ export default function LogStream({ appName }: LogStreamProps) {
       source.onmessage = (message) => {
         const event = parseEvent(message.data);
         if (!event) return;
-        const nextEntry = eventToEntry(event);
-        if (!nextEntry) return;
-
-        setEntries((current) => {
-          const capped = current.length >= 500 ? current.slice(-499) : current;
-          return [...capped, nextEntry];
-        });
+        handleIncomingEvent(event);
       };
 
       source.onerror = () => {
@@ -84,7 +79,6 @@ export default function LogStream({ appName }: LogStreamProps) {
       };
     }
 
-    void loadRecentLogs();
     connect();
 
     return () => {
@@ -97,10 +91,11 @@ export default function LogStream({ appName }: LogStreamProps) {
   }, [appName]);
 
   useEffect(() => {
+    entryCount;
     if (autoScroll && bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'auto' });
     }
-  }, [autoScroll]);
+  }, [autoScroll, entryCount]);
 
   function handleScroll() {
     if (!containerRef.current) return;
@@ -117,7 +112,8 @@ export default function LogStream({ appName }: LogStreamProps) {
       ? 'Waiting for log events…'
       : trackingState === 'retrying'
         ? 'Retrying live stream…'
-        : (error ?? 'Live tracking is not active.');
+        : (error ??
+          (logsQuery.error ? 'Unable to load historical logs.' : 'Live tracking is not active.'));
 
   return (
     <div className="panel log-panel">
@@ -139,7 +135,11 @@ export default function LogStream({ appName }: LogStreamProps) {
           >
             {autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'}
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setEntries([])} type="button">
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => setClearedCount(cachedEntries.length)}
+            type="button"
+          >
             Clear
           </button>
         </div>
@@ -188,7 +188,7 @@ function parsePayload(payload: string | null | undefined): Record<string, unknow
   }
 }
 
-function eventToEntry(event: EventRecord): LogEntry | null {
+function eventToEntry(event: EventRecord): AppLogEntry | null {
   const payload = parsePayload(event.payload);
   if (typeof payload?.line === 'string') {
     return {
@@ -209,6 +209,12 @@ function eventToEntry(event: EventRecord): LogEntry | null {
   }
 
   return null;
+}
+
+function isTerminalDeployEvent(eventType: string): boolean {
+  return (
+    eventType === 'deploy.live' || eventType === 'deploy.failed' || eventType === 'deploy.rollback'
+  );
 }
 
 function summariseEvent(type: string, payload: Record<string, unknown> | null): string {

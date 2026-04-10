@@ -1,6 +1,13 @@
-import { type SubmitEvent, useCallback, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { type SubmitEvent, useEffect, useRef, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
-import { type App, createApp, deleteApp, fetchApps } from '../lib/api';
+import {
+  getErrorMessage,
+  prefetchAppDetail,
+  useAppsQuery,
+  useCreateAppMutation,
+  useDeleteAppMutation,
+} from '../lib/query';
 import { showToast } from '../lib/shell';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
@@ -34,35 +41,22 @@ export default function AppList() {
 }
 
 function AppListInner() {
-  const [apps, setApps] = useState<App[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [newAppName, setNewAppName] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-
-  const loadApps = useCallback(async () => {
-    try {
-      setLoadError(null);
-      const nextApps = await fetchApps();
-      setApps(nextApps);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Unable to load apps.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadApps();
-    const timer = window.setInterval(() => {
-      void loadApps();
-    }, 20_000);
-    return () => window.clearInterval(timer);
-  }, [loadApps]);
+  const prefetchedAppsRef = useRef<Set<string>>(new Set());
+  const appsQuery = useAppsQuery({ refetchInterval: 20_000 });
+  const createAppMutation = useCreateAppMutation();
+  const deleteAppMutation = useDeleteAppMutation();
+  const apps = appsQuery.data ?? [];
+  const loading = appsQuery.isPending;
+  const loadError = appsQuery.error
+    ? getErrorMessage(appsQuery.error, 'Unable to load apps.')
+    : null;
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -81,18 +75,17 @@ function AppListInner() {
 
     try {
       setSubmitting(true);
-      await createApp(name);
+      await createAppMutation.mutateAsync(name);
       setShowCreate(false);
       setNewAppName('');
       setCreateError(null);
-      await loadApps();
       showToast({
         title: 'App created',
         description: `${name} is now available in the fleet.`,
         variant: 'success',
       });
     } catch (error) {
-      setCreateError(error instanceof Error ? error.message : 'Unable to create app.');
+      setCreateError(getErrorMessage(error, 'Unable to create app.'));
     } finally {
       setSubmitting(false);
     }
@@ -102,19 +95,33 @@ function AppListInner() {
     if (!deleteTarget) return;
     try {
       setDeleting(deleteTarget);
-      await deleteApp(deleteTarget);
+      await deleteAppMutation.mutateAsync(deleteTarget);
       setDeleteTarget(null);
-      await loadApps();
       showToast({
         title: 'App deleted',
         description: `${deleteTarget} was removed from the dashboard.`,
         variant: 'success',
       });
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Unable to delete app.');
+      showToast({
+        title: 'Unable to delete app',
+        description: getErrorMessage(error, 'Deleting failed.'),
+        variant: 'error',
+      });
     } finally {
       setDeleting(null);
     }
+  }
+
+  function handlePrefetchAppDetail(appName: string) {
+    if (prefetchedAppsRef.current.has(appName)) {
+      return;
+    }
+
+    prefetchedAppsRef.current.add(appName);
+    void prefetchAppDetail(queryClient, appName).catch(() => {
+      prefetchedAppsRef.current.delete(appName);
+    });
   }
 
   if (loadError && !loading) {
@@ -219,7 +226,12 @@ function AppListInner() {
             <article key={app.id} className="panel app-card">
               <div className="cluster justify-between align-start">
                 <div className="stack-sm">
-                  <a href={`/app?name=${encodeURIComponent(app.name)}`} className="app-name-link">
+                  <a
+                    href={`/app?name=${encodeURIComponent(app.name)}`}
+                    className="app-name-link"
+                    onMouseEnter={() => handlePrefetchAppDetail(app.name)}
+                    onFocus={() => handlePrefetchAppDetail(app.name)}
+                  >
                     {app.name}
                   </a>
                   <p className="eyebrow">Created {formatRelativeTime(app.created_at)}</p>
@@ -251,6 +263,8 @@ function AppListInner() {
                   <a
                     href={`/app?name=${encodeURIComponent(app.name)}`}
                     className="btn btn-secondary btn-sm"
+                    onMouseEnter={() => handlePrefetchAppDetail(app.name)}
+                    onFocus={() => handlePrefetchAppDetail(app.name)}
                   >
                     Open app
                   </a>

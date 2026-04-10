@@ -1,8 +1,11 @@
 ---
 import DeploymentDetailPage from '../components/DeploymentDetailPage';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Deployments" activeNav="apps">
-  <DeploymentDetailPage client:load />
+  <DashboardQueryProvider client:load>
+    <DeploymentDetailPage />
+  </DashboardQueryProvider>
 </Shell>

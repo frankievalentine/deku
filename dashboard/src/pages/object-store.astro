@@ -1,8 +1,11 @@
 ---
 import ObjectStorePage from '../components/ObjectStorePage';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Object Store" activeNav="object-store">
-  <ObjectStorePage client:load />
+  <DashboardQueryProvider client:load>
+    <ObjectStorePage />
+  </DashboardQueryProvider>
 </Shell>

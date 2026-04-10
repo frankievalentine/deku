@@ -1,8 +1,11 @@
 ---
 import AppList from '../components/AppList';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Apps" activeNav="apps">
-  <AppList client:load />
+  <DashboardQueryProvider client:load>
+    <AppList />
+  </DashboardQueryProvider>
 </Shell>

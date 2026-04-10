@@ -1,8 +1,11 @@
 ---
 import PluginsPage from '../components/PluginsPage';
 import Shell from '../layouts/Shell.astro';
+import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Plugins" activeNav="plugins">
-  <PluginsPage client:load />
+  <DashboardQueryProvider client:load>
+    <PluginsPage />
+  </DashboardQueryProvider>
 </Shell>

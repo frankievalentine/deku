@@ -1,26 +1,32 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { type SubmitEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
-import {
-  type App,
-  addDomain,
-  type ConfigVar,
-  type Deployment,
-  type Domain,
-  deleteConfigVar,
-  fetchApp,
-  fetchConfig,
-  fetchDeployments,
-  fetchDomains,
-  fetchPorts,
-  fetchProcesses,
-  fetchScale,
-  type PortMapping,
-  type ProcessRecord,
-  removeDomain,
-  type ScaleMap,
-  setConfigVar,
-  setScale,
+import type {
+  App,
+  ConfigVar,
+  Deployment,
+  Domain,
+  PortMapping,
+  ProcessRecord,
+  ScaleMap,
 } from '../lib/api';
+import {
+  getErrorMessage,
+  getFirstQueryError,
+  invalidateAppDetailQueries,
+  useAddDomainMutation,
+  useAppConfigQuery,
+  useAppDeploymentsQuery,
+  useAppDomainsQuery,
+  useAppPortsQuery,
+  useAppProcessesQuery,
+  useAppScaleQuery,
+  useAppSummaryQuery,
+  useDeleteConfigVarMutation,
+  useRemoveDomainMutation,
+  useSetConfigVarMutation,
+  useSetScaleMutation,
+} from '../lib/query';
 import AppDeployPanel from './AppDeployPanel';
 import AppInfrastructurePanel from './AppInfrastructurePanel';
 import AppOperationsPanel from './AppOperationsPanel';
@@ -71,11 +77,9 @@ export default function AppDetailPage() {
 }
 
 function AppDetailInner() {
+  const queryClient = useQueryClient();
   const [appName, setAppName] = useState(() => readAppNameFromLocation());
   const [activeTab, setActiveTab] = useState<AppTabId>(() => readTabFromHash(readLocationHash()));
-  const [state, setState] = useState<AppDataState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [flash, setFlash] = useState<FlashMessage | null>(null);
   const [domainDraft, setDomainDraft] = useState('');
   const [configKey, setConfigKey] = useState('');
@@ -83,6 +87,27 @@ function AppDetailInner() {
   const [scaleProcess, setScaleProcess] = useState('web');
   const [scaleCount, setScaleCount] = useState('1');
   const [busy, setBusy] = useState<string | null>(null);
+  const appQuery = useAppSummaryQuery(appName, { enabled: Boolean(appName) });
+  const deploymentsQuery = useAppDeploymentsQuery(appName, {
+    enabled: Boolean(appName),
+    refetchInterval: 15_000,
+  });
+  const domainsQuery = useAppDomainsQuery(appName, { enabled: Boolean(appName) });
+  const portsQuery = useAppPortsQuery(appName, { enabled: Boolean(appName) });
+  const configQuery = useAppConfigQuery(appName, { enabled: Boolean(appName) });
+  const scaleQuery = useAppScaleQuery(appName, {
+    enabled: Boolean(appName),
+    refetchInterval: 15_000,
+  });
+  const processesQuery = useAppProcessesQuery(appName, {
+    enabled: Boolean(appName),
+    refetchInterval: 15_000,
+  });
+  const addDomainMutation = useAddDomainMutation(appName);
+  const removeDomainMutation = useRemoveDomainMutation(appName);
+  const setConfigMutation = useSetConfigVarMutation(appName);
+  const deleteConfigMutation = useDeleteConfigVarMutation(appName);
+  const setScaleMutation = useSetScaleMutation(appName);
 
   useEffect(() => {
     const syncFromLocation = () => {
@@ -100,36 +125,68 @@ function AppDetailInner() {
     };
   }, []);
 
-  const load = useCallback(async () => {
+  const state = useMemo<AppDataState | null>(() => {
+    if (
+      !appQuery.data ||
+      !deploymentsQuery.data ||
+      !domainsQuery.data ||
+      !portsQuery.data ||
+      !configQuery.data ||
+      !scaleQuery.data ||
+      !processesQuery.data
+    ) {
+      return null;
+    }
+
+    return {
+      app: appQuery.data,
+      deployments: deploymentsQuery.data,
+      domains: domainsQuery.data,
+      ports: portsQuery.data,
+      config: configQuery.data,
+      scales: scaleQuery.data,
+      processes: processesQuery.data,
+    };
+  }, [
+    appQuery.data,
+    configQuery.data,
+    deploymentsQuery.data,
+    domainsQuery.data,
+    portsQuery.data,
+    processesQuery.data,
+    scaleQuery.data,
+  ]);
+
+  const loading =
+    Boolean(appName) &&
+    !state &&
+    [
+      appQuery,
+      deploymentsQuery,
+      domainsQuery,
+      portsQuery,
+      configQuery,
+      scaleQuery,
+      processesQuery,
+    ].some((query) => query.isPending);
+
+  const loadError = getFirstQueryError(
+    [
+      appQuery.error,
+      deploymentsQuery.error,
+      domainsQuery.error,
+      portsQuery.error,
+      configQuery.error,
+      scaleQuery.error,
+      processesQuery.error,
+    ],
+    state ? null : 'Unable to load app details.'
+  );
+
+  const refreshApp = useCallback(async () => {
     if (!appName) return;
-    try {
-      setLoading(true);
-      setLoadError(null);
-      const [app, deployments, domains, ports, config, scales, processes] = await Promise.all([
-        fetchApp(appName),
-        fetchDeployments(appName),
-        fetchDomains(appName),
-        fetchPorts(appName),
-        fetchConfig(appName),
-        fetchScale(appName),
-        fetchProcesses(appName),
-      ]);
-      setState({ app, deployments, domains, ports, config, scales, processes });
-    } catch (nextError) {
-      setLoadError(nextError instanceof Error ? nextError.message : 'Unable to load app details.');
-    } finally {
-      setLoading(false);
-    }
-  }, [appName]);
-
-  useEffect(() => {
-    if (!appName) {
-      setLoading(false);
-      return;
-    }
-
-    void load();
-  }, [appName, load]);
+    await invalidateAppDetailQueries(queryClient, appName);
+  }, [appName, queryClient]);
 
   const tabs = useMemo<AppTabDefinition[]>(() => {
     if (!state) {
@@ -191,14 +248,13 @@ function AppDetailInner() {
     try {
       setBusy('domain-add');
       setFlash(null);
-      await addDomain(appName, nextDomain);
+      await addDomainMutation.mutateAsync(nextDomain);
       setDomainDraft('');
-      await load();
       setFlash({ tone: 'success', text: `Added domain ${nextDomain}.` });
     } catch (nextError) {
       setFlash({
         tone: 'danger',
-        text: nextError instanceof Error ? nextError.message : 'Unable to add domain.',
+        text: getErrorMessage(nextError, 'Unable to add domain.'),
       });
     } finally {
       setBusy(null);
@@ -211,13 +267,12 @@ function AppDetailInner() {
     try {
       setBusy(`domain-remove-${domain}`);
       setFlash(null);
-      await removeDomain(appName, domain);
-      await load();
+      await removeDomainMutation.mutateAsync(domain);
       setFlash({ tone: 'success', text: `Removed domain ${domain}.` });
     } catch (nextError) {
       setFlash({
         tone: 'danger',
-        text: nextError instanceof Error ? nextError.message : 'Unable to remove domain.',
+        text: getErrorMessage(nextError, 'Unable to remove domain.'),
       });
     } finally {
       setBusy(null);
@@ -232,15 +287,14 @@ function AppDetailInner() {
     try {
       setBusy('config-set');
       setFlash(null);
-      await setConfigVar(appName, key, configValue);
+      await setConfigMutation.mutateAsync({ key, value: configValue });
       setConfigKey('');
       setConfigValue('');
-      await load();
       setFlash({ tone: 'success', text: `Updated config var ${key}.` });
     } catch (nextError) {
       setFlash({
         tone: 'danger',
-        text: nextError instanceof Error ? nextError.message : 'Unable to set config.',
+        text: getErrorMessage(nextError, 'Unable to set config.'),
       });
     } finally {
       setBusy(null);
@@ -253,13 +307,12 @@ function AppDetailInner() {
     try {
       setBusy(`config-remove-${key}`);
       setFlash(null);
-      await deleteConfigVar(appName, key);
-      await load();
+      await deleteConfigMutation.mutateAsync(key);
       setFlash({ tone: 'success', text: `Removed config var ${key}.` });
     } catch (nextError) {
       setFlash({
         tone: 'danger',
-        text: nextError instanceof Error ? nextError.message : 'Unable to remove config.',
+        text: getErrorMessage(nextError, 'Unable to remove config.'),
       });
     } finally {
       setBusy(null);
@@ -280,16 +333,15 @@ function AppDetailInner() {
     try {
       setBusy('scale-set');
       setFlash(null);
-      await setScale(appName, {
+      await setScaleMutation.mutateAsync({
         ...state.scales,
         [process]: parsedCount,
       });
-      await load();
       setFlash({ tone: 'success', text: `Set ${process} scale to ${parsedCount}.` });
     } catch (nextError) {
       setFlash({
         tone: 'danger',
-        text: nextError instanceof Error ? nextError.message : 'Unable to update scale.',
+        text: getErrorMessage(nextError, 'Unable to update scale.'),
       });
     } finally {
       setBusy(null);
@@ -406,7 +458,7 @@ function AppDetailInner() {
               appName={state.app.name}
               locked={state.app.locked}
               deployments={state.deployments}
-              onRefresh={load}
+              onRefresh={refreshApp}
             />
             <DeploymentHistoryPanel appName={state.app.name} deployments={state.deployments} />
           </div>
@@ -427,7 +479,7 @@ function AppDetailInner() {
               key={`${state.app.name}:${state.domains.length}:${state.app.tls_enabled}`}
               appName={state.app.name}
               locked={state.app.locked}
-              onAppRefresh={load}
+              onAppRefresh={refreshApp}
             />
           </div>
         ) : null}
