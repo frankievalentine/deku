@@ -26,6 +26,7 @@ deku deploy run my-app --path /absolute/path/to/repo/templates/node-express
 | `nextjs` | `dockerfile` | Next.js | `npm` |
 | `nuxt` | `nixpacks` | Nuxt | `bun` |
 | `astro` | `dockerfile` | Astro | `bun` |
+| `emdash-blog` | `dockerfile` | Astro + EmDash | `bun` |
 | `node-express` | `dockerfile` | Node + Express | `npm` |
 | `fastapi` | `dockerfile` | FastAPI | `pip` |
 | `hono` | `dockerfile` | Hono | `bun` |

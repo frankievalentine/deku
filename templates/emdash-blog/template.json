@@ -1,0 +1,15 @@
+{
+  "id": "emdash-blog",
+  "title": "EmDash Blog Starter",
+  "summary": "An Astro + EmDash CMS blog starter for Deku using Bun for builds and SQLite with a persistent storage mount.",
+  "builder": "dockerfile",
+  "stack": "Astro + EmDash",
+  "package_manager": "bun",
+  "last_verified": "2026-04-10",
+  "deploy_path_example": "deku deploy run emdash-demo --path /absolute/path/to/repo/templates/emdash-blog",
+  "healthcheck": "/health",
+  "service_notes": [
+    "This template uses SQLite and local media uploads, so mount persistent storage at /data/emdash before production use.",
+    "Run a single replica while using SQLite; move to Postgres and object storage before horizontal scaling."
+  ]
+}

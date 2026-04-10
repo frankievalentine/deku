@@ -1,8 +1,6 @@
 # Deku
 
-`deku`: 9MB,
-`dekud`: 16MB
-`dashboard bundle`: 848 KB
+<p><sub><code>deku</code>: 9MB, <code>dekud</code>: 16MB, <code>dashboard bundle</code>: 848 KB</sub></p>
 
 Deku is a lightweight self-hosted PaaS for deploying and operating applications on your own server.
 
@@ -22,27 +20,29 @@ The current workflow is intentionally practical:
 - deploy from a source directory or image
 - manage config, domains, TLS, scale, logs, services, storage, networks, and cron from the CLI or dashboard
 
-## What Deku Covers Today
+## What You Can Do With Deku
 
-- App lifecycle: create apps, deploy from source archives or images, inspect deployment history, and roll back
-- Runtime management: config vars, domains, ports, routing, TLS, process scale, logs, networks, storage mounts, and cron entries
-- Built-in managed services: Postgres, Redis, and MySQL
-- Operational visibility: dashboard pages for apps, deployments, routing, services, object store, SSH keys, and plugins
-- Backup and artifact workflows: object-store-backed Postgres and Redis backups plus deploy artifact retention
-- SSH deploy ergonomics: server SSH keys, git remote helpers, and deploy feedback in both CLI and SSH flows
+- App lifecycle: create apps, deploy from source archives or images, inspect deployment history, and roll back when needed
+- Starter templates: begin from local framework templates adapted for Deku deploys
+- Runtime management: manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries
+- Built-in services: provision Postgres, Redis, and MySQL services and link them to apps
+- Operational visibility: use the dashboard for app, routing, service, object-store, SSH-key, and plugin workflows
+- CLI-first workflows: use `deku` from the terminal for setup, deploys, inspection, and automation-friendly operations
 
 ## Quick Start
 
 Requirements:
 
-- Linux server: Ubuntu 22.04+ or Debian 12+
+- Linux server with `apt-get` available
+- Ubuntu 22.04+ or Debian 11+
 - Docker Engine 24+
 - 512 MB RAM minimum
+- root access
 
 Install on the server:
 
 ```bash
-curl -fsSL https://get-deku.vercel.app/install.sh | bash
+curl -fsSL https://get-deku.vercel.app/install.sh | sudo bash
 ```
 
 Uninstall guidance, including `deku uninstall`, lives in [docs/src/content/docs/installation.md](docs/src/content/docs/installation.md).
@@ -82,9 +82,10 @@ That prints:
 
 - the server-reachable dashboard URL
 - the local loopback dashboard URL for on-host access
-- whether dashboard access is configured
+- the config path
+- the token status
 - SSH tunnel and firewall guidance for remote access
-- reset guidance if you need a new token
+- the reset-token command if you need a replacement token
 
 The initial token is shown once during `deku setup` or `deku dashboard reset-token`.
 
@@ -94,6 +95,9 @@ The dashboard and authenticated HTTP API listen on TCP port `2810` by default. I
 
 Current CLI groups include:
 
+- `deku setup`
+- `deku dashboard`
+- `deku uninstall`
 - `deku apps`
 - `deku config`
 - `deku deploy`
@@ -173,8 +177,9 @@ Current additive platform direction:
 - `crates/deku-core`: shared types and auth utilities
 - `dashboard/`: Astro + React dashboard
 - `docs/`: Starlight documentation site
-- `plugins/`: dynamic plugin crates and experiments
+- `plugins/`: first-party plugin crates plus dynamic plugin runtime support
 - `scripts/`: installer, release packaging, and smoke tests
+- `templates/`: local starter app catalog for common framework deploys
 
 ## Documentation
 
@@ -194,9 +199,9 @@ Current additive platform direction:
 Common verification commands:
 
 ```bash
-cargo fmt --all
-cargo check --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --all
 ```
 
 Full local CI gate:
@@ -208,10 +213,13 @@ Full local CI gate:
 Frontend and docs:
 
 ```bash
-cd dashboard && bun run build
+cd dashboard && bun install --frozen-lockfile
+cd dashboard && bun run lint
 cd dashboard && bun run check
-cd docs && bun run build
+cd dashboard && bun run build
+cd docs && bun install --frozen-lockfile
 cd docs && bun run check
+cd docs && bun run build
 ```
 
 The dashboard build output lives in `dashboard/dist`. Packaged installs consume that output through the release `deku-dashboard.tar.gz` artifact rather than embedding a compiled dashboard snapshot into `dekud`.

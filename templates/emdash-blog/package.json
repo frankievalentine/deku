@@ -1,0 +1,34 @@
+{
+  "name": "emdash-demo",
+  "version": "0.0.3",
+  "private": true,
+  "type": "module",
+  "emdash": {
+    "seed": "seed/seed.json"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "start": "node ./dist/server/entry.mjs",
+    "bootstrap": "emdash init && emdash seed",
+    "seed": "emdash seed",
+    "typecheck": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/node": "10.0.4",
+    "@astrojs/react": "5.0.3",
+    "@emdash-cms/plugin-audit-log": "^0.1.0",
+    "@emdash-cms/plugin-color": "^0.1.0",
+    "astro": "6.1.5",
+    "better-sqlite3": "^11.9.1",
+    "emdash": "^0.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.8"
+  },
+  "peerDependencies": {},
+  "optionalDependencies": {}
+}
