@@ -2,7 +2,7 @@
 
 Agent operating guide for Deku.
 
-This file is for coding agents already running in a repo or shell on the same machine as the Deku project or server. It describes what agents should use today, what they should avoid, and the safest default deployment workflow.
+This file is for coding agents already running in a repo or shell on the same machine as the Deku project or server. It describes what agents should use, what they should avoid, and the safest default deployment workflow.
 
 ## Supported Agent Model
 
@@ -10,8 +10,9 @@ This file is for coding agents already running in a repo or shell on the same ma
 - Fallback machine interface: daemon HTTP API with an operator-provisioned dashboard token
 - Preferred deploy path: archive or image deploy via `deku deploy run`
 - Secondary deploy path: `git push` over SSH
+- Default workflow: deploy + inspect
 
-The current v1 agent workflow is **deploy + inspect**, not full autonomous platform administration.
+Use the existing CLI and daemon HTTP API to deploy and inspect apps. Do not treat this file as permission for broad unattended platform administration.
 
 ## Preferred Workflow
 
@@ -144,10 +145,10 @@ If a dependency is missing:
 
 - Do not treat `git push` as the default agent deployment method
 - Do not assume the dynamic plugin runtime is the right integration point for first-party workflows
-- Do not attempt full autonomous platform administration in v1
+- Do not attempt broad unattended platform administration
 - Do not assume MCP exists today
 
-## Scope Boundaries
+## Scope Today
 
 Supported today:
 
@@ -157,15 +158,15 @@ Supported today:
 - domains add / list / remove
 - logs and process inspection
 
-Out of scope for v1:
+Out of scope today:
 
 - plugin authoring via dynamic `cdylib`
 - MCP implementation
 - broad unattended platform administration
 
-## MCP Next
+## MCP Later
 
-MCP is not required for the current v1 agent story because the CLI and daemon HTTP API already cover the target coding-agent workflow.
+MCP is not required for the current agent story because the CLI and daemon HTTP API already cover the target coding-agent workflow.
 
 MCP becomes worthwhile when Deku needs:
 

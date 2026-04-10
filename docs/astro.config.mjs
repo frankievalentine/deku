@@ -21,7 +21,6 @@ export default defineConfig({
         {
           label: 'Getting Started',
           items: [
-            { label: 'Introduction', link: '/introduction/' },
             { label: 'Installation', link: '/installation/' },
             { label: 'Get Started', link: '/get-started/' },
             { label: 'Dashboard Overview', link: '/dashboard-overview/' },
@@ -40,7 +39,7 @@ export default defineConfig({
         {
           label: 'Operations',
           items: [
-            { label: 'Agent Operations', link: '/agent-operations/' },
+            { label: 'AGENTS.md', link: '/agents/' },
           ],
         },
         {

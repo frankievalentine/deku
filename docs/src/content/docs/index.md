@@ -1,10 +1,10 @@
 ---
 title: Deku Documentation
-description: Documentation home for Deku.
+description: What Deku is, what it covers, and where to start.
 template: splash
 hero:
   title: DEKU
-  tagline: Install Deku, deploy your first app, and manage it from the built-in dashboard.
+  tagline: A lightweight self-hosted PaaS for deploying and operating apps on your own server with a CLI and built-in dashboard.
   actions:
     - text: Installation
       link: /installation/
@@ -14,13 +14,20 @@ hero:
       link: /dashboard-overview/
 ---
 
-## Start Here
+## What You Can Do With Deku
 
-- Install Deku on a server with the packaged installer.
-- Save the one-time dashboard token shown during `deku setup`, then use `deku dashboard` for URL and reset guidance later.
-- Create an app, deploy source code or an image, and inspect the result.
-- Manage config, domains, routing, TLS, scale, storage, cron, services, and logs from the dashboard.
-- Use the CLI and HTTP API for automation and agent-driven workflows.
+- **App lifecycle**: create apps, deploy from source archives or images, inspect deployment history, and roll back when needed
+- **Runtime management**: manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries
+- **Built-in services**: provision Postgres, Redis, and MySQL services and link them to apps
+- **Operational visibility**: use the dashboard for app, routing, service, object-store, SSH-key, and plugin workflows
+- **CLI-first workflows**: use `deku` from the terminal for setup, deploys, inspection, and automation-friendly operations
+
+## Typical Workflow
+
+1. Install Deku on a server.
+2. Save the one-time dashboard token shown during setup, then run `deku dashboard` later if you need the URL or reset guidance.
+3. Create an app and deploy it from the CLI.
+4. Open the dashboard to inspect deployments, manage runtime settings, and monitor the host.
 
 ## Key Guides
 
@@ -29,4 +36,4 @@ hero:
 - Read [Dashboard Overview](/dashboard-overview/) before managing apps from the web UI.
 - Read [Architecture](/architecture/) for the CLI, daemon, dashboard-auth, and API model.
 - Use [CLI Reference](/reference/cli-reference/) and [deku.toml](/reference/deku-toml/) when working from the terminal.
-- Follow [Agent Operations](/agent-operations/) for advanced CLI/API-first automation.
+- Use [AGENTS.md](/agents/) for a copyable coding-agent workflow for Deku operations.

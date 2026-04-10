@@ -171,9 +171,6 @@ Current additive platform direction:
 
 ## Documentation
 
-Start here:
-
-- [Introduction](docs/src/content/docs/introduction.md)
 - [Installation](docs/src/content/docs/installation.md)
 - [Get Started](docs/src/content/docs/get-started.md)
 - [Dashboard Overview](docs/src/content/docs/dashboard-overview.md)
@@ -182,7 +179,7 @@ Start here:
 - [API Reference](docs/src/content/docs/reference/api-reference.md)
 - [deku.toml Reference](docs/src/content/docs/reference/deku-toml.md)
 - [Plugin API](docs/src/content/docs/reference/plugin-api.md)
-- [Agent Operations](docs/src/content/docs/agent-operations.md)
+- [AGENTS.md](docs/src/content/docs/agents.md)
 
 ## Development
 
