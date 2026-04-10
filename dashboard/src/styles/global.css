@@ -1215,6 +1215,21 @@ select:focus-visible {
   overflow: auto;
 }
 
+.sidebar-locked-note {
+  display: none;
+  margin: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--sidebar) 88%, var(--color-bg-surface-alt));
+  color: var(--color-text-soft);
+}
+
+.sidebar-locked-note p:last-child {
+  margin: 0;
+  line-height: 1.55;
+}
+
 .nav-link {
   display: flex;
   align-items: center;
@@ -1255,6 +1270,14 @@ select:focus-visible {
 
 #shell-sidebar-footer-controls {
   min-width: 0;
+}
+
+:root[data-dashboard-token-state="locked"] .sidebar-nav {
+  display: none;
+}
+
+:root[data-dashboard-token-state="locked"] .sidebar-locked-note {
+  display: block;
 }
 
 .header {
@@ -1441,6 +1464,15 @@ select:focus-visible {
 .shell-action-button:disabled,
 .shell-action-button-ghost:disabled {
   opacity: 0.55;
+}
+
+.shell-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.6rem;
+  padding-inline: 0.95rem;
+  white-space: nowrap;
 }
 
 .token-action-row .shell-action-button:not(:disabled) {

@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { type SubmitEvent, useEffect, useMemo, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
-import { clearToken, setToken } from '../lib/api';
+import { clearToken, getDashboardBuildVersion, setToken } from '../lib/api';
 import {
   getDashboardQueryClient,
   getErrorMessage,
@@ -9,6 +9,7 @@ import {
   useRotateDashboardTokenMutation,
   useSetLetsEncryptConfigMutation,
   useSettingsSummaryQuery,
+  useVersionStatusQuery,
 } from '../lib/query';
 import { copyText, showToast } from '../lib/shell';
 import ConnectScreen from './ConnectScreen';
@@ -57,10 +58,16 @@ function SettingsInner() {
   const [error, setError] = useState<string | null>(null);
   const settingsQuery = useSettingsSummaryQuery();
   const healthQuery = useDaemonHealthQuery({ refetchInterval: 30_000 });
+  const versionQuery = useVersionStatusQuery({ refetchInterval: 300_000 });
   const setLetsEncryptConfigMutation = useSetLetsEncryptConfigMutation();
   const rotateDashboardTokenMutation = useRotateDashboardTokenMutation();
   const state = settingsQuery.data ?? EMPTY_SETTINGS_STATE;
   const loading = settingsQuery.isPending;
+  const versionStatus = versionQuery.data;
+  const versionError = versionQuery.error
+    ? getErrorMessage(versionQuery.error, 'Unable to load release status.')
+    : null;
+  const dashboardBuildVersion = useMemo(() => getDashboardBuildVersion() ?? 'v0.1.9', []);
   const health =
     healthQuery.isPending || healthQuery.data === undefined
       ? 'checking'
@@ -90,6 +97,16 @@ function SettingsInner() {
     if (health === 'offline') return 'Token present, daemon unreachable';
     return 'Checking daemon health';
   }, [health]);
+
+  const releaseSummary = useMemo(() => {
+    if (versionError) return 'Unable to load release status';
+    if (!versionStatus) return 'Checking for updates';
+    if (versionStatus.status === 'error') return 'Unable to check GitHub releases';
+    if (versionStatus.update_available) {
+      return `Update available: ${versionStatus.current_version} -> ${versionStatus.latest_version}`;
+    }
+    return `Running the latest release (${versionStatus.current_version})`;
+  }, [versionError, versionStatus]);
 
   async function handleSaveEmail(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -277,6 +294,55 @@ function SettingsInner() {
           ) : (
             <p className="text-muted">No newly rotated token is cached in this browser session.</p>
           )}
+        </article>
+
+        <article className="panel stack-md">
+          <div className="stack-sm">
+            <p className="eyebrow">Release</p>
+            <h2 className="section-title">Installed version and updates</h2>
+            <p className="page-copy">
+              Deku checks GitHub Releases server-side and surfaces update availability here.
+            </p>
+          </div>
+
+          <div className="data-grid">
+            <div>
+              <dt>Installed</dt>
+              <dd>{versionStatus?.current_version ?? 'Checking…'}</dd>
+            </div>
+            <div>
+              <dt>Latest release</dt>
+              <dd>{versionStatus?.latest_version ?? 'Unavailable'}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>{releaseSummary}</dd>
+            </div>
+            <div>
+              <dt>Dashboard build</dt>
+              <dd>{dashboardBuildVersion}</dd>
+            </div>
+          </div>
+
+          {versionStatus?.update_available ? (
+            <p className="callout callout-warning">
+              A newer Deku release is available. Upgrade from {versionStatus.current_version} to{' '}
+              {versionStatus.latest_version}.
+            </p>
+          ) : null}
+
+          {versionError ? <p className="callout callout-warning">{versionError}</p> : null}
+
+          {versionStatus?.status === 'error' ? (
+            <p className="callout callout-warning">
+              Unable to check for updates right now.
+              {versionStatus.error ? ` ${versionStatus.error}` : ''}
+            </p>
+          ) : null}
+
+          {!versionStatus?.update_available && versionStatus?.status === 'ok' ? (
+            <p className="text-muted">This host is already on the latest published Deku release.</p>
+          ) : null}
         </article>
 
         <article className="panel stack-md">

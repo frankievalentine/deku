@@ -3,12 +3,28 @@ import { getToken, TOKEN_CHANGE_EVENT } from '../lib/api';
 
 export type TokenAccessState = 'unknown' | 'connected' | 'locked';
 
+function readInitialTokenAccess(): TokenAccessState {
+  if (typeof document !== 'undefined') {
+    return document.documentElement.dataset.dashboardTokenState === 'connected'
+      ? 'connected'
+      : 'locked';
+  }
+
+  if (typeof window !== 'undefined') {
+    return getToken() ? 'connected' : 'locked';
+  }
+
+  return 'locked';
+}
+
 export function useTokenAccess(): TokenAccessState {
-  const [tokenAccess, setTokenAccess] = useState<TokenAccessState>('unknown');
+  const [tokenAccess, setTokenAccess] = useState<TokenAccessState>(readInitialTokenAccess);
 
   useEffect(() => {
     function syncToken() {
-      setTokenAccess(getToken() ? 'connected' : 'locked');
+      const nextTokenAccess = getToken() ? 'connected' : 'locked';
+      document.documentElement.dataset.dashboardTokenState = nextTokenAccess;
+      setTokenAccess(nextTokenAccess);
     }
 
     syncToken();

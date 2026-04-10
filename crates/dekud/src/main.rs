@@ -13,6 +13,7 @@ mod plugins;
 mod proxy;
 mod services;
 mod ssh;
+mod version;
 
 #[tokio::main]
 async fn main() -> Result<()> {

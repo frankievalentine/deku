@@ -11,6 +11,7 @@ const {
   title = 'Deku Dashboard',
   description = 'Industrial control surface for managing self-hosted Deku apps.',
 } = Astro.props;
+const dashboardBuildVersion = import.meta.env.PUBLIC_DEKU_RELEASE_VERSION ?? 'v0.1.9';
 ---
 
 <!doctype html>
@@ -36,9 +37,12 @@ const {
       document.documentElement.classList.toggle('dark', resolved === 'dark');
       document.documentElement.dataset.themeMode = mode;
       document.documentElement.style.colorScheme = resolved;
+      document.documentElement.dataset.dashboardTokenState = window.localStorage.getItem('deku_token')
+        ? 'connected'
+        : 'locked';
     </script>
   </head>
-  <body>
+  <body data-dashboard-build-version={dashboardBuildVersion}>
     <slot />
     <ShellController client:load />
     <script>

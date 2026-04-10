@@ -41,6 +41,7 @@ import {
   fetchServiceBackups,
   fetchSshKeys,
   fetchTlsStatus,
+  fetchVersionStatus,
   linkManagedService,
   type ManagedServiceDetail,
   type ManagedServiceKind,
@@ -124,6 +125,7 @@ export const queryKeys = {
   settings: {
     summary: ['settings', 'summary'] as const,
     health: ['settings', 'health'] as const,
+    version: ['settings', 'version'] as const,
   },
   sshKeys: {
     list: ['ssh-keys', 'list'] as const,
@@ -418,6 +420,15 @@ export function daemonHealthQueryOptions(options?: QueryHookOptions) {
   });
 }
 
+export function versionStatusQueryOptions(options?: QueryHookOptions) {
+  return queryOptions({
+    queryKey: queryKeys.settings.version,
+    queryFn: fetchVersionStatus,
+    enabled: options?.enabled,
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
 export function useAppLogsQuery(appName: string, tailSize: number, options?: QueryEnabledOnly) {
   return useQuery(appLogsQueryOptions(appName, tailSize, options));
 }
@@ -500,6 +511,10 @@ export function useSettingsSummaryQuery(options?: QueryEnabledOnly) {
 
 export function useDaemonHealthQuery(options?: QueryHookOptions) {
   return useQuery(daemonHealthQueryOptions(options));
+}
+
+export function useVersionStatusQuery(options?: QueryHookOptions) {
+  return useQuery(versionStatusQueryOptions(options));
 }
 
 export async function prefetchAppDetail(

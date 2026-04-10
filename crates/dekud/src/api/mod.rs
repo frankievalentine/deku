@@ -27,6 +27,7 @@ use crate::container::DockerClient;
 use crate::db::queries;
 use crate::deploy::{DeployRequest, DeploySource};
 use crate::events::EventSender;
+use crate::version::{self, CachedVersionStatus};
 use deku_core::{
     auth::{issue_dashboard_token, DashboardTokenState},
     types::{NewApp, ObjectStoreConfig, Upstream},
@@ -40,6 +41,7 @@ mod services;
 pub struct AppState {
     pub config: DekuConfig,
     pub dashboard_auth: RwLock<Option<DashboardTokenState>>,
+    pub version_status: RwLock<Option<CachedVersionStatus>>,
     pub pool: SqlitePool,
     pub events: EventSender,
     pub docker: DockerClient,
@@ -56,6 +58,7 @@ impl AppState {
     ) -> Arc<Self> {
         Arc::new(Self {
             dashboard_auth: RwLock::new(config.dashboard_auth.clone()),
+            version_status: RwLock::new(None),
             config,
             pool,
             events,
@@ -128,6 +131,7 @@ fn build_api_router(state: SharedState) -> Router {
         .route("/api/objectstore/test", post(test_object_store_config))
         // Dashboard auth
         .route("/api/dashboard/token", post(rotate_dashboard_token))
+        .route("/api/version", get(get_version_status))
         // Archive deploy
         .route("/api/apps/{name}/deploy/archive", post(deploy_archive))
         // Postgres
@@ -392,6 +396,13 @@ async fn rotate_dashboard_token(State(state): State<SharedState>) -> impl IntoRe
     match rotate_dashboard_token_inner(&state).await {
         Ok(token) => (StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response(),
         Err(e) => internal_error(e).into_response(),
+    }
+}
+
+async fn get_version_status(State(state): State<SharedState>) -> impl IntoResponse {
+    match version::resolve_version_status(&state.version_status).await {
+        Ok(status) => (StatusCode::OK, Json(status)).into_response(),
+        Err(error) => internal_error(error).into_response(),
     }
 }
 

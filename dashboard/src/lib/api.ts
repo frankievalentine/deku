@@ -242,6 +242,14 @@ export interface ProcessRecord {
 
 export type ScaleMap = Record<string, number>;
 
+export interface VersionStatus {
+  current_version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  status: 'ok' | 'error';
+  error: string | null;
+}
+
 export function getToken(): string | null {
   if (typeof window === 'undefined') return null;
   return window.localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -260,6 +268,11 @@ export function setToken(token: string): void {
 export function clearToken(): void {
   window.localStorage.removeItem(TOKEN_STORAGE_KEY);
   notifyTokenChange();
+}
+
+export function getDashboardBuildVersion(): string | null {
+  if (typeof document === 'undefined') return null;
+  return document.body.dataset.dashboardBuildVersion ?? null;
 }
 
 async function apiFetch<T>(
@@ -320,6 +333,10 @@ export async function checkDaemonHealth(tokenOverride?: string): Promise<boolean
 
 export function rotateDashboardToken(): Promise<{ token: string }> {
   return apiFetch<{ token: string }>('/api/dashboard/token', { method: 'POST' });
+}
+
+export function fetchVersionStatus(): Promise<VersionStatus> {
+  return apiFetch<VersionStatus>('/api/version');
 }
 
 export function fetchApps(): Promise<App[]> {

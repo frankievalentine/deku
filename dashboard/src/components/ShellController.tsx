@@ -3,10 +3,12 @@ import { createPortal } from 'react-dom';
 import {
   checkDaemonHealth,
   clearToken,
+  fetchVersionStatus,
   getToken,
   rotateDashboardToken,
   setToken,
   TOKEN_CHANGE_EVENT,
+  type VersionStatus,
 } from '../lib/api';
 import { type CommandItem, flushQueuedToasts, NAV_ITEMS, showToast } from '../lib/shell';
 import {
@@ -51,6 +53,7 @@ export default function ShellController() {
   const [hasToken, setHasToken] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
   const [isApplePlatform, setIsApplePlatform] = useState(false);
+  const [versionStatus, setVersionStatus] = useState<VersionStatus | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -139,6 +142,10 @@ export default function ShellController() {
       window.sessionStorage.removeItem(CONNECTION_STATE_STORAGE_KEY);
     }
   }, [connectionState]);
+
+  useEffect(() => {
+    document.documentElement.dataset.dashboardTokenState = hasToken ? 'connected' : 'locked';
+  }, [hasToken]);
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1024px)');
@@ -235,6 +242,42 @@ export default function ShellController() {
       setCommandOpen(false);
     }
   }, [commandOpen, hasToken]);
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+
+    async function loadVersionStatus() {
+      if (!hasToken) {
+        if (active) setVersionStatus(null);
+        return;
+      }
+
+      try {
+        const nextStatus = await fetchVersionStatus();
+        if (active) setVersionStatus(nextStatus);
+      } catch (error) {
+        if (!active) return;
+        setVersionStatus({
+          current_version: '',
+          latest_version: null,
+          update_available: false,
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Unable to check for updates.',
+        });
+      }
+    }
+
+    void loadVersionStatus();
+    timer = window.setInterval(() => {
+      void loadVersionStatus();
+    }, 300_000);
+
+    return () => {
+      active = false;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [hasToken]);
 
   const commandItems = useMemo<CommandItem[]>(
     () => [
@@ -414,6 +457,7 @@ export default function ShellController() {
           }}
           onRotateToken={() => void handleRotateToken()}
           rotating={rotating}
+          versionStatus={versionStatus}
         />,
         headerRoot
       )
@@ -578,6 +622,7 @@ interface HeaderControlsProps {
   hasToken: boolean;
   isApplePlatform: boolean;
   rotating: boolean;
+  versionStatus: VersionStatus | null;
   onToggleSidebar: () => void;
   onOpenCommand: () => void;
   onRotateToken: () => void;
@@ -590,6 +635,7 @@ function HeaderControls({
   hasToken,
   isApplePlatform,
   rotating,
+  versionStatus,
   onToggleSidebar,
   onOpenCommand,
   onRotateToken,
@@ -666,6 +712,28 @@ function HeaderControls({
         <Icon name="disconnect" size={16} />
         <span className="shell-action-label">Disconnect</span>
       </button>
+
+      {hasToken && versionStatus?.update_available ? (
+        <a
+          href="/settings"
+          className="btn-outline shell-status-pill"
+          title={`Update available: ${versionStatus.current_version} -> ${versionStatus.latest_version}`}
+        >
+          <Icon name="rotate" size={16} />
+          <span>Update {versionStatus.latest_version}</span>
+        </a>
+      ) : null}
+
+      {hasToken && versionStatus?.status === 'error' ? (
+        <a
+          href="/settings"
+          className="btn-outline shell-status-pill"
+          title={versionStatus.error ?? 'Unable to check for updates'}
+        >
+          <Icon name="settings" size={16} />
+          <span>Updates unavailable</span>
+        </a>
+      ) : null}
 
       <div
         className={`health-indicator ${commandOpen ? 'is-command-open' : ''}`}
