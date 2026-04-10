@@ -32,18 +32,18 @@ worker = 2
 ## Build
 
 - `builder`: `dockerfile | nixpacks | pack | image | auto`
-- `dockerfile`: override Dockerfile path
-- `context`: build context directory
-- `build.args`: build-time environment passed to the builder
+- `dockerfile`: Override Dockerfile path
+- `context`: Build context directory
+- `build.args`: Build-time environment passed to the builder
 
 ## Deploy
 
 - `healthcheck`: HTTP path used during rollout validation
-- `port`: override the auto-detected web container port
-- `wait`: seconds to wait before health checks start
-- `timeout`: per-attempt health-check timeout
-- `attempts`: number of health-check retries
-- `retire`: seconds before old containers are retired
+- `port`: Override the auto-detected web container port
+- `wait`: Seconds to wait before health checks start
+- `timeout`: Per-attempt health-check timeout
+- `attempts`: Number of health-check retries
+- `retire`: Seconds before old containers are retired
 
 These settings are applied by the live deploy pipeline in `dekud`, not just documented metadata.
 

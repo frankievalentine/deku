@@ -20,12 +20,12 @@ Use the GitHub repository for issues, pull requests, and release history.
 ## Repository Areas
 
 - `crates/deku`: CLI commands and client behavior
-- `crates/dekud`: daemon, HTTP API, deploy pipeline, routing, and host integration
-- `crates/deku-core`: shared types and auth utilities
+- `crates/dekud`: Daemon, HTTP API, deploy pipeline, routing, and host integration
+- `crates/deku-core`: Shared types and auth utilities
 - `dashboard/`: Astro + React dashboard
 - `docs/`: Starlight documentation site
-- `plugins/`: first-party plugin crates
-- `scripts/`: installer, release packaging, smoke tests, and local CI helpers
+- `plugins/`: First-party plugin crates
+- `scripts/`: Installer, release packaging, smoke tests, and local CI helpers
 
 ## Recommended Workflow
 

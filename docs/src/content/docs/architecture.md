@@ -20,24 +20,24 @@ Deku is built from a small Rust-first platform stack:
 
 Deku currently consists of two binaries:
 
-- `deku`: the CLI used for setup, dashboard access details, deploys, inspection, and day-to-day terminal workflows
-- `dekud`: the server daemon that manages app state, serves the dashboard, exposes the authenticated HTTP API, and streams logs and events
+- `deku`: The CLI used for setup, dashboard access details, deploys, inspection, and day-to-day terminal workflows
+- `dekud`: The server daemon that manages app state, serves the dashboard, exposes the authenticated HTTP API, and streams logs and events
 
 ## Authentication Model
 
-- local `deku` CLI commands prefer the trusted Unix socket and do not depend on a plaintext token file
-- dashboard and direct TCP API access use the same opaque dashboard token
-- the token is shown once during setup or reset, then stored only as an Argon2id hash in config
-- the dashboard stores the token in the browser after the first sign-in
+- Local `deku` CLI commands prefer the trusted Unix socket and do not depend on a plaintext token file
+- Dashboard and direct TCP API access use the same opaque dashboard token
+- The token is shown once during setup or reset, then stored only as an Argon2id hash in config
+- The dashboard stores the token in the browser after the first sign-in
 - `deku dashboard reset-token` rotates the token and invalidates previous browser sessions
 
 ## API and Event Model
 
 `dekud` exposes:
 
-- authenticated HTTP API routes for apps, deploys, config, domains, routing, services, storage, object store, SSH keys, plugins, and related host operations
-- server-sent event streams for deploy and runtime event output
-- log endpoints for apps and managed services
+- Authenticated HTTP API routes for apps, deploys, config, domains, routing, services, storage, object store, SSH keys, plugins, and related host operations
+- Server-sent event streams for deploy and runtime event output
+- Log endpoints for apps and managed services
 
 The dashboard consumes those APIs directly over TCP bearer auth. The CLI uses the same API surface locally over the trusted Unix socket.
 
@@ -49,7 +49,7 @@ The current server runtime includes:
 - Docker Engine for app and service containers
 - Angie for routing and TLS
 - SQLite for persisted platform state
-- the packaged dashboard bundle served by the daemon
+- The packaged dashboard bundle served by the daemon
 
 ## Source Checkout Workflow
 

@@ -22,7 +22,7 @@ The current plugin descriptor model provides:
 
 - `name()`
 - `version()`
-- optional hook factories for lifecycle integration
+- Optional hook factories for lifecycle integration
 
 Current hook categories in the daemon:
 
@@ -52,13 +52,13 @@ This means the native plugin API is real, but it is not the only or primary deli
 
 The repository currently contains first-party plugin crates for:
 
-- postgres
-- redis
-- mysql
-- letsencrypt
-- checks
-- storage
-- network
-- cron
-- git
-- domains
+- Postgres
+- Redis
+- MySQL
+- Let's Encrypt
+- Checks
+- Storage
+- Network
+- Cron
+- Git
+- Domains

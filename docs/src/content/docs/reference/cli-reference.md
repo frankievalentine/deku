@@ -66,7 +66,7 @@ Current release-facing `deku` command surface.
 
 - `deploy run <app> [--path .] [--image img] [--builder b]`
 - With `--image`: POST to `/api/apps/:name/deploy`
-- Without: tar.gz source directory, POST multipart to `/api/apps/:name/deploy/archive`
+- Without: Tar.gz source directory, POST multipart to `/api/apps/:name/deploy/archive`
 - Streams SSE deploy log to terminal
 - `deploy list <app>` — tabular deployment history
 - `deploy rollback <app> [--to <id>]`
@@ -118,15 +118,15 @@ Current release-facing `deku` command surface.
 
 ### `deku postgres`
 
-- create, destroy, link, unlink, list, info, connect, logs, backup, backups, restore
+- Create, destroy, link, unlink, list, info, connect, logs, backup, backups, restore
 
 ### `deku redis`
 
-- create, destroy, link, unlink, list, info, connect, logs, backup, backups, restore
+- Create, destroy, link, unlink, list, info, connect, logs, backup, backups, restore
 
 ### `deku mysql`
 
-- create, destroy, link, unlink, list, info, connect, logs
+- Create, destroy, link, unlink, list, info, connect, logs
 
 ### `deku network`
 

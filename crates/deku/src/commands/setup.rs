@@ -27,6 +27,10 @@ pub struct SetupArgs {
     pub angie_conf_dir: Option<String>,
     #[arg(long)]
     pub global_domain: Option<String>,
+    #[arg(long, hide = true)]
+    pub installer: bool,
+    #[arg(long, hide = true)]
+    pub token_output: Option<PathBuf>,
 }
 
 pub fn run(args: SetupArgs) -> Result<()> {
@@ -151,6 +155,13 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let (dashboard_token, dashboard_auth) =
         issue_dashboard_token(Utc::now(), existing_dashboard_auth.as_ref())?;
 
+    if let Some(path) = &args.token_output {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, format!("{dashboard_token}\n"))?;
+    }
+
     let cfg = LocalDekuConfig {
         data_dir: Some(PathBuf::from(&data_dir)),
         api_port: Some(api_port),
@@ -188,9 +199,12 @@ pub fn run(args: SetupArgs) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     let _ = skip_systemd;
 
+    if args.installer {
+        return Ok(());
+    }
+
     println!();
     print_token_notice(&cfg, &dashboard_token, false);
-    println!("Config file:      {}", normalize_path_string(&config_path));
     println!(
         "Dashboard assets: {}",
         normalize_path_string(&cfg.dashboard_dir_path())

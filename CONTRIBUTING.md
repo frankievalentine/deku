@@ -9,10 +9,10 @@ This document covers the recommended workflow for contributing code, docs, and f
 
 Contributions should improve:
 
-- correctness
-- operator experience
-- user-facing clarity
-- maintainability of the CLI, daemon, dashboard, docs, and installer
+- Correctness
+- Operator experience
+- User-facing clarity
+- Maintainability of the CLI, daemon, dashboard, docs, and installer
 
 ## Repository Areas
 

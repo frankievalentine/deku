@@ -14,24 +14,24 @@ If an agent needs a known-good starter app quickly, use the local [App Templates
 Defaults:
 
 - Primary interface: `deku` CLI
-- Fallback machine interface: daemon HTTP API with an operator-provisioned dashboard token
-- Preferred deploy method: archive or image deploy via CLI or HTTP API
+- Fallback machine interface: Daemon HTTP API with an operator-provisioned dashboard token
+- Preferred deploy method: Archive or image deploy via CLI or HTTP API
 - Secondary deploy method: `git push` over SSH
-- Supported operator model: coding agents running in a shell or repo
-- Supported workflow class: deploy + inspect
+- Supported operator model: Coding agents running in a shell or repo
+- Supported workflow class: Deploy + inspect
 
 Supported today:
 
-- app create / inspect
-- config set / list / unset
-- deploy run / list / rollback
-- domains add / list / remove
-- logs and process/status inspection
+- App create / inspect
+- Config set / list / unset
+- Deploy run / list / rollback
+- Domains add / list / remove
+- Logs and process/status inspection
 
 Out of scope today:
 
-- full autonomous platform administration
-- dynamic plugin authoring
+- Full autonomous platform administration
+- Dynamic plugin authoring
 - MCP implementation
 
 ## Why CLI + API First
@@ -40,9 +40,9 @@ The CLI and daemon API already cover the core workflow agents need today.
 
 For most agent-driven deployments, archive and image deploys are a better fit than `git push` because they are:
 
-- easier to script deterministically
-- easier to reason about from an agent loop
-- easier to inspect and retry
+- Easier to script deterministically
+- Easier to reason about from an agent loop
+- Easier to inspect and retry
 
 SSH `git push` deploys remain supported, but they are not the recommended default path for agents.
 
@@ -93,9 +93,9 @@ deku deploy run agent-demo --path /absolute/path/to/repo/templates/django
 
 These starters are adapted for Deku:
 
-- they use Deku-supported `dockerfile` or `nixpacks` builders
-- they expect Deku-managed services instead of bundled sidecars
-- they stay local to the repo so agents can inspect and modify them directly
+- They use Deku-supported `dockerfile` or `nixpacks` builders
+- They expect Deku-managed services instead of bundled sidecars
+- They stay local to the repo so agents can inspect and modify them directly
 
 ## CLI Workflow Examples
 
@@ -213,20 +213,20 @@ curl -H "Authorization: Bearer ${TOKEN}" \
 
 Use the CLI when:
 
-- the agent already has shell access
-- the workflow benefits from built-in command ergonomics
-- source archive deploy is needed
+- The agent already has shell access
+- The workflow benefits from built-in command ergonomics
+- Source archive deploy is needed
 
 Use the HTTP API when:
 
-- the agent needs machine-structured output directly
-- the workflow is built around authenticated HTTP calls
-- app inspection or control loops are easier through JSON responses
+- The agent needs machine-structured output directly
+- The workflow is built around authenticated HTTP calls
+- App inspection or control loops are easier through JSON responses
 
 Use SSH `git push` when:
 
-- you explicitly want to exercise the Git remote deploy path
-- the workflow is already organized around server-side Git remotes
+- You explicitly want to exercise the Git remote deploy path
+- The workflow is already organized around server-side Git remotes
 
 Do not make SSH `git push` the default path for agents.
 
@@ -234,37 +234,37 @@ Do not make SSH `git push` the default path for agents.
 
 If the daemon is missing or unreachable:
 
-- verify `dekud` is running
-- verify you have a valid dashboard token if you are using direct HTTP
-- verify authenticated requests to `/api/apps` succeed
+- Verify `dekud` is running
+- Verify you have a valid dashboard token if you are using direct HTTP
+- Verify authenticated requests to `/api/apps` succeed
 
 If the app does not exist:
 
-- create it before attempting config or deploy operations
+- Create it before attempting config or deploy operations
 
 If a deploy fails:
 
-- inspect `deku deploy list <app>`
-- inspect `deku logs <app> -n 100`
-- confirm app config and domains are correct
+- Inspect `deku deploy list <app>`
+- Inspect `deku logs <app> -n 100`
+- Confirm app config and domains are correct
 
 If domains or config do not match expectations:
 
-- re-read app info and config
-- treat CLI/API output as the source of truth
+- Re-read app info and config
+- Treat CLI/API output as the source of truth
 
 If a service dependency is missing:
 
-- verify object store, managed services, or other optional integrations before depending on them
-- treat missing integrations as preconditions, not implicit defaults
+- Verify object store, managed services, or other optional integrations before depending on them
+- Treat missing integrations as preconditions, not implicit defaults
 
 ## Current Limitations
 
 The current product shape still has important constraints:
 
-- the dashboard is useful, but the agent contract is CLI/API-first
-- dynamic plugin support exists, but it is not the primary first-party integration model
-- installation and packaging are still maturing
+- The dashboard is useful, but the agent contract is CLI/API-first
+- Dynamic plugin support exists, but it is not the primary first-party integration model
+- Installation and packaging are still maturing
 
 ## MCP Later
 
@@ -272,24 +272,24 @@ MCP is not required for the current agent workflow because the CLI and daemon HT
 
 MCP becomes worthwhile when Deku needs:
 
-- external assistants without shell access
-- richer machine-readable resource discovery
-- structured tool invocation across apps, deploy, config, domains, logs, and deployments
+- External assistants without shell access
+- Richer machine-readable resource discovery
+- Structured tool invocation across apps, deploy, config, domains, logs, and deployments
 
 If Deku adds MCP later, the first MCP server should expose only stable platform primitives:
 
-- apps
-- deploy
-- config
-- domains
-- logs
-- deployments
+- Apps
+- Deploy
+- Config
+- Domains
+- Logs
+- Deployments
 
 The first MCP design should not include dynamic plugin surfaces.
 
 Start MCP-later work only after:
 
-- start only after the CLI/API workflow documented here is stable and verified
+- Start only after the CLI/API workflow documented here is stable and verified
 
 ## AGENTS.md
 
@@ -303,10 +303,10 @@ This file is for coding agents already running in a repo or shell on the same ma
 ## Supported Agent Model
 
 - Primary interface: `deku` CLI
-- Fallback machine interface: daemon HTTP API with an operator-provisioned dashboard token
-- Preferred deploy path: archive or image deploy via `deku deploy run`
+- Fallback machine interface: Daemon HTTP API with an operator-provisioned dashboard token
+- Preferred deploy path: Archive or image deploy via `deku deploy run`
 - Secondary deploy path: `git push` over SSH
-- Default workflow: deploy + inspect
+- Default workflow: Deploy + inspect
 
 Use the existing CLI and daemon HTTP API to deploy and inspect apps. Do not treat this file as permission for broad unattended platform administration.
 
@@ -355,9 +355,9 @@ deku deploy run <app> --path /absolute/path/to/repo/templates/django
 
 The templates are adapted for Deku:
 
-- use Deku-supported `dockerfile` or `nixpacks` builders
-- expect Deku-managed services instead of bundled sidecars
-- stay local to the repo so agents can copy or inspect them directly
+- Use Deku-supported `dockerfile` or `nixpacks` builders
+- Expect Deku-managed services instead of bundled sidecars
+- Stay local to the repo so agents can copy or inspect them directly
 
 ## Recommended Commands
 
@@ -436,24 +436,24 @@ curl -H "Authorization: Bearer ${TOKEN}" \
 
 If `dekud` is unavailable:
 
-- verify the daemon is running
-- verify you have a valid dashboard token if you are using direct HTTP
-- verify authenticated API requests return HTTP 200
+- Verify the daemon is running
+- Verify you have a valid dashboard token if you are using direct HTTP
+- Verify authenticated API requests return HTTP 200
 
 If an app does not exist:
 
-- create it with `deku apps create <app>`
+- Create it with `deku apps create <app>`
 
 If a deploy fails:
 
-- inspect `deku deploy list <app>`
-- inspect `deku logs <app> -n 100`
-- confirm config vars, domains, and process scale are correct
+- Inspect `deku deploy list <app>`
+- Inspect `deku logs <app> -n 100`
+- Confirm config vars, domains, and process scale are correct
 
 If a dependency is missing:
 
-- object store, managed services, or other optional integrations should be treated as preconditions
-- do not assume they are configured; verify first
+- Object store, managed services, or other optional integrations should be treated as preconditions
+- Do not assume they are configured; verify first
 
 ## What Not To Do
 
@@ -466,17 +466,17 @@ If a dependency is missing:
 
 Supported today:
 
-- app create / inspect
-- config set / list / unset
-- deploy run / list / rollback
-- domains add / list / remove
-- logs and process inspection
+- App create / inspect
+- Config set / list / unset
+- Deploy run / list / rollback
+- Domains add / list / remove
+- Logs and process inspection
 
 Out of scope today:
 
-- plugin authoring via dynamic `cdylib`
+- Plugin authoring via dynamic `cdylib`
 - MCP implementation
-- broad unattended platform administration
+- Broad unattended platform administration
 
 ## MCP Later
 
@@ -484,18 +484,18 @@ MCP is not required for the current agent story because the CLI and daemon HTTP 
 
 MCP becomes worthwhile when Deku needs:
 
-- external assistants without shell access
-- richer machine-readable resource discovery
-- structured tool calls across apps, deploy, config, domains, logs, and deployments
+- External assistants without shell access
+- Richer machine-readable resource discovery
+- Structured tool calls across apps, deploy, config, domains, logs, and deployments
 
 If MCP is added later, the first server should expose only stable platform primitives:
 
-- apps
-- deploy
-- config
-- domains
-- logs
-- deployments
+- Apps
+- Deploy
+- Config
+- Domains
+- Logs
+- Deployments
 
 Do not include dynamic plugin surfaces in the first MCP design.
 ````

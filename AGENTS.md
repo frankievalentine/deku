@@ -59,9 +59,9 @@ deku deploy run <app> --path /absolute/path/to/repo/templates/django
 
 The templates are adapted for Deku:
 
-- use Deku-supported `dockerfile` or `nixpacks` builders
-- expect Deku-managed services instead of bundled sidecars
-- stay local to the repo so agents can copy or inspect them directly
+- Use Deku-supported `dockerfile` or `nixpacks` builders
+- Expect Deku-managed services instead of bundled sidecars
+- Stay local to the repo so agents can copy or inspect them directly
 
 ## Recommended Commands
 
@@ -140,24 +140,24 @@ curl -H "Authorization: Bearer ${TOKEN}" \
 
 If `dekud` is unavailable:
 
-- verify the daemon is running
-- verify you have a valid dashboard token if you are using direct HTTP
-- verify authenticated API requests return HTTP 200
+- Verify the daemon is running
+- Verify you have a valid dashboard token if you are using direct HTTP
+- Verify authenticated API requests return HTTP 200
 
 If an app does not exist:
 
-- create it with `deku apps create <app>`
+- Create it with `deku apps create <app>`
 
 If a deploy fails:
 
-- inspect `deku deploy list <app>`
-- inspect `deku logs <app> -n 100`
-- confirm config vars, domains, and process scale are correct
+- Inspect `deku deploy list <app>`
+- Inspect `deku logs <app> -n 100`
+- Confirm config vars, domains, and process scale are correct
 
 If a dependency is missing:
 
-- object store, managed services, or other optional integrations should be treated as preconditions
-- do not assume they are configured; verify first
+- Object store, managed services, or other optional integrations should be treated as preconditions
+- Do not assume they are configured; verify first
 
 ## What Not To Do
 
@@ -170,17 +170,17 @@ If a dependency is missing:
 
 Supported today:
 
-- app create / inspect
-- config set / list / unset
-- deploy run / list / rollback
-- domains add / list / remove
-- logs and process inspection
+- App create / inspect
+- Config set / list / unset
+- Deploy run / list / rollback
+- Domains add / list / remove
+- Logs and process inspection
 
 Out of scope today:
 
-- plugin authoring via dynamic `cdylib`
+- Plugin authoring via dynamic `cdylib`
 - MCP implementation
-- broad unattended platform administration
+- Broad unattended platform administration
 
 ## MCP Later
 
@@ -188,17 +188,17 @@ MCP is not required for the current agent story because the CLI and daemon HTTP 
 
 MCP becomes worthwhile when Deku needs:
 
-- external assistants without shell access
-- richer machine-readable resource discovery
-- structured tool calls across apps, deploy, config, domains, logs, and deployments
+- External assistants without shell access
+- Richer machine-readable resource discovery
+- Structured tool calls across apps, deploy, config, domains, logs, and deployments
 
 If MCP is added later, the first server should expose only stable platform primitives:
 
-- apps
-- deploy
-- config
-- domains
-- logs
-- deployments
+- Apps
+- Deploy
+- Config
+- Domains
+- Logs
+- Deployments
 
 Do not include dynamic plugin surfaces in the first MCP design.

@@ -18,12 +18,12 @@ hero:
 
 ## What You Can Do With Deku
 
-- **App lifecycle**: create apps, deploy from source archives or images, inspect deployment history, and roll back when needed
-- **Starter templates**: begin from local framework templates adapted for Deku deploys
-- **Runtime management**: manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries
-- **Built-in services**: provision Postgres, Redis, and MySQL services and link them to apps
-- **Operational visibility**: use the dashboard for app, routing, service, object-store, SSH-key, and plugin workflows
-- **CLI-first workflows**: use `deku` from the terminal for setup, deploys, inspection, and automation-friendly operations
+- **App lifecycle**: Create apps, deploy from source archives or images, inspect deployment history, and roll back when needed
+- **Starter templates**: Begin from local framework templates adapted for Deku deploys
+- **Runtime management**: Manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries
+- **Built-in services**: Provision Postgres, Redis, and MySQL services and link them to apps
+- **Operational visibility**: Use the dashboard for app, routing, service, object-store, SSH-key, and plugin workflows
+- **CLI-first workflows**: Use `deku` from the terminal for setup, deploys, inspection, and automation-friendly operations
 
 ## Typical Workflow
 

@@ -16,15 +16,18 @@ DEKU_DATA_DIR="${DEKU_DATA_DIR:-${CONFIG_DIR}}"
 
 TMP_DIR="$(mktemp -d)"
 CHECKSUMS_FILE="${TMP_DIR}/SHA256SUMS"
+SETUP_RAN=0
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  COLOR_BOLD=$'\033[1m'
   COLOR_BLUE=$'\033[1;34m'
   COLOR_GREEN=$'\033[1;32m'
   COLOR_YELLOW=$'\033[1;33m'
   COLOR_RED=$'\033[1;31m'
   COLOR_RESET=$'\033[0m'
 else
+  COLOR_BOLD=""
   COLOR_BLUE=""
   COLOR_GREEN=""
   COLOR_YELLOW=""
@@ -38,6 +41,14 @@ log() {
 
 success() {
   printf '%b%s%b\n' "$COLOR_GREEN" "$*" "$COLOR_RESET"
+}
+
+important() {
+  printf '%b%s%b\n' "$COLOR_RED" "$*" "$COLOR_RESET"
+}
+
+bold() {
+  printf '%b%s%b' "$COLOR_BOLD" "$*" "$COLOR_RESET"
 }
 
 warn() {
@@ -158,6 +169,12 @@ download_checksums() {
   return 1
 }
 
+download_dashboard_bundle() {
+  log "Installing dashboard assets"
+  download_artifact "deku-dashboard.tar.gz" "${TMP_DIR}/deku-dashboard.tar.gz"
+  verify_artifact "deku-dashboard.tar.gz" "${TMP_DIR}/deku-dashboard.tar.gz"
+}
+
 verify_artifact() {
   local artifact="$1"
   local dest="$2"
@@ -261,6 +278,7 @@ can_prompt_setup() {
 
 run_setup() {
   if [[ -f "${CONFIG_DIR}/config.toml" ]]; then
+    SETUP_RAN=0
     log "Config already exists; keeping current settings"
     return
   fi
@@ -268,6 +286,8 @@ run_setup() {
   local cmd=(
     "${INSTALL_DIR}/deku" setup
     --no-systemd
+    --installer
+    --token-output "${TMP_DIR}/dashboard-token"
   )
 
   if [[ "${DEKU_DATA_DIR}" != "${CONFIG_DIR}" ]]; then
@@ -291,13 +311,39 @@ run_setup() {
   fi
 
   if can_prompt_setup; then
+    SETUP_RAN=1
     log "Launching deku setup"
     "${cmd[@]}" </dev/tty
   else
+    SETUP_RAN=1
     log "Running deku setup with defaults"
     warn "No interactive terminal detected; run \`deku setup\` later to customize settings."
     "${cmd[@]}" --defaults
   fi
+}
+
+detect_dashboard_host() {
+  if [[ -n "${DEKU_DASHBOARD_HOST:-}" ]]; then
+    printf '%s\n' "${DEKU_DASHBOARD_HOST}"
+    return
+  fi
+
+  local host_ip=""
+
+  if command -v ip >/dev/null 2>&1; then
+    host_ip="$(ip -4 route get 192.0.2.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+  fi
+
+  if [[ -z "$host_ip" ]] && command -v hostname >/dev/null 2>&1; then
+    host_ip="$(hostname -I 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+(\.[0-9]+){3}$/ && $i !~ /^127\./) { print $i; exit }}')"
+  fi
+
+  if [[ -n "$host_ip" ]]; then
+    printf '%s\n' "$host_ip"
+    return
+  fi
+
+  printf '127.0.0.1\n'
 }
 
 configured_data_dir() {
@@ -356,9 +402,6 @@ install_dashboard_assets() {
   local dashboard_dir="${data_dir}/dashboard"
   local staging_dir="${TMP_DIR}/dashboard"
 
-  log "Installing dashboard assets"
-  download_artifact "deku-dashboard.tar.gz" "${TMP_DIR}/deku-dashboard.tar.gz"
-  verify_artifact "deku-dashboard.tar.gz" "${TMP_DIR}/deku-dashboard.tar.gz"
   mkdir -p "$staging_dir"
   tar -xzf "${TMP_DIR}/deku-dashboard.tar.gz" -C "$staging_dir"
   rm -rf "${dashboard_dir}.previous"
@@ -453,9 +496,37 @@ warn_if_missing_docker() {
   fi
 }
 
+print_setup_summary() {
+  local api_port="$1"
+  local dashboard_token="$2"
+  local dashboard_host="$3"
+  printf '\n'
+  success "Deku successfully installed."
+  printf '\n'
+
+  if [[ -n "$dashboard_token" ]]; then
+    important "Save this dashboard token now. It will only be shown once."
+    important "The token is stored hashed at rest and cannot be recovered later."
+    printf '\n'
+    printf 'Dashboard token: %s\n' "$dashboard_token"
+  fi
+
+  printf 'Dashboard URL: %s\n' "$(bold "http://${dashboard_host}:${api_port}")"
+  printf 'Local URL:     %s\n' "$(bold "http://127.0.0.1:${api_port}")"
+  printf 'SSH tunnel:    ssh -L %s:127.0.0.1:%s root@%s\n' "$api_port" "$api_port" "$dashboard_host"
+}
+
+print_get_started() {
+  printf 'Get started:\n'
+  printf '  deku apps create my-app\n'
+  printf '  deku deploy run my-app --path /absolute/path/to/app\n'
+}
+
 main() {
   require_linux
   require_root
+  SETUP_RAN=0
+  rm -f "${TMP_DIR}/dashboard-token"
 
   local arch
   arch="$(detect_arch)"
@@ -466,6 +537,7 @@ main() {
   install_angie
   install_binaries "$arch"
   write_systemd_unit
+  download_dashboard_bundle
   run_setup
 
   local data_dir
@@ -480,15 +552,25 @@ main() {
   verify_installation "$data_dir" "$api_port" "$ssh_port"
   warn_if_missing_docker
 
+  local dashboard_host
+  dashboard_host="$(detect_dashboard_host)"
+  local dashboard_token=""
+  if [[ -f "${TMP_DIR}/dashboard-token" ]]; then
+    dashboard_token="$(tr -d '\r\n' < "${TMP_DIR}/dashboard-token")"
+  fi
+
+  if [[ "$SETUP_RAN" == "1" ]]; then
+    print_setup_summary "$api_port" "$dashboard_token" "$dashboard_host"
+  else
+    printf '\n'
+    success "Deku successfully installed."
+    printf '\n'
+    printf 'Dashboard URL: %s\n' "$(bold "http://${dashboard_host}:${api_port}")"
+    printf 'Local URL:     %s\n' "$(bold "http://127.0.0.1:${api_port}")"
+    printf 'SSH tunnel:    ssh -L %s:127.0.0.1:%s root@%s\n' "$api_port" "$api_port" "$dashboard_host"
+  fi
   printf '\n'
-  printf 'Config:        %s/config.toml\n' "$CONFIG_DIR"
-  printf 'Dashboard:     deku dashboard\n'
-  printf 'Token reset:   deku dashboard reset-token\n'
-  printf 'SSH port:      %s\n' "$ssh_port"
-  printf 'Get started:   deku apps create my-app\n'
-  printf '               deku deploy run my-app --path /absolute/path/to/app\n'
-  printf '\n'
-  success "Deku successfully installed."
+  print_get_started
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

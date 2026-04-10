@@ -7,9 +7,9 @@ Deku ships a local starter catalog in the repository under `templates/`.
 
 Each starter is a local source directory shaped for Deku's own deploy model:
 
-- they use Deku-supported `dockerfile` or `nixpacks` builders
-- they expect Deku-managed services instead of bundled sidecars
-- they stay small enough to inspect, copy, and modify directly
+- They use Deku-supported `dockerfile` or `nixpacks` builders
+- They expect Deku-managed services instead of bundled sidecars
+- They stay small enough to inspect, copy, and modify directly
 - Bun is used in the starters where it fits naturally without making the deploy path harder to reason about
 
 If you already cloned the repository, copy the directory you want from `templates/<name>`. If you are browsing the public docs, use the GitHub links below.
@@ -32,9 +32,9 @@ Plain App Router starter with standalone output.
 - Repo directory: [templates/nextjs](https://github.com/frankievalentine/deku/tree/main/templates/nextjs)
 - Builder: `dockerfile`
 - Package manager: `npm`
-- Best for: full-stack React apps and SSR routes
+- Best for: Full-stack React apps and SSR routes
 - Health check: `/health`
-- Pair with: managed services through framework-standard env vars
+- Pair with: Managed services through framework-standard env vars
 
 ```bash
 deku deploy run nextjs-demo --path /absolute/path/to/repo/templates/nextjs
@@ -62,9 +62,9 @@ Static Astro site served from a production container.
 - Repo directory: [templates/astro](https://github.com/frankievalentine/deku/tree/main/templates/astro)
 - Builder: `dockerfile`
 - Package manager: `bun`
-- Best for: docs, marketing sites, and content-heavy frontends
+- Best for: Docs, marketing sites, and content-heavy frontends
 - Health check: `/health/`
-- Pair with: no backing service by default
+- Pair with: No backing service by default
 
 ```bash
 deku deploy run astro-demo --path /absolute/path/to/repo/templates/astro
@@ -107,7 +107,7 @@ Small Bun-native API starter with a minimal Hono server and health route.
 - Repo directory: [templates/hono](https://github.com/frankievalentine/deku/tree/main/templates/hono)
 - Builder: `dockerfile`
 - Package manager: `bun`
-- Best for: lightweight APIs and webhook services
+- Best for: Lightweight APIs and webhook services
 - Health check: `/health`
 - Pair with: `deku postgres` or `deku redis`
 
@@ -122,9 +122,9 @@ React single-page app built with Vite and Bun, then served from Nginx.
 - Repo directory: [templates/vite-react](https://github.com/frankievalentine/deku/tree/main/templates/vite-react)
 - Builder: `dockerfile`
 - Package manager: `bun`
-- Best for: frontend-only apps and dashboards backed by another API
+- Best for: Frontend-only apps and dashboards backed by another API
 - Health check: `/health`
-- Pair with: another Deku app or external API
+- Pair with: Another Deku app or external API
 
 ```bash
 deku deploy run vite-demo --path /absolute/path/to/repo/templates/vite-react
@@ -139,7 +139,7 @@ Django starter that defaults to SQLite for the first deploy and can switch to a 
 - Repo directory: [templates/django](https://github.com/frankievalentine/deku/tree/main/templates/django)
 - Builder: `nixpacks`
 - Package manager: `pip`
-- Best for: traditional server-rendered apps and admin-heavy backends
+- Best for: Traditional server-rendered apps and admin-heavy backends
 - Health check: `/health`
 - Pair with: `deku postgres` when you outgrow SQLite
 
@@ -156,7 +156,7 @@ Clean SSR-capable Nuxt starter with an explicit production start command.
 - Package manager: `bun`
 - Best for: Vue SSR apps and content-rich product applications
 - Health check: `/api/health`
-- Pair with: managed services through runtime config and env vars
+- Pair with: Managed services through runtime config and env vars
 
 ```bash
 deku deploy run nuxt-demo --path /absolute/path/to/repo/templates/nuxt
@@ -164,14 +164,14 @@ deku deploy run nuxt-demo --path /absolute/path/to/repo/templates/nuxt
 
 ## Managed Service Pairings
 
-- Django: default SQLite; pair with `deku postgres` when you want a managed relational database
-- Laravel: pair with `deku postgres`, `deku mysql`, or `deku redis` as the app grows
-- FastAPI: pair with `deku postgres` when you need persistent data
-- Hono: pair with `deku postgres` or `deku redis` when you need persistence
-- Node Express: pair with `deku postgres` or `deku redis` for stateful workloads
-- Next.js and Nuxt: add Deku-managed services through framework-standard environment variables as needed
-- Vite React: static by default; pair it with another Deku app when you need an API
-- Astro: static by default; no backing service required
+- Django: Default SQLite; pair with `deku postgres` when you want a managed relational database
+- Laravel: Pair with `deku postgres`, `deku mysql`, or `deku redis` as the app grows
+- FastAPI: Pair with `deku postgres` when you need persistent data
+- Hono: Pair with `deku postgres` or `deku redis` when you need persistence
+- Node Express: Pair with `deku postgres` or `deku redis` for stateful workloads
+- Next.js and Nuxt: Add Deku-managed services through framework-standard environment variables as needed
+- Vite React: Static by default; pair it with another Deku app when you need an API
+- Astro: Static by default; no backing service required
 
 ## Selection Notes
 

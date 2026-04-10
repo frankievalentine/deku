@@ -11,7 +11,7 @@ Use this flow to install the packaged Deku release on a Linux server.
 - Ubuntu 22.04+ or Debian 11+
 - Docker Engine 24+
 - 512 MB RAM minimum
-- root access
+- Root access
 
 ## One-line Install
 
@@ -41,11 +41,11 @@ If the installer has an interactive TTY, `deku setup` prompts for values like da
 
 The install and setup flow gives you the dashboard access details you need:
 
-- the server-reachable dashboard URL
-- the local loopback dashboard URL for on-host access
-- a one-time dashboard token shown during `deku setup`
-- the `deku dashboard` command you can run later for non-secret access details
-- the `deku dashboard reset-token` command to mint a new token if the original is lost
+- The server-reachable dashboard URL
+- The local loopback dashboard URL for on-host access
+- A one-time dashboard token shown during `deku setup`
+- The `deku dashboard` command you can run later for non-secret access details
+- The `deku dashboard reset-token` command to mint a new token if the original is lost
 
 If `~/.deku/config.toml` already exists, the installer keeps the current config instead of rerunning setup.
 
@@ -67,12 +67,12 @@ deku apps info <app>
 
 `deku dashboard` prints:
 
-- the server-reachable dashboard URL
-- the local loopback dashboard URL
-- the config path
-- token status
+- The server-reachable dashboard URL
+- The local loopback dashboard URL
+- The config path
+- Token status
 - SSH tunnel and firewall guidance for remote access
-- the reset-token command if you need a replacement token
+- The reset-token command if you need a replacement token
 
 ## Dashboard Reachability
 
@@ -82,9 +82,9 @@ If your browser is running on the Deku host itself, use the local URL printed by
 
 If your browser is running on another machine, either:
 
-- use an SSH tunnel, which is the recommended default:
+- Use an SSH tunnel, which is the recommended default:
   `ssh -L 2810:127.0.0.1:2810 root@YOUR_SERVER_IP`
-- or allow TCP `2810` through your firewall for direct browser access:
+- Or allow TCP `2810` through your firewall for direct browser access:
   `sudo ufw allow 2810/tcp`
 
 If you expose `2810` directly, prefer restricting it to your own public IP instead of opening it to the world:
