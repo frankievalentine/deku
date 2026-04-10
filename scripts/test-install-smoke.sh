@@ -376,6 +376,18 @@ verify_artifact() {
   [[ -n "$expected" ]]
   [[ "$actual" == "$expected" ]]
 }
+resolve_dist_release_version() {
+  local arch artifact version
+
+  arch="$(detect_arch)"
+  artifact="${CURRENT_RELEASE_DIR}/deku-linux-${arch}"
+  [[ -x "$artifact" ]] || fail "missing executable release artifact for ${arch}: ${artifact}"
+
+  version="$("$artifact" version | head -n 1)"
+  [[ -n "$version" ]] || fail "unable to read version from ${artifact}"
+
+  normalize_version_string "$version"
+}
 resolve_requested_version() {
   case "${CURRENT_RELEASE_DIR}" in
     *"/fixtures/v1") echo "v1.0.0" ;;
@@ -384,7 +396,7 @@ resolve_requested_version() {
       if [[ -n "${DEKU_INSTALL_SMOKE_RESOLVED_VERSION:-}" ]]; then
         echo "${DEKU_INSTALL_SMOKE_RESOLVED_VERSION}"
       else
-        echo "v9.9.9"
+        resolve_dist_release_version
       fi
       ;;
   esac
