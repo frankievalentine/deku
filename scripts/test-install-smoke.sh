@@ -462,16 +462,25 @@ cmp -s "${DEKU_CONFIG_DIR}/config.toml" "${TEST_ROOT}/config.first"
 if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
   [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
 fi
-[[ "$second_output" != *"Dashboard token:"* ]]
-[[ "$second_output" == *"Config already exists; keeping current settings"* ]]
-[[ "$second_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
-[[ "$second_output" == *"Local URL:     http://127.0.0.1:2810"* ]]
-[[ "$second_output" == *"SSH tunnel:    ssh -L 2810:127.0.0.1:2810 root@203.0.113.10"* ]]
-[[ "$second_output" != *"Dashboard assets:"* ]]
-[[ "$second_output" != *"Setup complete."* ]]
-[[ "$second_output" != *"Reset command:"* ]]
-[[ "$second_output" != *"Token reset:"* ]]
-[[ "$second_output" == *"Deku successfully installed."* ]]
+if [[ -z "$DIST_RELEASE_DIR" ]]; then
+  [[ "$second_output" != *"Dashboard token:"* ]]
+  [[ "$second_output" == *"Config already exists; keeping current settings"* ]]
+  [[ "$second_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
+  [[ "$second_output" == *"Local URL:     http://127.0.0.1:2810"* ]]
+  [[ "$second_output" == *"SSH tunnel:    ssh -L 2810:127.0.0.1:2810 root@203.0.113.10"* ]]
+  [[ "$second_output" != *"Dashboard assets:"* ]]
+  [[ "$second_output" != *"Setup complete."* ]]
+  [[ "$second_output" != *"Reset command:"* ]]
+  [[ "$second_output" != *"Token reset:"* ]]
+  [[ "$second_output" == *"Deku successfully installed."* ]]
+else
+  [[ "$second_output" == *"Deku is already installed and at the latest version."* ]]
+  [[ "$second_output" != *"Deku successfully installed."* ]]
+  [[ "$second_output" != *"Config already exists; keeping current settings"* ]]
+  [[ "$second_output" != *"Dashboard URL:"* ]]
+  [[ "$second_output" != *"Local URL:"* ]]
+  [[ "$second_output" != *"SSH tunnel:"* ]]
+fi
 
 third_restart_count="$(wc -l < "${DEKU_SYSTEMCTL_LOG_FILE}")"
 third_installed_version="$("${INSTALL_DIR}/deku" version)"
