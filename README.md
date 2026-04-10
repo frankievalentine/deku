@@ -37,7 +37,7 @@ Requirements:
 Install on the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/frankievalentine/deku/main/scripts/install.sh | bash
+curl -fsSL https://deku.vercel.app/install.sh | bash
 ```
 
 Uninstall guidance, including `deku uninstall`, lives in [docs/src/content/docs/installation.md](docs/src/content/docs/installation.md).
@@ -205,10 +205,35 @@ Frontend and docs:
 ```bash
 cd dashboard && bun run build
 cd dashboard && bun run check
+cd docs && bun run build
 cd docs && bun run check
 ```
 
 The dashboard build output lives in `dashboard/dist`. Packaged installs consume that output through the release `deku-dashboard.tar.gz` artifact rather than embedding a compiled dashboard snapshot into `dekud`.
+
+## Vercel Docs Deploy
+
+The `docs/` app is the Vercel-friendly part of this repository.
+
+When creating the Vercel project, set the root directory to `docs`. The checked-in
+`docs/vercel.json` pins the expected install, build, and output settings for that
+subproject.
+
+Recommended project settings:
+
+- Root Directory: `docs`
+- Framework Preset: `Astro`
+- Install Command: `bun install --frozen-lockfile`
+- Build Command: `bun run build`
+- Output Directory: `dist`
+- Production URL: `https://deku.vercel.app`
+
+Optional environment variables for the docs chat pane:
+
+- `PAGE_DOC_CHAT_ENABLED=1` to enable the chat UI
+- `PAGE_BASE` to set the chat backend base URL
+- `PUBLIC_DOC_CHAT_PROVIDER` to select `openai`, `claude`, or `gemini`
+- `PUBLIC_DOC_CHAT_MODEL` to set the displayed model identifier
 
 Installer smoke coverage:
 

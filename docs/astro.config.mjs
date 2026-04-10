@@ -3,6 +3,7 @@ import starlight from '@astrojs/starlight';
 import pagePlugin from '@pelagornis/page';
 
 export default defineConfig({
+  site: 'https://deku.vercel.app',
   integrations: [
     starlight({
       plugins: [pagePlugin()],
