@@ -14,9 +14,12 @@ hero:
       link: /dashboard-overview/
 ---
 
+<p class="docs-footprint-note"><code>deku</code>: 9MB, <code>dekud</code>: 16MB, <code>dashboard bundle</code>: 848 KB</p>
+
 ## What You Can Do With Deku
 
 - **App lifecycle**: create apps, deploy from source archives or images, inspect deployment history, and roll back when needed
+- **Starter templates**: begin from local framework templates adapted for Deku deploys
 - **Runtime management**: manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries
 - **Built-in services**: provision Postgres, Redis, and MySQL services and link them to apps
 - **Operational visibility**: use the dashboard for app, routing, service, object-store, SSH-key, and plugin workflows
@@ -33,6 +36,7 @@ hero:
 
 - Start with [Installation](/installation/).
 - Follow [Get Started](/get-started/) for the first app and first deploy workflow.
+- Use [App Templates](/app-templates/) when you want a local starter app directory to deploy right away.
 - Read [Dashboard Overview](/dashboard-overview/) before managing apps from the web UI.
 - Read [Architecture](/architecture/) for the CLI, daemon, dashboard-auth, and API model.
 - Use [CLI Reference](/reference/cli-reference/) and [deku.toml](/reference/deku-toml/) when working from the terminal.

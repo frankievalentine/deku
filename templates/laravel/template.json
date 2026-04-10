@@ -1,0 +1,14 @@
+{
+  "id": "laravel",
+  "title": "Laravel Starter",
+  "summary": "A Dockerfile-driven Laravel starter for Deku that overlays local routes and views onto a fresh framework skeleton during build.",
+  "builder": "dockerfile",
+  "stack": "Laravel",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run laravel-demo --path /absolute/path/to/repo/templates/laravel",
+  "healthcheck": "/health",
+  "service_notes": [
+    "The image build creates the framework skeleton and applies local overrides.",
+    "Use deku postgres, deku mysql, or deku redis instead of sidecars."
+  ]
+}

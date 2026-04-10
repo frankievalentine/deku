@@ -5,6 +5,8 @@ description: What the Deku dashboard covers and how to use it.
 
 The dashboard is the main web interface for operating apps and host-level features in Deku.
 
+It is served directly by `dekud` from the configured dashboard directory. In the packaged install path, the installer stages the built dashboard assets for you from the release bundle.
+
 ## Accessing the Dashboard
 
 Run:
@@ -13,7 +15,15 @@ Run:
 deku dashboard
 ```
 
-That command prints a server-reachable dashboard URL, a local loopback URL, and remote-access guidance. If your browser is on another machine, either use the printed SSH tunnel command or make TCP port `2810` reachable through your firewall. Then open the dashboard URL in a browser and sign in with the one-time dashboard token shown during `deku setup` or a later `deku dashboard reset-token`.
+That command prints:
+
+- the server-reachable dashboard URL derived from local CLI config and host IP detection
+- the local loopback dashboard URL for on-host access
+- whether dashboard access is configured
+- SSH tunnel and firewall guidance for remote access
+- the reset command if a replacement token is needed
+
+If your browser is on another machine, either use the printed SSH tunnel command or make TCP port `2810` reachable through your firewall. Then open the dashboard URL in a browser and sign in with the one-time dashboard token shown during `deku setup` or a later `deku dashboard reset-token`.
 
 ## Pages and Workflows
 

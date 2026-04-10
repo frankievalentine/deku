@@ -29,3 +29,17 @@ body {
 .page-content .sl-markdown-content :is(code, kbd, samp, pre) {
   font-family: var(--deku-font-mono);
 }
+
+.page-content .sl-markdown-content .docs-footprint-note,
+.page-content-panel .docs-footprint-note {
+  margin: -1.4rem 0 1rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--sl-color-text-accent) 55%, var(--sl-color-white));
+  letter-spacing: 0.01em;
+}
+
+.page-content .sl-markdown-content .docs-footprint-note code,
+.page-content-panel .docs-footprint-note code {
+  font-size: 0.95em;
+}

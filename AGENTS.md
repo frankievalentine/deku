@@ -45,6 +45,24 @@ If the app does not exist, create it first:
 deku apps create <app>
 ```
 
+## Starter App Catalog
+
+If you need a known-good starter app quickly, check the local `templates/` directory in this repository before building from scratch.
+
+Examples:
+
+```bash
+deku deploy run <app> --path /absolute/path/to/repo/templates/node-express
+deku deploy run <app> --path /absolute/path/to/repo/templates/nextjs
+deku deploy run <app> --path /absolute/path/to/repo/templates/django
+```
+
+The templates are adapted for Deku:
+
+- use Deku-supported `dockerfile` or `nixpacks` builders
+- expect Deku-managed services instead of bundled sidecars
+- stay local to the repo so agents can copy or inspect them directly
+
 ## Recommended Commands
 
 Create or inspect app state:

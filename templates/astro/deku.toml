@@ -1,0 +1,11 @@
+[build]
+builder = "dockerfile"
+dockerfile = "Dockerfile"
+context = "."
+
+[deploy]
+healthcheck = "/health/"
+port = 80
+wait = 5
+timeout = 30
+attempts = 5

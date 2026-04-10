@@ -1,0 +1,14 @@
+{
+  "id": "nextjs",
+  "title": "Next.js Starter",
+  "summary": "A plain Next.js App Router starter for Deku with standalone output and a production Dockerfile.",
+  "builder": "dockerfile",
+  "stack": "Next.js",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run nextjs-demo --path /absolute/path/to/repo/templates/nextjs",
+  "healthcheck": "/health",
+  "service_notes": [
+    "Standalone output keeps the runtime image small.",
+    "Add managed services later by wiring standard environment variables."
+  ]
+}

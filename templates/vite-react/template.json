@@ -1,0 +1,15 @@
+{
+  "id": "vite-react",
+  "title": "Vite React Starter",
+  "summary": "A Vite React SPA starter for Deku using Bun for installation and build.",
+  "builder": "dockerfile",
+  "stack": "Vite + React",
+  "package_manager": "bun",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run vite-demo --path /absolute/path/to/repo/templates/vite-react",
+  "healthcheck": "/health",
+  "service_notes": [
+    "This is a static frontend starter with no backing service dependency.",
+    "Add API dependencies separately or pair it with another Deku app."
+  ]
+}

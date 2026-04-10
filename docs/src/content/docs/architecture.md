@@ -3,30 +3,25 @@ title: Architecture
 description: How the CLI, daemon, dashboard, token, and APIs fit together.
 ---
 
+Runtime view of how the CLI, daemon, dashboard, and host services fit together.
+
+## Tech Stack
+
+Deku is built from a small Rust-first platform stack:
+
+- [Rust](https://www.rust-lang.org/) for the `deku` CLI, the `dekud` daemon, shared core types, and plugin interfaces
+- [Astro](https://astro.build/) for the dashboard and documentation frontends
+- [Docker Engine](https://www.docker.com/) for app builds, app containers, and managed service containers
+- [Angie](https://angie.software/) for HTTP routing, reverse proxying, and TLS termination
+- [SQLite](https://www.sqlite.org/) for persisted platform state on the host
+- [Bun](https://bun.sh/) for frontend package management and dashboard/docs build workflows in a source checkout
+
 ## Core Components
 
 Deku currently consists of two binaries:
 
 - `deku`: the CLI used for setup, dashboard access details, deploys, inspection, and day-to-day terminal workflows
 - `dekud`: the server daemon that manages app state, serves the dashboard, exposes the authenticated HTTP API, and streams logs and events
-
-## Dashboard Delivery
-
-The dashboard is served by `dekud` from the configured dashboard directory. In the packaged install path, the installer stages the built dashboard assets for you from the release bundle.
-
-When you run:
-
-```bash
-deku dashboard
-```
-
-the CLI prints:
-
-- the server-reachable dashboard URL derived from local CLI config and host IP detection
-- the local loopback dashboard URL for on-host access
-- whether dashboard access is configured
-- SSH tunnel and firewall guidance for remote access
-- the reset command if a replacement token is needed
 
 ## Authentication Model
 

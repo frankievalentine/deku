@@ -1,0 +1,15 @@
+{
+  "id": "nuxt",
+  "title": "Nuxt Starter",
+  "summary": "A clean Nuxt SSR starter for Deku using Nixpacks and an explicit production start command.",
+  "builder": "nixpacks",
+  "stack": "Nuxt",
+  "package_manager": "bun",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run nuxt-demo --path /absolute/path/to/repo/templates/nuxt",
+  "healthcheck": "/api/health",
+  "service_notes": [
+    "This starter runs as a single Nuxt SSR app.",
+    "Pair with Deku managed services by wiring environment variables into server routes or runtime config."
+  ]
+}

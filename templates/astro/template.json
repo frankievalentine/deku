@@ -1,0 +1,15 @@
+{
+  "id": "astro",
+  "title": "Astro Starter",
+  "summary": "A simple static Astro starter for Deku served from a Docker image.",
+  "builder": "dockerfile",
+  "stack": "Astro",
+  "package_manager": "bun",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run astro-demo --path /absolute/path/to/repo/templates/astro",
+  "healthcheck": "/health/",
+  "service_notes": [
+    "This is a static site template with no backing service dependency.",
+    "Use it as a base for documentation, marketing, or landing pages."
+  ]
+}

@@ -1,0 +1,9 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+healthcheck = "/api/health"
+port = 3000
+wait = 5
+timeout = 30
+attempts = 5

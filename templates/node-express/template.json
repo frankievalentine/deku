@@ -1,0 +1,14 @@
+{
+  "id": "node-express",
+  "title": "Node Express Starter",
+  "summary": "A minimal Express API starter for Deku with a Dockerfile and health endpoint.",
+  "builder": "dockerfile",
+  "stack": "Node + Express",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run express-demo --path /absolute/path/to/repo/templates/node-express",
+  "healthcheck": "/health",
+  "service_notes": [
+    "Stateless by default.",
+    "Pair with deku postgres or deku redis when the app grows beyond in-memory behavior."
+  ]
+}

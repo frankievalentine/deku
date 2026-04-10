@@ -3,9 +3,11 @@ title: AGENTS.md
 description: How coding agents should deploy and inspect apps with Deku, plus a copyable AGENTS.md file.
 ---
 
-This guide explains how coding agents should operate Deku from a repo or shell.
+Recommended operating contract for coding agents using Deku from a repo or shell.
 
 The full checked-in `AGENTS.md` from the repository root is included at the bottom of the page so users can copy it directly.
+
+If an agent needs a known-good starter app quickly, use the local [App Templates](/app-templates/) catalog before building a fresh project from scratch.
 
 ## Supported Agent Contract
 
@@ -76,6 +78,24 @@ If the app does not exist yet:
 ```bash
 deku apps create <app>
 ```
+
+## Starter App Catalog
+
+Before scaffolding a new app from nothing, check the local `templates/` directory in this repository.
+
+Common examples:
+
+```bash
+deku deploy run agent-demo --path /absolute/path/to/repo/templates/node-express
+deku deploy run agent-demo --path /absolute/path/to/repo/templates/nextjs
+deku deploy run agent-demo --path /absolute/path/to/repo/templates/django
+```
+
+These starters are adapted for Deku:
+
+- they use Deku-supported `dockerfile` or `nixpacks` builders
+- they expect Deku-managed services instead of bundled sidecars
+- they stay local to the repo so agents can inspect and modify them directly
 
 ## CLI Workflow Examples
 
@@ -320,6 +340,24 @@ If the app does not exist, create it first:
 ```bash
 deku apps create <app>
 ```
+
+## Starter App Catalog
+
+If you need a known-good starter app quickly, check the local `templates/` directory in this repository before building from scratch.
+
+Examples:
+
+```bash
+deku deploy run <app> --path /absolute/path/to/repo/templates/node-express
+deku deploy run <app> --path /absolute/path/to/repo/templates/nextjs
+deku deploy run <app> --path /absolute/path/to/repo/templates/django
+```
+
+The templates are adapted for Deku:
+
+- use Deku-supported `dockerfile` or `nixpacks` builders
+- expect Deku-managed services instead of bundled sidecars
+- stay local to the repo so agents can copy or inspect them directly
 
 ## Recommended Commands
 

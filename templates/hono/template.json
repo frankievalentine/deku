@@ -1,0 +1,15 @@
+{
+  "id": "hono",
+  "title": "Hono Starter",
+  "summary": "A small Hono API starter for Deku using Bun for installation and runtime.",
+  "builder": "dockerfile",
+  "stack": "Hono",
+  "package_manager": "bun",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run hono-demo --path /absolute/path/to/repo/templates/hono",
+  "healthcheck": "/health",
+  "service_notes": [
+    "Optimized for a lightweight Bun-based API service.",
+    "Pair with deku postgres or deku redis when the app needs persistence."
+  ]
+}

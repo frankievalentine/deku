@@ -15,7 +15,7 @@ export default defineConfig({
       description: 'A modern, lightweight self-hosted PaaS built with Rust, Angie, and Astro.',
       customCss: ['./src/styles/page-theme.css'],
       social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/your-org/deku' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/frankievalentine/deku' },
       ],
       sidebar: [
         {
@@ -37,8 +37,9 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Operations',
+          label: 'Workflows',
           items: [
+            { label: 'App Templates', link: '/app-templates/' },
             { label: 'AGENTS.md', link: '/agents/' },
           ],
         },

@@ -1,0 +1,62 @@
+---
+const title = "Deku Astro starter";
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <style>
+      :root {
+        font-family: "Fraunces", Georgia, serif;
+        color: #17231b;
+        background:
+          radial-gradient(circle at top left, rgba(163, 214, 162, 0.32), transparent 26rem),
+          linear-gradient(180deg, #f8fbf4 0%, #ddecd8 100%);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+
+      main {
+        max-width: 44rem;
+        border-radius: 2rem;
+        padding: 2.5rem;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 1rem 3rem rgba(23, 35, 27, 0.12);
+      }
+
+      p {
+        font-family: "IBM Plex Sans", sans-serif;
+        line-height: 1.7;
+      }
+
+      .eyebrow {
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        font-size: 0.75rem;
+        color: #4f7d54;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Deku Template</p>
+      <h1>{title}</h1>
+      <p>
+        A static Astro template shaped for Deku source deploys.
+      </p>
+      <p>Use this as a base for product sites, docs hubs, and content-heavy pages.</p>
+    </main>
+  </body>
+</html>

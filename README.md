@@ -1,5 +1,9 @@
 # Deku
 
+`deku`: 9MB,
+`dekud`: 16MB
+`dashboard bundle`: 848 KB
+
 Deku is a lightweight self-hosted PaaS for deploying and operating applications on your own server.
 
 It combines:
@@ -14,6 +18,7 @@ The current workflow is intentionally practical:
 
 - install Deku on a Linux server
 - create an app
+- start from a local starter template when you want a ready-made app skeleton
 - deploy from a source directory or image
 - manage config, domains, TLS, scale, logs, services, storage, networks, and cron from the CLI or dashboard
 
@@ -130,6 +135,8 @@ Deku supports:
 - source deploys via `deku deploy run <app> --path <dir>`
 - SSH `git push` deploys as a supported secondary path
 
+Starter templates live under [templates/](templates/) in this repository. They are adapted for Deku's `dockerfile` and `nixpacks` deploy paths.
+
 Rollout behavior is controlled by `deku.toml`:
 
 ```toml
@@ -173,6 +180,7 @@ Current additive platform direction:
 
 - [Installation](docs/src/content/docs/installation.md)
 - [Get Started](docs/src/content/docs/get-started.md)
+- [App Templates](docs/src/content/docs/app-templates.md)
 - [Dashboard Overview](docs/src/content/docs/dashboard-overview.md)
 - [Architecture](docs/src/content/docs/architecture.md)
 - [CLI Reference](docs/src/content/docs/reference/cli-reference.md)

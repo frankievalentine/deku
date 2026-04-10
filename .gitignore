@@ -12,3 +12,6 @@
 .DS_Store
 .claude/
 .codex/
+.astro/
+__pycache__/
+*.pyc

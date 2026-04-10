@@ -3,7 +3,7 @@ title: CLI Reference
 description: Release-facing command reference for the current Deku CLI surface.
 ---
 
-This page summarizes the current `deku` command surface.
+Current release-facing `deku` command surface.
 
 ## Core Commands
 

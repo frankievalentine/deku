@@ -3,7 +3,7 @@ title: Get Started
 description: Install Deku, open the dashboard, deploy an app, and manage it.
 ---
 
-This guide walks through the first-run user flow after you have installed Deku on a server.
+Start here for the first app, first deploy, and first dashboard sign-in after install.
 
 ## 1. Get Dashboard Access Details
 

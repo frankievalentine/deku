@@ -1,0 +1,14 @@
+{
+  "id": "django",
+  "title": "Django Starter",
+  "summary": "A minimal Django starter for Deku using Nixpacks and environment-driven settings.",
+  "builder": "nixpacks",
+  "stack": "Django",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run django-demo --path /absolute/path/to/repo/templates/django",
+  "healthcheck": "/health",
+  "service_notes": [
+    "Uses SQLite by default for a zero-setup first deploy.",
+    "Set DATABASE_URL to pair the app with deku postgres."
+  ]
+}

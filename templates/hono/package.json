@@ -1,0 +1,14 @@
+{
+  "name": "deku-hono-template",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/index.ts",
+    "start": "bun src/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.13",
+    "hono": "4.12.12"
+  }
+}

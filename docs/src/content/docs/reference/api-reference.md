@@ -3,7 +3,7 @@ title: API Reference
 description: HTTP API families used by the CLI and dashboard.
 ---
 
-This page summarizes the current HTTP API surface that powers the Deku CLI and dashboard.
+Current HTTP API surface used by the Deku CLI and dashboard.
 
 ## Apps and Deployments
 

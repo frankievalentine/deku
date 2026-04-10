@@ -1,0 +1,14 @@
+{
+  "id": "fastapi",
+  "title": "FastAPI Starter",
+  "summary": "A minimal FastAPI starter for Deku using a production Dockerfile and environment-driven settings.",
+  "builder": "dockerfile",
+  "stack": "FastAPI",
+  "last_verified": "2026-04-09",
+  "deploy_path_example": "deku deploy run fastapi-demo --path /absolute/path/to/repo/templates/fastapi",
+  "healthcheck": "/health",
+  "service_notes": [
+    "No bundled service dependencies.",
+    "Set DATABASE_URL to pair the app with deku postgres."
+  ]
+}
