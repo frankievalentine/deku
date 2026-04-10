@@ -20,9 +20,8 @@ impl ServiceManager for SystemctlManager {
             .args(["restart", service])
             .output()
             .with_context(|| {
-                format!(
-                    "`deku restart` requires a systemd-managed Linux host with `systemctl` available"
-                )
+                "`deku restart` requires a systemd-managed Linux host with `systemctl` available"
+                    .to_string()
             })?;
 
         if output.status.success() {
