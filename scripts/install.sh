@@ -252,7 +252,11 @@ write_systemd_unit() {
 }
 
 can_prompt_setup() {
-  [[ -r /dev/tty && -w /dev/tty && -z "${DEKU_INSTALL_FORCE_DEFAULTS:-}" ]]
+  [[ -z "${DEKU_INSTALL_FORCE_DEFAULTS:-}" ]] || return 1
+
+  # A readable /dev/tty path is not enough; the current shell must actually have
+  # a controlling terminal so `deku setup` can prompt successfully.
+  ( : </dev/tty >/dev/tty ) >/dev/null 2>&1
 }
 
 run_setup() {

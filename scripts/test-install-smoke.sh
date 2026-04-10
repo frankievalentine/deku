@@ -13,6 +13,24 @@ cleanup() {
   rm -rf "$TEST_ROOT"
 }
 
+dump_output_on_error() {
+  local status="$?"
+  if [[ "$status" -eq 0 ]]; then
+    return
+  fi
+
+  for output_file in "${first_output_file:-}" "${second_output_file:-}"; do
+    if [[ -n "$output_file" && -f "$output_file" ]]; then
+      printf '\n---- %s ----\n' "$(basename "$output_file")" >&2
+      cat "$output_file" >&2
+    fi
+  done
+
+  return "$status"
+}
+
+trap 'dump_output_on_error' ERR
+
 checksum_file() {
   local file="$1"
 
@@ -297,6 +315,7 @@ export DEKU_SETUP_COUNT_FILE="${TEST_ROOT}/state/setup-count"
 export DEKU_SYSTEMCTL_STATE_DIR="${TEST_ROOT}/state/systemctl"
 export DEKU_REPO="local/deku"
 export DEKU_DASHBOARD_HOST="203.0.113.10"
+export DEKU_INSTALL_FORCE_DEFAULTS="1"
 
 mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")"
 
