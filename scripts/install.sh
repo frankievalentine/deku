@@ -18,13 +18,50 @@ TMP_DIR="$(mktemp -d)"
 CHECKSUMS_FILE="${TMP_DIR}/SHA256SUMS"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  COLOR_BLUE=$'\033[1;34m'
+  COLOR_GREEN=$'\033[1;32m'
+  COLOR_YELLOW=$'\033[1;33m'
+  COLOR_RED=$'\033[1;31m'
+  COLOR_RESET=$'\033[0m'
+else
+  COLOR_BLUE=""
+  COLOR_GREEN=""
+  COLOR_YELLOW=""
+  COLOR_RED=""
+  COLOR_RESET=""
+fi
+
 log() {
-  printf '==> %s\n' "$*"
+  printf '%b==>%b %s\n' "$COLOR_BLUE" "$COLOR_RESET" "$*"
+}
+
+success() {
+  printf '%b%s%b\n' "$COLOR_GREEN" "$*" "$COLOR_RESET"
+}
+
+warn() {
+  printf '%bwarning:%b %s\n' "$COLOR_YELLOW" "$COLOR_RESET" "$*" >&2
 }
 
 fail() {
-  printf 'error: %s\n' "$*" >&2
+  printf '%berror:%b %s\n' "$COLOR_RED" "$COLOR_RESET" "$*" >&2
   exit 1
+}
+
+quiet_run() {
+  local output_file status
+  output_file="$(mktemp "${TMP_DIR}/cmd.XXXXXX")"
+
+  if "$@" >"${output_file}" 2>&1; then
+    rm -f "${output_file}"
+    return 0
+  fi
+
+  status=$?
+  cat "${output_file}" >&2
+  rm -f "${output_file}"
+  fail "command failed (${status}): $*"
 }
 
 install_support_artifact() {
@@ -117,7 +154,7 @@ download_checksums() {
     return 0
   fi
 
-  printf 'warning: SHA256SUMS not found for this release; continuing without checksum verification.\n' >&2
+  warn "SHA256SUMS not found for this release; continuing without checksum verification."
   return 1
 }
 
@@ -148,9 +185,9 @@ install_prerequisites() {
 
   export DEBIAN_FRONTEND=noninteractive
 
-  log "Installing base packages"
-  apt-get update -qq
-  apt-get install -y ca-certificates curl gnupg tar
+  log "Installing system packages"
+  quiet_run apt-get update -qq
+  quiet_run apt-get install -y -qq ca-certificates curl gnupg tar
 }
 
 angie_repo_line() {
@@ -182,11 +219,14 @@ install_angie() {
 
   log "Installing Angie"
   curl --fail --location --silent --show-error https://angie.software/keys/angie-signing.gpg \
-    | gpg --dearmor -o /usr/share/keyrings/angie-signing.gpg
+    -o "${TMP_DIR}/angie-signing.gpg"
+  quiet_run gpg --dearmor --yes --batch \
+    -o /usr/share/keyrings/angie-signing.gpg \
+    "${TMP_DIR}/angie-signing.gpg"
   printf '%s\n' "$repo_line" > /etc/apt/sources.list.d/angie.list
 
-  apt-get update -qq
-  apt-get install -y angie
+  quiet_run apt-get update -qq
+  quiet_run apt-get install -y -qq angie
 
   mkdir -p "$ANGIE_CONF_DIR"
   install_support_artifact "angie-deku.conf" "$ANGIE_BASE_CONF" 0644
@@ -195,6 +235,7 @@ install_angie() {
 install_binaries() {
   local arch="$1"
 
+  log "Installing Deku binaries"
   mkdir -p "$INSTALL_DIR"
   download_artifact "dekud-linux-${arch}" "${TMP_DIR}/dekud"
   download_artifact "deku-linux-${arch}" "${TMP_DIR}/deku"
@@ -206,57 +247,52 @@ install_binaries() {
 }
 
 write_systemd_unit() {
-  log "Writing systemd unit"
+  log "Installing systemd unit"
   install_support_artifact "deku.service" "$SYSTEMD_UNIT_PATH" 0644
+}
+
+can_prompt_setup() {
+  [[ -r /dev/tty && -w /dev/tty && -z "${DEKU_INSTALL_FORCE_DEFAULTS:-}" ]]
 }
 
 run_setup() {
   if [[ -f "${CONFIG_DIR}/config.toml" ]]; then
-    log "Config already exists at ${CONFIG_DIR}/config.toml; skipping setup"
+    log "Config already exists; keeping current settings"
     return
   fi
 
-  log "Running deku setup"
   local cmd=(
     "${INSTALL_DIR}/deku" setup
     --no-systemd
-    --defaults
-    --data-dir "${DEKU_DATA_DIR}"
-    --api-port "${DEKU_API_PORT}"
-    --ssh-port "${DEKU_SSH_PORT}"
-    --angie-conf-dir "${ANGIE_CONF_DIR}"
   )
+
+  if [[ "${DEKU_DATA_DIR}" != "${CONFIG_DIR}" ]]; then
+    cmd+=(--data-dir "${DEKU_DATA_DIR}")
+  fi
+
+  if [[ "${DEKU_API_PORT}" != "2810" ]]; then
+    cmd+=(--api-port "${DEKU_API_PORT}")
+  fi
+
+  if [[ "${DEKU_SSH_PORT}" != "2222" ]]; then
+    cmd+=(--ssh-port "${DEKU_SSH_PORT}")
+  fi
+
+  if [[ "${ANGIE_CONF_DIR}" != "/etc/angie/conf.d/deku" ]]; then
+    cmd+=(--angie-conf-dir "${ANGIE_CONF_DIR}")
+  fi
 
   if [[ -n "${DEKU_GLOBAL_DOMAIN}" ]]; then
     cmd+=(--global-domain "${DEKU_GLOBAL_DOMAIN}")
   fi
 
-  "${cmd[@]}"
-}
-
-print_dashboard_access() {
-  log "Dashboard access"
-  "${INSTALL_DIR}/deku" dashboard
-}
-
-detect_server_ip() {
-  if [[ -n "${DEKU_DASHBOARD_HOST:-}" ]]; then
-    printf '%s\n' "${DEKU_DASHBOARD_HOST}"
-    return
-  fi
-
-  local host_ip=""
-
-  if command -v hostname >/dev/null 2>&1; then
-    host_ip="$(hostname -I 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i !~ /^127\./) { print $i; exit }}')"
-  fi
-
-  if [[ -z "$host_ip" ]] && command -v ip >/dev/null 2>&1; then
-    host_ip="$(ip -4 route get 192.0.2.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
-  fi
-
-  if [[ -n "$host_ip" ]]; then
-    printf '%s\n' "$host_ip"
+  if can_prompt_setup; then
+    log "Launching deku setup"
+    "${cmd[@]}" </dev/tty
+  else
+    log "Running deku setup with defaults"
+    warn "No interactive terminal detected; run \`deku setup\` later to customize settings."
+    "${cmd[@]}" --defaults
   fi
 }
 
@@ -316,6 +352,7 @@ install_dashboard_assets() {
   local dashboard_dir="${data_dir}/dashboard"
   local staging_dir="${TMP_DIR}/dashboard"
 
+  log "Installing dashboard assets"
   download_artifact "deku-dashboard.tar.gz" "${TMP_DIR}/deku-dashboard.tar.gz"
   verify_artifact "deku-dashboard.tar.gz" "${TMP_DIR}/deku-dashboard.tar.gz"
   mkdir -p "$staging_dir"
@@ -336,22 +373,21 @@ install_dashboard_assets() {
 
 enable_services() {
   log "Reloading service manager"
-  systemctl daemon-reload
+  quiet_run systemctl daemon-reload
 
-  log "Ensuring Angie is enabled"
-  systemctl enable angie >/dev/null
+  log "Starting services"
+  quiet_run systemctl enable angie
   if systemctl is-active --quiet angie; then
-    systemctl reload angie || systemctl restart angie
+    quiet_run systemctl reload angie || quiet_run systemctl restart angie
   else
-    systemctl start angie
+    quiet_run systemctl start angie
   fi
 
-  log "Ensuring Deku is enabled"
-  systemctl enable deku >/dev/null
+  quiet_run systemctl enable deku
   if systemctl is-active --quiet deku; then
-    systemctl restart deku
+    quiet_run systemctl restart deku
   else
-    systemctl start deku
+    quiet_run systemctl start deku
   fi
 }
 
@@ -395,9 +431,9 @@ verify_installation() {
 
   if [[ "$response" != *'"status":"ok"'* ]]; then
     if [[ "$ssh_port" == "22" ]]; then
-      printf 'warning: Deku is configured to bind its embedded SSH deploy server to port 22.\n' >&2
-      printf 'warning: if OpenSSH already owns port 22, dekud will stay offline until you move Deku to another port such as 2222.\n' >&2
-      printf 'warning: update %s/config.toml, set ssh_port = 2222, then restart the deku service.\n' "$CONFIG_DIR" >&2
+      warn "Deku is configured to bind its embedded SSH deploy server to port 22."
+      warn "If OpenSSH already owns port 22, dekud will stay offline until you move Deku to another port such as 2222."
+      warn "Update ${CONFIG_DIR}/config.toml, set ssh_port = 2222, then restart the deku service."
     fi
     fail "Deku API did not become healthy at ${health_url}"
   fi
@@ -409,7 +445,7 @@ verify_installation() {
 
 warn_if_missing_docker() {
   if ! command -v docker >/dev/null 2>&1; then
-    printf 'warning: docker is not installed; dekud will start but deploys will fail until Docker Engine is installed.\n' >&2
+    warn "docker is not installed; dekud will start but deploys will fail until Docker Engine is installed."
   fi
 }
 
@@ -439,21 +475,16 @@ main() {
   enable_services
   verify_installation "$data_dir" "$api_port" "$ssh_port"
   warn_if_missing_docker
-  print_dashboard_access
 
-  log "Install complete"
-  local dashboard_host
-  dashboard_host="$(detect_server_ip || true)"
-  printf 'Deku config: %s/config.toml\n' "$CONFIG_DIR"
-  printf 'Dashboard assets: %s/dashboard\n' "$data_dir"
-  if [[ -n "$dashboard_host" ]]; then
-    printf 'Dashboard URL: http://%s:%s\n' "$dashboard_host" "$api_port"
-  fi
-  printf 'Local dashboard URL: http://127.0.0.1:%s\n' "$api_port"
-  printf 'Dashboard reachability: allow %s/tcp or use ssh -L %s:127.0.0.1:%s root@%s\n' \
-    "$api_port" "$api_port" "$api_port" "${dashboard_host:-YOUR_SERVER_IP}"
-  printf 'SSH deploy port: %s\n' "$ssh_port"
-  printf 'If you missed the one-time token shown during setup, run `deku dashboard reset-token`.\n'
+  printf '\n'
+  printf 'Config:        %s/config.toml\n' "$CONFIG_DIR"
+  printf 'Dashboard:     deku dashboard\n'
+  printf 'Token reset:   deku dashboard reset-token\n'
+  printf 'SSH port:      %s\n' "$ssh_port"
+  printf 'Get started:   deku apps create my-app\n'
+  printf '               deku deploy run my-app --path /absolute/path/to/app\n'
+  printf '\n'
+  success "Deku successfully installed."
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

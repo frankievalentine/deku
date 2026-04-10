@@ -27,11 +27,15 @@ const DEFAULT_SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/deku.service";
 const DEFAULT_ANGIE_BASE_CONF: &str = "/etc/angie/conf.d/deku-default.conf";
 const DEFAULT_ANGIE_SSL_DIR: &str = "/etc/angie/ssl";
 const DEFAULT_ANGIE_CONF_DIR: &str = "/etc/angie/conf.d/deku";
+const DEFAULT_ANGIE_APT_SOURCE: &str = "/etc/apt/sources.list.d/angie.list";
+const DEFAULT_ANGIE_KEYRING: &str = "/usr/share/keyrings/angie-signing.gpg";
 
 const ENV_INSTALL_DIR: &str = "DEKU_UNINSTALL_INSTALL_DIR";
 const ENV_SYSTEMD_UNIT_PATH: &str = "DEKU_UNINSTALL_SYSTEMD_UNIT_PATH";
 const ENV_ANGIE_BASE_CONF: &str = "DEKU_UNINSTALL_ANGIE_BASE_CONF";
 const ENV_ANGIE_SSL_DIR: &str = "DEKU_UNINSTALL_ANGIE_SSL_DIR";
+const ENV_ANGIE_APT_SOURCE: &str = "DEKU_UNINSTALL_ANGIE_APT_SOURCE";
+const ENV_ANGIE_KEYRING: &str = "DEKU_UNINSTALL_ANGIE_KEYRING";
 
 const MANAGED_PREFIXES: &[&str] = &[
     "deku.",
@@ -90,6 +94,8 @@ struct Layout {
     systemd_unit: PathBuf,
     angie_base_conf: PathBuf,
     angie_ssl_dir: PathBuf,
+    angie_apt_source: PathBuf,
+    angie_keyring: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +189,8 @@ trait SystemManager {
     fn is_active(&mut self, service: &str) -> Result<bool>;
     fn reload(&mut self, service: &str) -> Result<()>;
     fn restart(&mut self, service: &str) -> Result<()>;
+    fn purge_package(&mut self, package: &str) -> Result<()>;
+    fn apt_update(&mut self) -> Result<()>;
 }
 
 struct RealDockerRuntime {
@@ -419,6 +427,8 @@ fn discover_layout() -> Result<Layout> {
     let systemd_unit = env_path(ENV_SYSTEMD_UNIT_PATH, DEFAULT_SYSTEMD_UNIT_PATH);
     let angie_base_conf = env_path(ENV_ANGIE_BASE_CONF, DEFAULT_ANGIE_BASE_CONF);
     let angie_ssl_dir = env_path(ENV_ANGIE_SSL_DIR, DEFAULT_ANGIE_SSL_DIR);
+    let angie_apt_source = env_path(ENV_ANGIE_APT_SOURCE, DEFAULT_ANGIE_APT_SOURCE);
+    let angie_keyring = env_path(ENV_ANGIE_KEYRING, DEFAULT_ANGIE_KEYRING);
 
     Ok(Layout {
         config_dir,
@@ -433,6 +443,8 @@ fn discover_layout() -> Result<Layout> {
         systemd_unit,
         angie_base_conf,
         angie_ssl_dir,
+        angie_apt_source,
+        angie_keyring,
     })
 }
 
@@ -624,6 +636,22 @@ async fn execute_plan(
         ),
         remove_path_if_exists(&plan.layout.angie_conf_dir),
     );
+    record_result(
+        &mut summary,
+        format!(
+            "remove Angie apt source {}",
+            plan.layout.angie_apt_source.display()
+        ),
+        remove_path_if_exists(&plan.layout.angie_apt_source),
+    );
+    record_result(
+        &mut summary,
+        format!(
+            "remove Angie keyring {}",
+            plan.layout.angie_keyring.display()
+        ),
+        remove_path_if_exists(&plan.layout.angie_keyring),
+    );
 
     if plan.host_artifacts.systemd_unit_exists {
         record_result(
@@ -663,21 +691,47 @@ async fn execute_plan(
         }
     }
 
-    match system.is_active("angie") {
-        Ok(true) => {
-            let reload = system.reload("angie");
-            if reload.is_err() {
-                record_result(&mut summary, "restart angie", system.restart("angie"));
-            } else {
-                record_result(&mut summary, "reload angie", reload);
-            }
+    if plan.mode == UninstallMode::FullRemove {
+        match system.is_active("angie") {
+            Ok(true) => record_result(
+                &mut summary,
+                "disable and stop angie service",
+                system.disable_and_stop("angie"),
+            ),
+            Ok(false) => summary
+                .skipped
+                .push("skipped disable/stop for angie because angie is not active".to_string()),
+            Err(error) => summary.skipped.push(format!(
+                "skipped disable/stop for angie because service state could not be read: {error}"
+            )),
         }
-        Ok(false) => summary
-            .skipped
-            .push("skipped angie reload because angie is not active".to_string()),
-        Err(error) => summary.skipped.push(format!(
-            "skipped angie reload because service state could not be read: {error}"
-        )),
+        record_result(
+            &mut summary,
+            "purge apt package angie",
+            system.purge_package("angie"),
+        );
+        record_result(
+            &mut summary,
+            "refresh apt package lists",
+            system.apt_update(),
+        );
+    } else {
+        match system.is_active("angie") {
+            Ok(true) => {
+                let reload = system.reload("angie");
+                if reload.is_err() {
+                    record_result(&mut summary, "restart angie", system.restart("angie"));
+                } else {
+                    record_result(&mut summary, "reload angie", reload);
+                }
+            }
+            Ok(false) => summary
+                .skipped
+                .push("skipped angie reload because angie is not active".to_string()),
+            Err(error) => summary.skipped.push(format!(
+                "skipped angie reload because service state could not be read: {error}"
+            )),
+        }
     }
 
     summary
@@ -778,11 +832,19 @@ fn build_plan_sections(plan: &UninstallPlan) -> BTreeMap<Section, Vec<String>> {
     let mut angie_entries = vec![
         format!("remove {}", plan.layout.angie_base_conf.display()),
         format!("remove {}", plan.layout.angie_conf_dir.display()),
+        format!("remove {}", plan.layout.angie_apt_source.display()),
+        format!("remove {}", plan.layout.angie_keyring.display()),
     ];
     for tls_file in &plan.tls_files {
         angie_entries.push(format!("remove {}", tls_file.display()));
     }
-    angie_entries.push("reload angie if active".to_string());
+    if plan.mode == UninstallMode::FullRemove {
+        angie_entries.push("disable and stop angie if active".to_string());
+        angie_entries.push("purge apt package angie".to_string());
+        angie_entries.push("refresh apt package lists".to_string());
+    } else {
+        angie_entries.push("reload angie if active".to_string());
+    }
     sections.insert(Section::AngieConfig, angie_entries);
 
     let mut artifact_entries = Vec::new();
@@ -819,7 +881,7 @@ fn print_execution_summary(summary: &ExecutionSummary) {
     println!();
     println!("Completed actions: {}", summary.completed.len());
     for entry in &summary.completed {
-        println!("  - {entry}");
+        println!("  ✓ {entry}");
     }
 
     if !summary.skipped.is_empty() {
@@ -986,6 +1048,29 @@ impl RealSystemManager {
         };
         Err(anyhow!(details))
     }
+
+    fn run_apt_get(args: &[&str]) -> Result<()> {
+        let output = Command::new("apt-get")
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .args(args)
+            .output()
+            .with_context(|| format!("failed to run `apt-get {}`", args.join(" ")))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let details = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            "apt-get exited with a non-zero status".to_string()
+        };
+        Err(anyhow!(details))
+    }
 }
 
 impl SystemManager for RealSystemManager {
@@ -1011,6 +1096,14 @@ impl SystemManager for RealSystemManager {
 
     fn restart(&mut self, service: &str) -> Result<()> {
         Self::run_systemctl(&["restart", service])
+    }
+
+    fn purge_package(&mut self, package: &str) -> Result<()> {
+        Self::run_apt_get(&["purge", "-y", package])
+    }
+
+    fn apt_update(&mut self) -> Result<()> {
+        Self::run_apt_get(&["update", "-qq"])
     }
 }
 
@@ -1059,6 +1152,16 @@ mod tests {
 
         fn restart(&mut self, service: &str) -> Result<()> {
             self.calls.push(format!("restart:{service}"));
+            Ok(())
+        }
+
+        fn purge_package(&mut self, package: &str) -> Result<()> {
+            self.calls.push(format!("purge-package:{package}"));
+            Ok(())
+        }
+
+        fn apt_update(&mut self) -> Result<()> {
+            self.calls.push("apt-update".to_string());
             Ok(())
         }
     }
@@ -1114,6 +1217,8 @@ mod tests {
         install_dir: PathBuf,
         angie_conf_dir: PathBuf,
         angie_ssl_dir: PathBuf,
+        angie_apt_source: PathBuf,
+        angie_keyring: PathBuf,
         systemd_unit: PathBuf,
         angie_base_conf: PathBuf,
         _guard: AsyncMutexGuard<'static, ()>,
@@ -1233,6 +1338,8 @@ mod tests {
         assert!(!fixture.install_dir.join("dekud").exists());
         assert!(!fixture.angie_base_conf.exists());
         assert!(!fixture.angie_conf_dir.exists());
+        assert!(!fixture.angie_apt_source.exists());
+        assert!(!fixture.angie_keyring.exists());
         assert!(!fixture.angie_ssl_dir.join("deku_my-app.crt").exists());
         assert!(fixture.config_dir.exists());
         assert!(fixture.data_dir.exists());
@@ -1241,6 +1348,8 @@ mod tests {
         assert!(ops.contains(&"stop:app-ctr".to_string()));
         assert!(ops.contains(&"remove-container:app-ctr".to_string()));
         assert!(system.calls.contains(&"reload:angie".to_string()));
+        assert!(!system.calls.contains(&"purge-package:angie".to_string()));
+        assert!(!system.calls.contains(&"apt-update".to_string()));
 
         fixture.cleanup();
     }
@@ -1256,12 +1365,18 @@ mod tests {
             .await
             .unwrap();
 
-        let mut system = FakeSystemManager::default();
+        let mut system = FakeSystemManager {
+            calls: Vec::new(),
+            angie_active: true,
+        };
         let summary = execute_plan(&plan, &mut system, Some(&docker)).await;
 
         assert!(summary.failed.is_empty());
         assert!(!fixture.config_dir.exists());
         assert!(!fixture.data_dir.exists());
+        assert!(system.calls.contains(&"disable-stop:angie".to_string()));
+        assert!(system.calls.contains(&"purge-package:angie".to_string()));
+        assert!(system.calls.contains(&"apt-update".to_string()));
 
         let ops = docker.ops.lock().unwrap().clone();
         assert!(ops.contains(&"remove-volume:deku-postgres-db-data".to_string()));
@@ -1279,6 +1394,8 @@ mod tests {
         let install_dir = root.join("bin");
         let angie_conf_dir = root.join("angie/conf.d/deku");
         let angie_ssl_dir = root.join("angie/ssl");
+        let angie_apt_source = root.join("apt/sources.list.d/angie.list");
+        let angie_keyring = root.join("keyrings/angie-signing.gpg");
         let systemd_unit = root.join("systemd/deku.service");
         let angie_base_conf = root.join("angie/conf.d/deku-default.conf");
 
@@ -1287,6 +1404,8 @@ mod tests {
         fs::create_dir_all(&install_dir).unwrap();
         fs::create_dir_all(&angie_conf_dir).unwrap();
         fs::create_dir_all(&angie_ssl_dir).unwrap();
+        fs::create_dir_all(angie_apt_source.parent().unwrap()).unwrap();
+        fs::create_dir_all(angie_keyring.parent().unwrap()).unwrap();
         fs::create_dir_all(systemd_unit.parent().unwrap()).unwrap();
         fs::create_dir_all(angie_base_conf.parent().unwrap()).unwrap();
 
@@ -1296,6 +1415,8 @@ mod tests {
             fs::write(&systemd_unit, "unit").unwrap();
             fs::write(&angie_base_conf, "conf").unwrap();
             fs::write(angie_conf_dir.join("my-app.conf"), "server {}").unwrap();
+            fs::write(&angie_apt_source, "deb ...").unwrap();
+            fs::write(&angie_keyring, "gpg").unwrap();
         }
 
         let old_env = capture_env();
@@ -1304,6 +1425,8 @@ mod tests {
         env::set_var(ENV_SYSTEMD_UNIT_PATH, &systemd_unit);
         env::set_var(ENV_ANGIE_BASE_CONF, &angie_base_conf);
         env::set_var(ENV_ANGIE_SSL_DIR, &angie_ssl_dir);
+        env::set_var(ENV_ANGIE_APT_SOURCE, &angie_apt_source);
+        env::set_var(ENV_ANGIE_KEYRING, &angie_keyring);
 
         let config = LocalDekuConfig {
             data_dir: Some(data_dir.clone()),
@@ -1323,6 +1446,8 @@ mod tests {
             install_dir,
             angie_conf_dir,
             angie_ssl_dir,
+            angie_apt_source,
+            angie_keyring,
             systemd_unit,
             angie_base_conf,
             _guard: guard,
@@ -1400,6 +1525,8 @@ mod tests {
             (ENV_SYSTEMD_UNIT_PATH, env::var_os(ENV_SYSTEMD_UNIT_PATH)),
             (ENV_ANGIE_BASE_CONF, env::var_os(ENV_ANGIE_BASE_CONF)),
             (ENV_ANGIE_SSL_DIR, env::var_os(ENV_ANGIE_SSL_DIR)),
+            (ENV_ANGIE_APT_SOURCE, env::var_os(ENV_ANGIE_APT_SOURCE)),
+            (ENV_ANGIE_KEYRING, env::var_os(ENV_ANGIE_KEYRING)),
         ]
     }
 

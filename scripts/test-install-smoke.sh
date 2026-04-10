@@ -39,10 +39,10 @@ case "${1:-}" in
   setup)
     shift
 
-    data_dir=""
-    api_port=""
-    ssh_port=""
-    angie_conf_dir=""
+    data_dir="${DEKU_CONFIG_DIR}"
+    api_port="2810"
+    ssh_port="2222"
+    angie_conf_dir="/etc/angie/conf.d/deku"
     global_domain=""
 
     while [[ $# -gt 0 ]]; do
@@ -359,11 +359,13 @@ if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
   [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
 fi
 [[ "$first_output" == *"Dashboard token:"* ]]
-[[ "$first_output" == *"Reset token:   deku dashboard reset-token"* ]]
+[[ "$first_output" == *"Reset command:   deku dashboard reset-token"* ]]
 [[ "$first_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
 [[ "$first_output" == *"Local URL:     http://127.0.0.1:2810"* ]]
-[[ "$first_output" == *"Dashboard reachability: allow 2810/tcp or use ssh -L 2810:127.0.0.1:2810 root@203.0.113.10"* ]]
-[[ "$first_output" == *"SSH deploy port: 2222"* ]]
+[[ "$first_output" == *"Token reset:   deku dashboard reset-token"* ]]
+[[ "$first_output" == *"SSH port:      2222"* ]]
+[[ "$first_output" == *"deku deploy run my-app --path /absolute/path/to/app"* ]]
+[[ "$first_output" == *"Deku successfully installed."* ]]
 cp "${DEKU_CONFIG_DIR}/config.toml" "${TEST_ROOT}/config.first"
 
 CURRENT_RELEASE_DIR="${TEST_ROOT}/fixtures/v2"
@@ -387,9 +389,9 @@ if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
   [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
 fi
 [[ "$second_output" != *"Dashboard token:"* ]]
-[[ "$second_output" == *"Reset token:   deku dashboard reset-token"* ]]
-[[ "$second_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
-[[ "$second_output" == *"Local dashboard URL: http://127.0.0.1:2810"* ]]
-[[ "$second_output" == *"SSH deploy port: 2222"* ]]
+[[ "$second_output" == *"Config already exists; keeping current settings"* ]]
+[[ "$second_output" == *"Token reset:   deku dashboard reset-token"* ]]
+[[ "$second_output" == *"SSH port:      2222"* ]]
+[[ "$second_output" == *"Deku successfully installed."* ]]
 
 echo "install smoke passed"
