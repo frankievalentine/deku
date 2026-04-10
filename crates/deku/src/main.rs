@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand};
+use deku_core::version::release_version;
 
 mod client;
 mod commands;
@@ -7,14 +8,31 @@ mod local_config;
 mod prompt;
 
 #[derive(Debug, Parser)]
-#[command(name = "deku", about = "Deku PaaS CLI", version)]
+#[command(
+    name = "deku",
+    about = "Deku PaaS CLI",
+    disable_version_flag = true,
+    arg_required_else_help = true
+)]
 struct Cli {
+    #[arg(
+        short = 'v',
+        long = "version",
+        action = ArgAction::SetTrue,
+        global = true,
+        help = "Print the current Deku release version"
+    )]
+    version_requested: bool,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Print the current Deku release version
+    Version(commands::version::VersionArgs),
+    /// Restart the local Deku systemd service
+    Restart(commands::restart::RestartArgs),
     /// First-run setup wizard
     Setup(commands::setup::SetupArgs),
     /// Show dashboard access details
@@ -63,13 +81,23 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.version_requested {
+        println!("{}", release_version());
+        return Ok(());
+    }
+
     match cli.command {
-        Commands::Setup(args) => commands::setup::run(args),
-        Commands::Uninstall(args) => commands::uninstall::run(args).await,
-        command => {
+        Some(Commands::Version(args)) => commands::version::run(args),
+        Some(Commands::Restart(args)) => commands::restart::run(args),
+        Some(Commands::Setup(args)) => commands::setup::run(args),
+        Some(Commands::Uninstall(args)) => commands::uninstall::run(args).await,
+        Some(command) => {
             let client = client::DekuClient::new()?;
             match command {
-                Commands::Setup(_) | Commands::Uninstall(_) => unreachable!(),
+                Commands::Version(_)
+                | Commands::Restart(_)
+                | Commands::Setup(_)
+                | Commands::Uninstall(_) => unreachable!(),
                 Commands::Dashboard(args) => commands::dashboard::run(args, &client).await,
                 Commands::Apps(args) => commands::apps::run(args, &client).await,
                 Commands::Config(args) => commands::config::run(args, &client).await,
@@ -90,6 +118,11 @@ async fn main() -> Result<()> {
                 Commands::Git(args) => commands::git::run(args, &client).await,
                 Commands::Checks(args) => commands::checks::run(args, &client).await,
             }
+        }
+        None => {
+            Cli::command().print_help()?;
+            println!();
+            Ok(())
         }
     }
 }

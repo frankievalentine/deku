@@ -54,6 +54,9 @@ write_release_fixture() {
 #!/usr/bin/env bash
 set -euo pipefail
 case "${1:-}" in
+  --version|-v|version)
+    printf '%s\n' "__DEKU_FIXTURE_VERSION__"
+    ;;
   setup)
     shift
 
@@ -168,6 +171,8 @@ OUT
     ;;
 esac
 EOF
+  sed -i.bak "s/__DEKU_FIXTURE_VERSION__/${version}/g" "${fixture_dir}/deku-linux-amd64"
+  rm -f "${fixture_dir}/deku-linux-amd64.bak"
   chmod 0755 "${fixture_dir}/deku-linux-amd64"
 
   cat > "${fixture_dir}/dekud-linux-amd64" <<EOF
@@ -220,8 +225,8 @@ EOF
 
 if [[ -z "$DIST_RELEASE_DIR" ]]; then
   mkdir -p "${TEST_ROOT}/fixtures/v1" "${TEST_ROOT}/fixtures/v2"
-  write_release_fixture "${TEST_ROOT}/fixtures/v1" "dekud-v1"
-  write_release_fixture "${TEST_ROOT}/fixtures/v2" "dekud-v2"
+  write_release_fixture "${TEST_ROOT}/fixtures/v1" "v1.0.0"
+  write_release_fixture "${TEST_ROOT}/fixtures/v2" "v2.0.0"
 fi
 
 mkdir -p "${TEST_ROOT}/mockbin" "${TEST_ROOT}/state"
@@ -230,6 +235,7 @@ cat > "${TEST_ROOT}/mockbin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 state_dir="${DEKU_SYSTEMCTL_STATE_DIR:?}"
+log_file="${DEKU_SYSTEMCTL_LOG_FILE:-}"
 command="${1:-}"
 shift || true
 if [[ "${1:-}" == "--quiet" ]]; then
@@ -238,6 +244,9 @@ fi
 service="${1:-}"
 
 mkdir -p "$state_dir"
+if [[ -n "$log_file" ]]; then
+  printf '%s %s\n' "$command" "$service" >> "$log_file"
+fi
 
 is_active() {
   [[ -f "${state_dir}/${1}.active" ]]
@@ -329,6 +338,7 @@ export ANGIE_BASE_CONF="${TEST_ROOT}/angie/conf.d/deku-default.conf"
 export SYSTEMD_UNIT_PATH="${TEST_ROOT}/systemd/deku.service"
 export DEKU_SETUP_COUNT_FILE="${TEST_ROOT}/state/setup-count"
 export DEKU_SYSTEMCTL_STATE_DIR="${TEST_ROOT}/state/systemctl"
+export DEKU_SYSTEMCTL_LOG_FILE="${TEST_ROOT}/state/systemctl.log"
 export DEKU_REPO="local/deku"
 export DEKU_DASHBOARD_HOST="203.0.113.10"
 export DEKU_INSTALL_FORCE_DEFAULTS="1"
@@ -366,6 +376,19 @@ verify_artifact() {
   [[ -n "$expected" ]]
   [[ "$actual" == "$expected" ]]
 }
+resolve_requested_version() {
+  case "${CURRENT_RELEASE_DIR}" in
+    *"/fixtures/v1") echo "v1.0.0" ;;
+    *"/fixtures/v2") echo "v2.0.0" ;;
+    *)
+      if [[ -n "${DEKU_INSTALL_SMOKE_RESOLVED_VERSION:-}" ]]; then
+        echo "${DEKU_INSTALL_SMOKE_RESOLVED_VERSION}"
+      else
+        echo "v9.9.9"
+      fi
+      ;;
+  esac
+}
 socket_exists() {
   local socket_path="$1"
   [[ -e "$socket_path" ]]
@@ -383,8 +406,8 @@ printf '%s\n' "$first_output"
 [[ -x "${INSTALL_DIR}/deku" ]]
 [[ -x "${INSTALL_DIR}/dekud" ]]
 if [[ -z "$DIST_RELEASE_DIR" ]]; then
-  grep -q 'dekud-v1' "${INSTALL_DIR}/dekud"
-  grep -q 'dekud-v1' "${TEST_ROOT}/config/dashboard/index.html"
+  grep -q 'v1.0.0' "${INSTALL_DIR}/dekud"
+  grep -q 'v1.0.0' "${TEST_ROOT}/config/dashboard/index.html"
 else
   [[ -f "${TEST_ROOT}/config/dashboard/index.html" ]]
 fi
@@ -417,8 +440,8 @@ second_output="$(cat "${second_output_file}")"
 printf '%s\n' "$second_output"
 
 if [[ -z "$DIST_RELEASE_DIR" ]]; then
-  grep -q 'dekud-v2' "${INSTALL_DIR}/dekud"
-  grep -q 'dekud-v2' "${TEST_ROOT}/config/dashboard/index.html"
+  grep -q 'v2.0.0' "${INSTALL_DIR}/dekud"
+  grep -q 'v2.0.0' "${TEST_ROOT}/config/dashboard/index.html"
 else
   [[ -f "${TEST_ROOT}/config/dashboard/index.html" ]]
 fi
@@ -437,5 +460,20 @@ fi
 [[ "$second_output" != *"Reset command:"* ]]
 [[ "$second_output" != *"Token reset:"* ]]
 [[ "$second_output" == *"Deku successfully installed."* ]]
+
+third_restart_count="$(wc -l < "${DEKU_SYSTEMCTL_LOG_FILE}")"
+third_installed_version="$("${INSTALL_DIR}/deku" version)"
+third_target_version="$(resolve_requested_version)"
+printf 'Installed version: %s\n' "$third_installed_version"
+printf 'Target version:    %s\n' "$third_target_version"
+
+[[ "$third_installed_version" == "$third_target_version" ]] \
+  || fail "installed version did not match the resolved target version"
+[[ "$(wc -l < "${DEKU_SYSTEMCTL_LOG_FILE}")" == "$third_restart_count" ]] \
+  || fail "same-version verification should not invoke additional systemctl commands"
+if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
+  [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]] \
+    || fail "same-version verification should not rerun setup"
+fi
 
 echo "install smoke passed"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
+RELEASE_VERSION="${DEKU_RELEASE_VERSION:-}"
 
 targets=(
   "x86_64-unknown-linux-musl"
@@ -22,6 +23,21 @@ release_artifacts=(
 
 log() {
   printf '==> %s\n' "$*"
+}
+
+resolve_release_version() {
+  if [[ -n "$RELEASE_VERSION" ]]; then
+    printf '%s\n' "$RELEASE_VERSION"
+    return
+  fi
+
+  if RELEASE_VERSION="$(git -C "${ROOT_DIR}" describe --tags --exact-match 2>/dev/null)"; then
+    printf '%s\n' "$RELEASE_VERSION"
+    return
+  fi
+
+  printf 'missing release version; set DEKU_RELEASE_VERSION or run from an exact git tag\n' >&2
+  exit 1
 }
 
 build_target_dir() {
@@ -52,7 +68,7 @@ build_dashboard() {
   (
     cd "${ROOT_DIR}/dashboard"
     bun install --frozen-lockfile
-    bun run build
+    PUBLIC_DEKU_RELEASE_VERSION="$(resolve_release_version)" bun run build
   )
 
   tar -czf "${DIST_DIR}/deku-dashboard.tar.gz" \
@@ -69,6 +85,7 @@ build_binaries() {
   for target in "${targets[@]}"; do
     log "Building ${target}"
     CARGO_TARGET_DIR="$(build_target_dir "$target")" \
+      DEKU_RELEASE_VERSION="$(resolve_release_version)" \
       "${builder[@]}" --release --target "$target" -p dekud -p deku
   done
 }

@@ -16,6 +16,7 @@ DEKU_DATA_DIR="${DEKU_DATA_DIR:-${CONFIG_DIR}}"
 
 TMP_DIR="$(mktemp -d)"
 CHECKSUMS_FILE="${TMP_DIR}/SHA256SUMS"
+RESOLVED_VERSION=""
 SETUP_RAN=0
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -127,6 +128,50 @@ normalize_version() {
   fi
 }
 
+normalize_version_string() {
+  local version="$1"
+
+  if [[ -z "$version" ]]; then
+    return 1
+  fi
+
+  if [[ "$version" == v* ]]; then
+    echo "$version"
+  else
+    echo "v$version"
+  fi
+}
+
+fetch_latest_release_version() {
+  local payload tag
+
+  payload="$(curl --fail --location --silent --show-error --retry 3 \
+    -H "Accept: application/vnd.github+json" \
+    -H "User-Agent: deku-install/latest" \
+    "https://api.github.com/repos/${DEKU_REPO}/releases/latest")" \
+    || fail "failed to resolve the latest Deku release version"
+
+  tag="$(printf '%s' "$payload" | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  [[ -n "$tag" ]] || fail "failed to parse the latest Deku release version"
+
+  normalize_version_string "$tag"
+}
+
+resolve_requested_version() {
+  if [[ -n "$RESOLVED_VERSION" ]]; then
+    echo "$RESOLVED_VERSION"
+    return
+  fi
+
+  if [[ "$DEKU_VERSION" == "latest" ]]; then
+    RESOLVED_VERSION="$(fetch_latest_release_version)"
+  else
+    RESOLVED_VERSION="$(normalize_version)"
+  fi
+
+  echo "$RESOLVED_VERSION"
+}
+
 release_base_url() {
   if [[ -n "$DEKU_RELEASE_BASE_URL" ]]; then
     echo "$DEKU_RELEASE_BASE_URL"
@@ -134,13 +179,8 @@ release_base_url() {
   fi
 
   local version
-  version="$(normalize_version)"
-
-  if [[ "$version" == "latest" ]]; then
-    echo "https://github.com/${DEKU_REPO}/releases/latest/download"
-  else
-    echo "https://github.com/${DEKU_REPO}/releases/download/${version}"
-  fi
+  version="$(resolve_requested_version)"
+  echo "https://github.com/${DEKU_REPO}/releases/download/${version}"
 }
 
 download_artifact() {
@@ -397,6 +437,58 @@ configured_ssh_port() {
   printf '%s\n' "$ssh_port"
 }
 
+normalize_installed_version() {
+  local version="$1"
+
+  version="${version##* }"
+  version="${version//$'\r'/}"
+  version="${version//$'\n'/}"
+
+  [[ -n "$version" ]] || return 1
+  normalize_version_string "$version"
+}
+
+installed_version() {
+  local deku_bin="${INSTALL_DIR}/deku"
+  local version=""
+
+  [[ -x "$deku_bin" ]] || return 1
+
+  if version="$("$deku_bin" version 2>/dev/null | head -n 1)"; then
+    :
+  elif version="$("$deku_bin" --version 2>/dev/null | head -n 1)"; then
+    :
+  else
+    return 1
+  fi
+
+  normalize_installed_version "$version"
+}
+
+maybe_skip_reinstall() {
+  local target_version="$1"
+  local current_version=""
+
+  if [[ "$DEKU_VERSION" != "latest" ]]; then
+    return 1
+  fi
+
+  if [[ ! -x "${INSTALL_DIR}/deku" ]] \
+    || [[ ! -f "${SYSTEMD_UNIT_PATH}" ]] \
+    || [[ ! -f "${CONFIG_DIR}/config.toml" ]]; then
+    return 1
+  fi
+
+  if current_version="$(installed_version 2>/dev/null)" \
+    && [[ -n "$current_version" ]] \
+    && [[ "$current_version" == "$target_version" ]]; then
+    success "Deku is already installed and at the latest version."
+    return 0
+  fi
+
+  return 1
+}
+
 install_dashboard_assets() {
   local data_dir="$1"
   local dashboard_dir="${data_dir}/dashboard"
@@ -525,13 +617,19 @@ print_get_started() {
 main() {
   require_linux
   require_root
+  RESOLVED_VERSION=""
   SETUP_RAN=0
   rm -f "${TMP_DIR}/dashboard-token"
 
   local arch
   arch="$(detect_arch)"
+  local resolved_version
+  resolved_version="$(resolve_requested_version)"
+  if maybe_skip_reinstall "$resolved_version"; then
+    return 0
+  fi
 
-  log "Installing Deku ${DEKU_VERSION} for linux/${arch}"
+  log "Installing Deku ${resolved_version} for linux/${arch}"
   install_prerequisites
   download_checksums || true
   install_angie

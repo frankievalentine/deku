@@ -8,6 +8,8 @@ Current release-facing `deku` command surface.
 ## Core Commands
 
 - `deku setup`
+- `deku version`
+- `deku restart`
 - `deku dashboard`
 - `deku uninstall`
 - `deku apps list|create|destroy|info`
@@ -34,6 +36,15 @@ Current release-facing `deku` command surface.
 ### `deku setup`
 
 - `setup` — interactive first-run configuration for the server
+
+### `deku version`
+
+- `version` — print the current tagged Deku release version
+- `--version` / `-v` — print the same version string
+
+### `deku restart`
+
+- `restart` — restart the local `deku` systemd service on packaged Linux installs
 
 ### `deku dashboard`
 
