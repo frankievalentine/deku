@@ -37,7 +37,7 @@ Requirements:
 Install on the server:
 
 ```bash
-curl -fsSL https://deku.vercel.app/install.sh | bash
+curl -fsSL https://get-deku.vercel.app/install.sh | bash
 ```
 
 Uninstall guidance, including `deku uninstall`, lives in [docs/src/content/docs/installation.md](docs/src/content/docs/installation.md).
@@ -226,7 +226,7 @@ Recommended project settings:
 - Install Command: `bun install --frozen-lockfile`
 - Build Command: `bun run build`
 - Output Directory: `dist`
-- Production URL: `https://deku.vercel.app`
+- Production URL: `https://get-deku.vercel.app`
 
 Optional environment variables for the docs chat pane:
 

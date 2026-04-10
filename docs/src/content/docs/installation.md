@@ -14,10 +14,10 @@ This page covers the packaged server install path for Deku.
 ## One-line Install
 
 ```bash
-curl -fsSL https://deku.vercel.app/install.sh | bash
+curl -fsSL https://get-deku.vercel.app/install.sh | bash
 ```
 
-`https://deku.vercel.app/install.sh` is the canonical public installer entrypoint for this project.
+`https://get-deku.vercel.app/install.sh` is the canonical public installer entrypoint for this project.
 
 The installer will:
 
