@@ -130,6 +130,7 @@ fn build_api_router(state: SharedState) -> Router {
         )
         .route("/api/objectstore/test", post(test_object_store_config))
         // Dashboard auth
+        .route("/api/dashboard/session", post(verify_dashboard_session))
         .route("/api/dashboard/token", post(rotate_dashboard_token))
         .route("/api/version", get(get_version_status))
         // Archive deploy
@@ -397,6 +398,11 @@ async fn rotate_dashboard_token(State(state): State<SharedState>) -> impl IntoRe
         Ok(token) => (StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
+}
+
+async fn verify_dashboard_session() -> impl IntoResponse {
+    auth::log_dashboard_session_verified();
+    StatusCode::NO_CONTENT
 }
 
 async fn get_version_status(State(state): State<SharedState>) -> impl IntoResponse {

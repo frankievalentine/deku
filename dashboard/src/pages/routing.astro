@@ -1,11 +1,8 @@
 ---
-import RoutingPage from '../components/RoutingPage';
+import { RoutingPageClient } from '../components/DashboardClients';
 import Shell from '../layouts/Shell.astro';
-import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / Routing" activeNav="routing">
-  <DashboardQueryProvider client:load>
-    <RoutingPage />
-  </DashboardQueryProvider>
+  <RoutingPageClient client:load />
 </Shell>

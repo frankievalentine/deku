@@ -1,5 +1,6 @@
 use axum::{extract::Request, http::StatusCode, middleware::Next, response::IntoResponse, Json};
 use deku_core::auth::verify_dashboard_token;
+use tracing::{info, warn};
 
 use super::SharedState;
 
@@ -10,6 +11,8 @@ pub async fn require_auth(
     request: Request,
     next: Next,
 ) -> impl IntoResponse {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
     let token_hash = state
         .dashboard_auth
         .read()
@@ -33,15 +36,33 @@ pub async fn require_auth(
         (Some(token), Some(hash)) if verify_dashboard_token(&token, &hash) => {
             next.run(request).await
         }
-        (Some(_), None) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "dashboard auth not configured" })),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "unauthorized" })),
-        )
-            .into_response(),
+        (Some(_), Some(_)) => {
+            warn!(%method, %path, "dashboard auth rejected request with invalid token");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "unauthorized" })),
+            )
+                .into_response()
+        }
+        (Some(_), None) => {
+            warn!(%method, %path, "dashboard auth is not configured");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "dashboard auth not configured" })),
+            )
+                .into_response()
+        }
+        (None, _) => {
+            warn!(%method, %path, "dashboard auth rejected request without token");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "unauthorized" })),
+            )
+                .into_response()
+        }
     }
+}
+
+pub fn log_dashboard_session_verified() {
+    info!("dashboard token accepted for browser session");
 }

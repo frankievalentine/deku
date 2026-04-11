@@ -308,10 +308,13 @@ async function apiFetch<T>(
 
 export async function verifyToken(token: string): Promise<boolean> {
   try {
-    await apiFetch<App[]>('/api/apps', {}, token);
+    await apiFetch<void>('/api/dashboard/session', { method: 'POST' }, token);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(' 401:')) {
+      return false;
+    }
+    throw error;
   }
 }
 

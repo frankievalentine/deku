@@ -1,11 +1,8 @@
 ---
-import AppDetailPage from '../components/AppDetailPage';
+import { AppDetailPageClient } from '../components/DashboardClients';
 import Shell from '../layouts/Shell.astro';
-import { DashboardQueryProvider } from '../lib/query';
 ---
 
 <Shell title="Deku / App Detail" activeNav="apps">
-  <DashboardQueryProvider client:load>
-    <AppDetailPage />
-  </DashboardQueryProvider>
+  <AppDetailPageClient client:load />
 </Shell>
