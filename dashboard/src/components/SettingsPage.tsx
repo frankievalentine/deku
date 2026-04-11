@@ -67,7 +67,7 @@ function SettingsInner() {
   const versionError = versionQuery.error
     ? getErrorMessage(versionQuery.error, 'Unable to load release status.')
     : null;
-  const dashboardBuildVersion = useMemo(() => getDashboardBuildVersion() ?? 'v0.1.10', []);
+  const dashboardBuildVersion = useMemo(() => getDashboardBuildVersion() ?? 'v0.1.11', []);
   const health =
     healthQuery.isPending || healthQuery.data === undefined
       ? 'checking'
