@@ -1,8 +1,8 @@
 ---
-import { PluginsPageClient } from '../components/DashboardClients';
+import PluginsPage from '../components/PluginsPage';
 import Shell from '../layouts/Shell.astro';
 ---
 
 <Shell title="Deku / Plugins" activeNav="plugins">
-  <PluginsPageClient client:load />
+  <PluginsPage client:load />
 </Shell>

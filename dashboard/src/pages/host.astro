@@ -1,8 +1,8 @@
 ---
-import { HostPageClient } from '../components/DashboardClients';
+import HostPage from '../components/HostPage';
 import Shell from '../layouts/Shell.astro';
 ---
 
 <Shell title="Deku / Host" activeNav="host">
-  <HostPageClient client:load />
+  <HostPage client:load />
 </Shell>

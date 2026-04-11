@@ -1,8 +1,8 @@
 ---
-import { AppsPageClient } from '../components/DashboardClients';
+import AppListClient from '../components/AppListClient';
 import Shell from '../layouts/Shell.astro';
 ---
 
 <Shell title="Deku / Apps" activeNav="apps">
-  <AppsPageClient client:load />
+  <AppListClient client:load />
 </Shell>
