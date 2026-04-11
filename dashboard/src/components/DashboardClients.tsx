@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { DashboardQueryProvider } from '../lib/query';
 import AppDetailPage from './AppDetailPage';
 import AppList from './AppList';
 import DeploymentDetailPage from './DeploymentDetailPage';
@@ -9,7 +10,6 @@ import RoutingPage from './RoutingPage';
 import ServicesPage from './ServicesPage';
 import SettingsPage from './SettingsPage';
 import SshKeysPage from './SshKeysPage';
-import { DashboardQueryProvider } from '../lib/query';
 
 function withDashboardQueryProvider(node: ReactNode) {
   return <DashboardQueryProvider>{node}</DashboardQueryProvider>;
