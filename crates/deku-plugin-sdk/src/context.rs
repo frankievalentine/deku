@@ -12,6 +12,7 @@ pub struct BuildContext {
     pub app: App,
     pub source_dir: PathBuf,
     pub data_dir: PathBuf,
+    pub buildkit_host: Option<String>,
 }
 
 #[derive(Debug, Clone)]

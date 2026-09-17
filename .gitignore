@@ -8,6 +8,7 @@
 /docs/.astro
 /dist
 /.tmp-*/
+/PROJECT_REVIEW.md
 *.env
 .DS_Store
 .claude/

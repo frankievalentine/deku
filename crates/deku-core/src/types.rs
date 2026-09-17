@@ -14,6 +14,7 @@ pub struct App {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
+#[sqlx(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum AppStatus {
     Created,
@@ -46,6 +47,7 @@ pub struct Deployment {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
+#[sqlx(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum DeployStatus {
     Pending,
@@ -76,10 +78,12 @@ impl std::fmt::Display for DeployStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
+#[sqlx(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum BuilderType {
     Dockerfile,
     Nixpacks,
+    Railpack,
     Pack,
     Image,
     Archive,
@@ -91,6 +95,7 @@ impl std::fmt::Display for BuilderType {
         let s = match self {
             Self::Dockerfile => "dockerfile",
             Self::Nixpacks => "nixpacks",
+            Self::Railpack => "railpack",
             Self::Pack => "pack",
             Self::Image => "image",
             Self::Archive => "archive",
@@ -245,7 +250,7 @@ pub struct DekuToml {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DekuBuildConfig {
-    /// dockerfile | nixpacks | pack | image | compose | auto
+    /// dockerfile | nixpacks | railpack | pack | image | compose | auto
     pub builder: Option<String>,
     pub dockerfile: Option<String>,
     pub context: Option<String>,

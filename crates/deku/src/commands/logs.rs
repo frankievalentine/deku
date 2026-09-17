@@ -30,6 +30,7 @@ pub async fn run(args: LogsArgs, client: &DekuClient) -> Result<()> {
                         println!("[{etype}] {line}");
                     }
                 }
+                true
             })
             .await?;
     } else {

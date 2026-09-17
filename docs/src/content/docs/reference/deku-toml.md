@@ -31,10 +31,12 @@ worker = 2
 
 ## Build
 
-- `builder`: `dockerfile | nixpacks | pack | image | auto`
+- `builder`: `dockerfile | railpack | pack | image | compose | auto`
 - `dockerfile`: Override Dockerfile path
 - `context`: Build context directory
 - `build.args`: Build-time environment passed to the builder
+
+Without `builder = "railpack"`, Deku auto-detects a `Dockerfile`, `dockerfile`, or Docker Compose file and uses the matching builder. `railpack` runs its own language detection, so it is only used with an explicit selection. Railpack builds with BuildKit; `dekud` runs a managed BuildKit container (`deku-buildkit`) by default. Override it with `[buildkit]` in the daemon config (`managed`, `image`, `container_name`, or an explicit `host`).
 
 ## Deploy
 

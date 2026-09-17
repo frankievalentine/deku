@@ -7,7 +7,10 @@ use deku_plugin_sdk::context::BuildContext;
 use deku_plugin_sdk::context::DeployContext;
 use sqlx::SqlitePool;
 
-use crate::build::{select_builder, BuiltImage};
+use crate::build::{
+    deployment_image_id, deployment_image_repo, deployment_image_tag, get_exposed_ports,
+    select_builder, BuiltImage,
+};
 use crate::config::DekuConfig;
 use crate::container::{self, ContainerSpec, DockerClient};
 use crate::db::queries;
@@ -145,6 +148,7 @@ pub async fn run_deploy(
         DeploySource::Image { .. } => BuilderType::Image,
         DeploySource::Archive { .. } => BuilderType::Archive,
         DeploySource::Source { .. } => match req.force_builder.as_deref() {
+            Some("railpack") => BuilderType::Railpack,
             Some("nixpacks") => BuilderType::Nixpacks,
             Some("pack") => BuilderType::Pack,
             Some("compose") => BuilderType::Compose,
@@ -182,7 +186,15 @@ pub async fn run_deploy(
         }
         Err(ref e) => {
             let _ = queries::update_deployment(pool, &deploy_id, DeployStatus::Failed, None).await;
-            queries::update_app_status(pool, app_id, AppStatus::Error).await?;
+            let still_serving = queries::get_latest_deployment(pool, app_id)
+                .await?
+                .is_some();
+            let app_status = if still_serving {
+                AppStatus::Deployed
+            } else {
+                AppStatus::Error
+            };
+            queries::update_app_status(pool, app_id, app_status).await?;
             events.emit(
                 Some(app_id.clone()),
                 "deploy.failed",
@@ -214,48 +226,60 @@ async fn do_deploy(
 
     queries::update_deployment(pool, deploy_id, DeployStatus::Building, None).await?;
 
+    let image_tag = deployment_image_tag(app_name, deploy_id);
+
     let (built, deku_toml) = match &req.source {
         DeploySource::Image { reference } => {
-            // Pull the image and wrap it
-            events.emit(
-                Some(app_id.clone()),
-                "build.log",
-                Some(serde_json::json!({ "line": format!("Pulling image {reference}...") })),
-            );
-
-            let ref_clone = reference.clone();
-            let events_clone = events.clone();
-            let app_id_clone = app_id.clone();
-
-            container::pull_image(docker, reference, |status| {
-                events_clone.emit(
-                    Some(app_id_clone.clone()),
+            if container::image_exists(docker, reference).await {
+                events.emit(
+                    Some(app_id.clone()),
                     "build.log",
-                    Some(serde_json::json!({ "line": status })),
+                    Some(serde_json::json!({ "line": format!("Using local image {reference}") })),
                 );
-            })
-            .await?;
+            } else {
+                events.emit(
+                    Some(app_id.clone()),
+                    "build.log",
+                    Some(serde_json::json!({ "line": format!("Pulling image {reference}...") })),
+                );
 
-            // Tag as deku image
-            let image_tag = format!("deku/{app_name}:latest");
-            let (repo_part, tag_part) = ref_clone
-                .split_once(':')
-                .unwrap_or((ref_clone.as_str(), "latest"));
+                let events_clone = events.clone();
+                let app_id_clone = app_id.clone();
 
-            // Re-tag to our naming scheme
-            container::tag_image(
-                docker,
-                &format!("{repo_part}:{tag_part}"),
-                &format!("deku/{app_name}"),
-                "latest",
-            )
-            .await?;
+                container::pull_image(docker, reference, |status| {
+                    events_clone.emit(
+                        Some(app_id_clone.clone()),
+                        "build.log",
+                        Some(serde_json::json!({ "line": status })),
+                    );
+                })
+                .await?;
+            }
 
-            let exposed_ports: Vec<u16> = vec![];
+            let recorded_tag =
+                if reference.starts_with(&format!("{}:", deployment_image_repo(app_name))) {
+                    reference.clone()
+                } else {
+                    let (repo_part, tag_part) = reference
+                        .rsplit_once(':')
+                        .unwrap_or((reference.as_str(), "latest"));
+
+                    container::tag_image(
+                        docker,
+                        &format!("{repo_part}:{tag_part}"),
+                        &deployment_image_repo(app_name),
+                        &deployment_image_id(deploy_id),
+                    )
+                    .await?;
+
+                    image_tag.clone()
+                };
+
+            let exposed_ports = get_exposed_ports(docker, &recorded_tag).await;
 
             (
                 BuiltImage {
-                    tag: image_tag,
+                    tag: recorded_tag,
                     exposed_ports,
                     procfile: vec![],
                 },
@@ -294,17 +318,24 @@ async fn do_deploy(
             let source_path = tmp_dir.path().to_path_buf();
             let deku_toml = load_deku_toml(&source_path);
 
+            let builder = select_builder(&source_path, req.force_builder.as_deref())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let buildkit_host = if builder.name() == "railpack" {
+                Some(crate::buildkit::resolve_host(docker, cfg).await?)
+            } else {
+                None
+            };
             let ctx = BuildContext {
                 app: app.clone(),
                 source_dir: source_path.clone(),
                 data_dir: cfg.data_dir.clone(),
+                buildkit_host,
             };
 
-            let builder = select_builder(&source_path, req.force_builder.as_deref());
             tracing::info!(app = app_name, builder = builder.name(), "selected builder");
             plugins.run_pre_build(&ctx).await;
             let built = builder
-                .build(&ctx, deku_toml.as_ref(), docker, events)
+                .build(&ctx, deku_toml.as_ref(), docker, events, &image_tag)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             plugins.run_post_build(&ctx).await;
@@ -342,11 +373,6 @@ async fn do_deploy(
             }
 
             let deku_toml = load_deku_toml(path);
-            let ctx = BuildContext {
-                app: app.clone(),
-                source_dir: path.clone(),
-                data_dir: cfg.data_dir.clone(),
-            };
             let forced = req.force_builder.as_deref().or_else(|| {
                 deku_toml
                     .as_ref()
@@ -354,11 +380,23 @@ async fn do_deploy(
                     .and_then(|b| b.builder.as_deref())
             });
 
-            let builder = select_builder(path, forced);
+            let builder = select_builder(path, forced).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let buildkit_host = if builder.name() == "railpack" {
+                Some(crate::buildkit::resolve_host(docker, cfg).await?)
+            } else {
+                None
+            };
+            let ctx = BuildContext {
+                app: app.clone(),
+                source_dir: path.clone(),
+                data_dir: cfg.data_dir.clone(),
+                buildkit_host,
+            };
+
             tracing::info!(app = app_name, builder = builder.name(), "selected builder");
             plugins.run_pre_build(&ctx).await;
             let built = builder
-                .build(&ctx, deku_toml.as_ref(), docker, events)
+                .build(&ctx, deku_toml.as_ref(), docker, events, &image_tag)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             plugins.run_post_build(&ctx).await;
@@ -601,16 +639,6 @@ async fn do_deploy(
             ));
         }
 
-        // Update port mapping in DB
-        let _ = queries::upsert_port_mapping(
-            pool,
-            app_id,
-            port as i64,
-            web_container_port as i64,
-            "tcp",
-        )
-        .await;
-
         // Update Angie upstream
         let domains = queries::list_domain_names(pool, app_id).await?;
         let tls_enabled = queries::get_app_by_id(pool, app_id)
@@ -633,9 +661,31 @@ async fn do_deploy(
             )
             .await
             {
-                tracing::warn!("failed to write angie config: {e}");
+                events.emit(
+                    Some(app_id.clone()),
+                    "deploy.routing_failed",
+                    Some(serde_json::json!({ "error": e.to_string() })),
+                );
+                for id in &new_container_ids {
+                    let _ = container::stop_container(docker, id, 10).await;
+                    let _ = container::remove_container(docker, id).await;
+                    let _ = queries::update_container_status(pool, id, "removed").await;
+                }
+                return Err(anyhow::anyhow!(
+                    "routing configuration failed; previous deployment left serving: {e}"
+                ));
             }
         }
+
+        // Update port mapping in DB only after the route is confirmed live
+        let _ = queries::upsert_port_mapping(
+            pool,
+            app_id,
+            port as i64,
+            web_container_port as i64,
+            "tcp",
+        )
+        .await;
 
         // Emit deploy URL info
         let scheme = if tls_enabled { "https" } else { "http" };
@@ -860,7 +910,13 @@ pub async fn rollback(
     run_deploy(pool, docker, events, cfg, plugins, req).await?;
 
     // Mark the previous current deployment as rolled_back
-    queries::update_deployment(pool, &current.id, DeployStatus::RolledBack, None).await?;
+    queries::update_deployment(
+        pool,
+        &current.id,
+        DeployStatus::RolledBack,
+        current.image_tag.as_deref(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -905,4 +961,198 @@ fn parse_cpu_quota(cpu: &str) -> Option<i64> {
     // decimal cores
     let cores: f64 = cpu.parse().ok()?;
     Some((cores * PERIOD as f64) as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deku_core::types::NewApp;
+
+    fn docker_tests_enabled() -> bool {
+        std::env::var("DEKU_DOCKER_IT").is_ok()
+    }
+
+    struct Harness {
+        _temp: tempfile::TempDir,
+        pool: SqlitePool,
+        docker: DockerClient,
+        events: EventSender,
+        cfg: DekuConfig,
+        plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
+    }
+
+    impl Harness {
+        async fn new() -> Option<Self> {
+            if !docker_tests_enabled() {
+                return None;
+            }
+
+            let docker = container::connect().ok()?;
+            let temp = tempfile::tempdir().ok()?;
+            let cfg = DekuConfig {
+                data_dir: temp.path().to_path_buf(),
+                angie_conf_dir: temp.path().join("angie"),
+                api_port: 0,
+                ..DekuConfig::default()
+            };
+            std::fs::create_dir_all(&cfg.angie_conf_dir).ok()?;
+
+            let pool = crate::db::connect(&cfg).await.ok()?;
+            crate::db::migrate(&pool).await.ok()?;
+            let events = crate::events::EventBus::new(pool.clone());
+
+            Some(Self {
+                _temp: temp,
+                pool,
+                docker,
+                events,
+                cfg,
+                plugins: crate::plugins::PluginRegistry::new(),
+            })
+        }
+
+        async fn deploy_image(
+            &self,
+            app: &deku_core::types::App,
+            reference: &str,
+        ) -> anyhow::Result<String> {
+            run_deploy(
+                &self.pool,
+                &self.docker,
+                &self.events,
+                &self.cfg,
+                &self.plugins,
+                DeployRequest {
+                    app_id: app.id.clone(),
+                    app_name: app.name.clone(),
+                    source: DeploySource::Image {
+                        reference: reference.to_string(),
+                    },
+                    force_builder: None,
+                },
+            )
+            .await
+        }
+
+        async fn remove_running_containers(&self, app_id: &str) {
+            if let Ok(containers) = queries::list_containers_for_app(&self.pool, app_id).await {
+                for record in containers {
+                    let _ = container::remove_container(&self.docker, &record.id).await;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn rollback_restores_the_recorded_immutable_image() {
+        let Some(h) = Harness::new().await else {
+            return;
+        };
+        let app = queries::create_app(
+            &h.pool,
+            &NewApp {
+                name: "rollback-it".to_string(),
+            },
+        )
+        .await
+        .expect("app should create");
+
+        let first_id = h
+            .deploy_image(&app, "nginx:alpine")
+            .await
+            .expect("first deploy");
+        let first = queries::get_deployment(&h.pool, &first_id)
+            .await
+            .expect("first deployment row");
+        let first_tag = first.image_tag.clone().expect("first image tag");
+        assert!(!first_tag.ends_with(":latest"));
+        assert!(first_tag.ends_with(&deployment_image_id(&first_id)));
+
+        let second_id = h
+            .deploy_image(&app, "nginx:alpine")
+            .await
+            .expect("second deploy");
+        let second = queries::get_deployment(&h.pool, &second_id)
+            .await
+            .expect("second deployment row");
+        let second_tag = second.image_tag.clone().expect("second image tag");
+        assert_ne!(first_tag, second_tag, "each deployment owns its own tag");
+
+        rollback(
+            &h.pool,
+            &h.docker,
+            &h.events,
+            &h.cfg,
+            &h.plugins,
+            &app.id,
+            &app.name,
+            Some(&first_id),
+        )
+        .await
+        .expect("rollback should succeed");
+
+        let live = queries::get_latest_deployment(&h.pool, &app.id)
+            .await
+            .expect("latest query")
+            .expect("a live deployment");
+        assert!(matches!(live.status, DeployStatus::Live));
+        assert_eq!(live.image_tag.as_deref(), Some(first_tag.as_str()));
+
+        h.remove_running_containers(&app.id).await;
+    }
+
+    #[tokio::test]
+    async fn routing_failure_fails_deploy_and_keeps_previous_containers() {
+        let Some(h) = Harness::new().await else {
+            return;
+        };
+        let app = queries::create_app(
+            &h.pool,
+            &NewApp {
+                name: "routing-it".to_string(),
+            },
+        )
+        .await
+        .expect("app should create");
+        queries::add_domain(&h.pool, &app.id, "routing-it.test")
+            .await
+            .expect("domain should add");
+
+        h.deploy_image(&app, "nginx:alpine")
+            .await
+            .expect("first deploy");
+
+        let before: std::collections::HashSet<String> =
+            queries::list_containers_for_app(&h.pool, &app.id)
+                .await
+                .expect("containers")
+                .into_iter()
+                .map(|record| record.id)
+                .collect();
+        assert!(!before.is_empty(), "first deploy should have containers");
+
+        let config_path = proxy::app_config_path(&h.cfg.angie_conf_dir, &app.name);
+        std::fs::remove_file(&config_path).expect("config should exist");
+        std::fs::create_dir(&config_path).expect("blocking dir should create");
+
+        let result = h.deploy_image(&app, "nginx:alpine").await;
+        assert!(result.is_err(), "routing failure must fail the deploy");
+
+        let after: std::collections::HashSet<String> =
+            queries::list_containers_for_app(&h.pool, &app.id)
+                .await
+                .expect("containers")
+                .into_iter()
+                .map(|record| record.id)
+                .collect();
+        assert!(
+            after.iter().any(|id| before.contains(id)),
+            "previous containers must survive a routing failure"
+        );
+
+        let stored = queries::get_app_by_id(&h.pool, &app.id).await.expect("app");
+        assert!(matches!(stored.status, AppStatus::Deployed));
+
+        h.remove_running_containers(&app.id).await;
+    }
 }

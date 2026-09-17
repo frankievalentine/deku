@@ -11,6 +11,7 @@ import {
   type VersionStatus,
 } from '../lib/api';
 import { type CommandItem, flushQueuedToasts, NAV_ITEMS, showToast } from '../lib/shell';
+import { installMobileSidebarOverlay } from '../lib/sidebar-overlay';
 import {
   applyTheme,
   getStoredThemeMode,
@@ -56,6 +57,7 @@ export default function ShellController() {
   const [versionStatus, setVersionStatus] = useState<VersionStatus | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const commandTriggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     setHeaderRoot(document.getElementById('shell-header-controls'));
@@ -165,6 +167,8 @@ export default function ShellController() {
     return () => media.removeEventListener('change', syncSidebarLayout);
   }, []);
 
+  useEffect(() => installMobileSidebarOverlay(), []);
+
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
       if (!hasToken) return;
@@ -225,6 +229,8 @@ export default function ShellController() {
     if (!dialog) return;
 
     if (commandOpen && !dialog.open) {
+      const active = document.activeElement;
+      commandTriggerRef.current = active instanceof HTMLElement ? active : null;
       dialog.showModal();
       window.requestAnimationFrame(() => {
         inputRef.current?.focus();
@@ -233,7 +239,10 @@ export default function ShellController() {
     }
 
     if (!commandOpen && dialog.open) {
+      const trigger = commandTriggerRef.current;
+      commandTriggerRef.current = null;
       dialog.close();
+      window.requestAnimationFrame(() => trigger?.focus());
     }
   }, [commandOpen]);
 
@@ -446,7 +455,6 @@ export default function ShellController() {
           connectionState={connectionState}
           hasToken={hasToken}
           isApplePlatform={isApplePlatform}
-          onDisconnect={handleDisconnect}
           onOpenCommand={() => setCommandOpen(true)}
           onToggleSidebar={() => {
             document.dispatchEvent(
@@ -455,8 +463,6 @@ export default function ShellController() {
               })
             );
           }}
-          onRotateToken={() => void handleRotateToken()}
-          rotating={rotating}
           versionStatus={versionStatus}
         />,
         headerRoot
@@ -520,6 +526,14 @@ export default function ShellController() {
               aria-controls="dashboard-command-menu"
               aria-label="Search dashboard"
             />
+            <button
+              type="button"
+              className="command-close"
+              aria-label="Close dialog"
+              onClick={() => setCommandOpen(false)}
+            >
+              <Icon name="close" size={16} />
+            </button>
           </header>
 
           <div
@@ -552,18 +566,16 @@ export default function ShellController() {
                     data-filter={item.label}
                     data-keywords={item.keywords.join(' ')}
                   >
-                    <Icon name={item.icon} size={16} />
-                    <span>{item.label}</span>
+                    <Icon name={item.icon} size={16} className="command-item-icon" />
+                    <span className="command-item-label">{item.label}</span>
                     {item.shortcutKey ? (
-                      <kbd className="ml-auto bg-transparent text-muted-foreground tracking-widest">
+                      <kbd className="command-shortcut">
                         {formatShortcutLabel(item.shortcutKey, isApplePlatform)}
                       </kbd>
                     ) : null}
                   </a>
                 ))}
             </div>
-
-            <hr />
 
             {/* biome-ignore lint/a11y/useSemanticElements: Basecoat command uses ARIA group structure for menu sections. */}
             <div role="group" className="command-group" aria-labelledby="command-group-actions">
@@ -596,20 +608,14 @@ export default function ShellController() {
                       aria-disabled={disabled}
                       onClick={disabled ? undefined : () => handleCommandAction(item)}
                     >
-                      <Icon name={item.icon} size={16} />
-                      <span>{item.label}</span>
-                      <kbd className="ml-auto bg-transparent text-muted-foreground tracking-widest">
-                        ACTION
-                      </kbd>
+                      <Icon name={item.icon} size={16} className="command-item-icon" />
+                      <span className="command-item-label">{item.label}</span>
+                      <kbd className="command-shortcut">↵</kbd>
                     </button>
                   );
                 })}
             </div>
           </div>
-
-          <button type="button" aria-label="Close dialog" onClick={() => setCommandOpen(false)}>
-            <Icon name="close" size={16} />
-          </button>
         </div>
       </dialog>
     </>
@@ -621,12 +627,9 @@ interface HeaderControlsProps {
   connectionState: ConnectionState;
   hasToken: boolean;
   isApplePlatform: boolean;
-  rotating: boolean;
   versionStatus: VersionStatus | null;
   onToggleSidebar: () => void;
   onOpenCommand: () => void;
-  onRotateToken: () => void;
-  onDisconnect: () => void;
 }
 
 function HeaderControls({
@@ -634,20 +637,13 @@ function HeaderControls({
   connectionState,
   hasToken,
   isApplePlatform,
-  rotating,
   versionStatus,
   onToggleSidebar,
   onOpenCommand,
-  onRotateToken,
-  onDisconnect,
 }: HeaderControlsProps) {
   const shortcutLabel = isApplePlatform ? '⌘K' : 'Ctrl K';
   const label =
-    connectionState === 'online'
-      ? 'Online'
-      : connectionState === 'offline'
-        ? 'Offline'
-        : 'Awaiting token';
+    connectionState === 'online' ? 'Online' : connectionState === 'offline' ? 'Offline' : 'Locked';
 
   return (
     <div className="shell-header-actions">
@@ -684,34 +680,10 @@ function HeaderControls({
         </kbd>
       </button>
 
-      <button
-        type="button"
-        className="btn-outline shell-action-button"
-        onClick={onRotateToken}
-        disabled={!hasToken}
-        aria-label={rotating ? 'Rotating token' : 'Rotate token'}
-      >
-        <Icon name="rotate" size={16} className={rotating ? 'spin' : undefined} />
-        {rotating ? (
-          <>
-            <span className="loading-spinner shell-action-spinner" />
-            <span className="shell-action-label">Rotating</span>
-          </>
-        ) : (
-          <span className="shell-action-label">Rotate token</span>
-        )}
-      </button>
-
-      <button
-        type="button"
-        className="btn btn-danger shell-action-button"
-        onClick={onDisconnect}
-        disabled={!hasToken}
-        aria-label="Disconnect dashboard"
-      >
-        <Icon name="disconnect" size={16} />
-        <span className="shell-action-label">Disconnect</span>
-      </button>
+      <a href="/settings" className="btn-outline shell-action-button" aria-label="Open settings">
+        <Icon name="settings" size={16} />
+        <span className="shell-action-label">Settings</span>
+      </a>
 
       {hasToken && versionStatus?.update_available ? (
         <a

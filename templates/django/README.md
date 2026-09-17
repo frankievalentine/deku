@@ -1,6 +1,6 @@
 # Django Starter
 
-This template is a minimal Django app adapted for Deku with the `nixpacks` builder.
+This template is a minimal Django app adapted for Deku with the `railpack` builder.
 
 It deploys as a plain Deku app with environment-driven configuration.
 
@@ -17,10 +17,13 @@ deku deploy run django-demo --path /absolute/path/to/repo/templates/django
 - Default database: SQLite
 - Optional managed service: `deku postgres` if you want to switch to Postgres later
 - When `DATABASE_URL` is present, the app will try to use it
+- `SECRET_KEY` is generated and persisted on first boot; set `SECRET_KEY` to pin your own, or
+  `DEKU_SECRET_KEY_FILE` to change where the generated key is stored
+- `ALLOWED_HOSTS` defaults to `*`; set a comma-separated `ALLOWED_HOSTS` to restrict it
 
 ## Files
 
 - `deku.toml`: Deku builder and deploy settings
-- `Procfile`: explicit Nixpacks start command
+- `Procfile`: explicit Railpack start command
 - `requirements.txt`: Python dependencies
 - `config/`: Django project configuration

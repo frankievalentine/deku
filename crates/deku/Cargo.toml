@@ -1,7 +1,8 @@
 [package]
 name = "deku"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
+rust-version.workspace = true
 
 [[bin]]
 name = "deku"
@@ -24,6 +25,6 @@ percent-encoding = { workspace = true }
 bollard = { workspace = true }
 sqlx = { workspace = true }
 async-trait = { workspace = true }
-dirs-next = "2"
+dirs = "7"
 flate2 = "1"
 tar = "0.4"

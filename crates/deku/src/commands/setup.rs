@@ -215,7 +215,11 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn install_systemd_unit() -> Result<()> {
-    let bin_dir = std::env::var("DEKU_BIN_DIR").unwrap_or_else(|_| "/usr/local/bin".to_string());
+    let bin_dir = if deku_core::dev_hooks::enabled() {
+        std::env::var("DEKU_BIN_DIR").unwrap_or_else(|_| "/usr/local/bin".to_string())
+    } else {
+        "/usr/local/bin".to_string()
+    };
     let unit = format!(
         r#"[Unit]
 Description=Deku PaaS daemon

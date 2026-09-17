@@ -25,6 +25,26 @@ pub struct BuiltImage {
     pub procfile: Vec<ProcfileEntry>,
 }
 
+pub fn deployment_image_repo(app_name: &str) -> String {
+    format!("deku/{app_name}")
+}
+
+pub fn deployment_image_id(deploy_id: &str) -> String {
+    deploy_id
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(12)
+        .collect()
+}
+
+pub fn deployment_image_tag(app_name: &str, deploy_id: &str) -> String {
+    format!(
+        "{}:{}",
+        deployment_image_repo(app_name),
+        deployment_image_id(deploy_id)
+    )
+}
+
 // ── Builder trait ─────────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -37,20 +57,27 @@ pub trait Builder: Send + Sync {
         deku_toml: Option<&DekuToml>,
         docker: &Docker,
         events: &EventSender,
+        image_tag: &str,
     ) -> Result<BuiltImage>;
 }
 
 // ── Auto-detect ───────────────────────────────────────────────────────────────
 
-pub fn select_builder(source: &Path, forced: Option<&str>) -> Box<dyn Builder> {
+pub fn select_builder(source: &Path, forced: Option<&str>) -> Result<Box<dyn Builder>> {
     if let Some(name) = forced {
         return match name {
-            "dockerfile" => Box::new(DockerfileBuilder),
-            "nixpacks" => Box::new(NixpacksBuilder),
-            "pack" => Box::new(PackBuilder),
-            "image" => Box::new(ImageBuilder),
-            "compose" => Box::new(ComposeBuilder),
-            _ => Box::new(NixpacksBuilder),
+            "dockerfile" => Ok(Box::new(DockerfileBuilder)),
+            "railpack" => Ok(Box::new(RailpackBuilder)),
+            "pack" => Ok(Box::new(PackBuilder)),
+            "image" => Ok(Box::new(ImageBuilder)),
+            "compose" => Ok(Box::new(ComposeBuilder)),
+            "nixpacks" => Err(DekuError::BuildFailed(
+                "builder 'nixpacks' was replaced by 'railpack'; set builder = \"railpack\" in deku.toml"
+                    .to_string(),
+            )),
+            _ => Err(DekuError::BuildFailed(format!(
+                "unknown builder '{name}'; expected one of: dockerfile, railpack, pack, image, compose"
+            ))),
         };
     }
 
@@ -62,16 +89,18 @@ pub fn select_builder(source: &Path, forced: Option<&str>) -> Box<dyn Builder> {
 
     for b in candidates {
         if b.detect(source) {
-            return b;
+            return Ok(b);
         }
     }
 
-    Box::new(NixpacksBuilder)
+    // Railpack is the general-purpose fallback for sources without a Dockerfile,
+    // Compose file, or pack config, matching the previous Nixpacks behavior.
+    Ok(Box::new(RailpackBuilder))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async fn get_exposed_ports(docker: &Docker, image_tag: &str) -> Vec<u16> {
+pub(crate) async fn get_exposed_ports(docker: &Docker, image_tag: &str) -> Vec<u16> {
     let Ok(info) = docker.inspect_image(image_tag).await else {
         return vec![];
     };
@@ -159,9 +188,9 @@ impl Builder for DockerfileBuilder {
         deku_toml: Option<&DekuToml>,
         docker: &Docker,
         events: &EventSender,
+        image_tag: &str,
     ) -> Result<BuiltImage> {
         let app_name = &ctx.app.name;
-        let image_tag = format!("deku/{app_name}:latest");
 
         let dockerfile = deku_toml
             .and_then(|t| t.build.as_ref())
@@ -191,7 +220,7 @@ impl Builder for DockerfileBuilder {
 
         let mut build_opts_builder = BuildImageOptionsBuilder::default()
             .dockerfile(dockerfile)
-            .t(&image_tag)
+            .t(image_tag)
             .rm(true);
 
         if !buildargs.is_empty() {
@@ -225,8 +254,8 @@ impl Builder for DockerfileBuilder {
             }
         }
 
-        let exposed_ports = get_exposed_ports(docker, &image_tag).await;
-        let procfile = extract_procfile(docker, &image_tag).await;
+        let exposed_ports = get_exposed_ports(docker, image_tag).await;
+        let procfile = extract_procfile(docker, image_tag).await;
 
         events.emit(
             Some(ctx.app.id.clone()),
@@ -235,84 +264,173 @@ impl Builder for DockerfileBuilder {
         );
 
         Ok(BuiltImage {
-            tag: image_tag,
+            tag: image_tag.to_string(),
             exposed_ports,
             procfile,
         })
     }
 }
 
-// ── Nixpacks builder ──────────────────────────────────────────────────────────
+// ── Railpack builder ──────────────────────────────────────────────────────────
 
-pub struct NixpacksBuilder;
+pub struct RailpackBuilder;
 
 #[async_trait]
-impl Builder for NixpacksBuilder {
+impl Builder for RailpackBuilder {
     fn name(&self) -> &'static str {
-        "nixpacks"
+        "railpack"
     }
 
     fn detect(&self, _source: &Path) -> bool {
-        false // Nixpacks is the fallback
+        false
     }
 
     async fn build(
         &self,
         ctx: &BuildContext,
-        _deku_toml: Option<&DekuToml>,
-        docker: &Docker,
+        deku_toml: Option<&DekuToml>,
+        _docker: &Docker,
         events: &EventSender,
+        image_tag: &str,
     ) -> Result<BuiltImage> {
         let app_name = &ctx.app.name;
-        let image_tag = format!("deku/{app_name}:latest");
+        let source = ctx.source_dir.to_str().unwrap_or(".").to_string();
+        let buildkit_host = ctx.buildkit_host.clone().ok_or_else(|| {
+            DekuError::BuildFailed(
+                "Railpack requires BuildKit, but no BuildKit host was provided".to_string(),
+            )
+        })?;
 
         events.emit(
             Some(ctx.app.id.clone()),
             "build.started",
-            Some(serde_json::json!({ "builder": "nixpacks", "app": app_name })),
+            Some(serde_json::json!({ "builder": "railpack", "app": app_name })),
         );
 
-        let output = tokio::process::Command::new("nixpacks")
-            .args([
-                "build",
-                ctx.source_dir.to_str().unwrap_or("."),
-                "--name",
-                &image_tag,
-            ])
+        let plan_dir = tempfile::tempdir().map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+        let plan_path = plan_dir.path().join("railpack-plan.json");
+        let plan_path_str = plan_path.to_string_lossy().to_string();
+
+        let plan_output = tokio::process::Command::new(crate::buildkit::railpack_bin())
+            .args(["plan", &source, "-o", &plan_path_str])
             .output()
             .await
-            .map_err(|e| DekuError::BuildFailed(format!("nixpacks not found: {e}")))?;
-
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            events.emit(
-                Some(ctx.app.id.clone()),
-                "build.log",
-                Some(serde_json::json!({ "line": line })),
-            );
-        }
-
-        if !output.status.success() {
+            .map_err(|e| DekuError::BuildFailed(format!("railpack not found: {e}")))?;
+        emit_output(ctx, events, &plan_output);
+        if !plan_output.status.success() {
             return Err(DekuError::BuildFailed(format!(
-                "nixpacks build failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+                "railpack plan failed: {}",
+                String::from_utf8_lossy(&plan_output.stderr)
             )));
         }
 
-        let exposed_ports = get_exposed_ports(docker, &image_tag).await;
-        let procfile = extract_procfile(docker, &image_tag).await;
+        let start_command = std::fs::read_to_string(&plan_path)
+            .ok()
+            .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
+            .and_then(|plan| {
+                plan.get("deploy")
+                    .and_then(|deploy| deploy.get("startCommand"))
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+            });
+
+        if let Some(command) = start_command.as_deref() {
+            events.emit(
+                Some(ctx.app.id.clone()),
+                "build.log",
+                Some(serde_json::json!({ "line": format!("Detected start command: {command}") })),
+            );
+        }
+
+        let mut command = tokio::process::Command::new(crate::buildkit::railpack_bin());
+        command
+            .args(["build", &source, "--name", image_tag, "--progress", "plain"])
+            .env("BUILDKIT_HOST", &buildkit_host);
+
+        if let Some(args) = deku_toml
+            .and_then(|t| t.build.as_ref())
+            .and_then(|b| b.args.as_ref())
+        {
+            for (key, value) in args {
+                command.args(["--env", &format!("{key}={value}")]);
+            }
+        }
+
+        let build_output = command
+            .output()
+            .await
+            .map_err(|e| DekuError::BuildFailed(format!("railpack not found: {e}")))?;
+        emit_output(ctx, events, &build_output);
+        if !build_output.status.success() {
+            return Err(DekuError::BuildFailed(format!(
+                "railpack build failed: {}",
+                String::from_utf8_lossy(&build_output.stderr)
+            )));
+        }
+
+        let exposed_ports = start_command
+            .as_deref()
+            .and_then(infer_port_from_start_command)
+            .map(|port| vec![port])
+            .unwrap_or_default();
 
         events.emit(
             Some(ctx.app.id.clone()),
             "build.complete",
-            Some(serde_json::json!({ "image_tag": image_tag, "builder": "nixpacks" })),
+            Some(serde_json::json!({ "image_tag": image_tag, "builder": "railpack" })),
         );
 
         Ok(BuiltImage {
-            tag: image_tag,
+            tag: image_tag.to_string(),
             exposed_ports,
-            procfile,
+            procfile: vec![],
         })
     }
+}
+
+fn emit_output(ctx: &BuildContext, events: &EventSender, output: &std::process::Output) {
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        events.emit(
+            Some(ctx.app.id.clone()),
+            "build.log",
+            Some(serde_json::json!({ "line": line })),
+        );
+    }
+    for line in String::from_utf8_lossy(&output.stderr).lines() {
+        events.emit(
+            Some(ctx.app.id.clone()),
+            "build.log",
+            Some(serde_json::json!({ "line": line })),
+        );
+    }
+}
+
+pub(crate) fn infer_port_from_start_command(command: &str) -> Option<u16> {
+    const MARKERS: [&str; 6] = ["PORT:-", "--port=", "--port ", "-p ", "-p=", "0.0.0.0:"];
+
+    for marker in MARKERS {
+        if let Some(index) = command.find(marker) {
+            if let Some(port) = leading_port(&command[index + marker.len()..]) {
+                return Some(port);
+            }
+        }
+    }
+
+    if let Some(index) = command.find("listen ") {
+        if let Some(port) = leading_port(&command[index + "listen ".len()..]) {
+            return Some(port);
+        }
+    }
+
+    None
+}
+
+fn leading_port(text: &str) -> Option<u16> {
+    let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u16>().ok().filter(|port| *port > 0)
 }
 
 // ── Pack (CNB) builder ────────────────────────────────────────────────────────
@@ -335,9 +453,9 @@ impl Builder for PackBuilder {
         _deku_toml: Option<&DekuToml>,
         docker: &Docker,
         events: &EventSender,
+        image_tag: &str,
     ) -> Result<BuiltImage> {
         let app_name = &ctx.app.name;
-        let image_tag = format!("deku/{app_name}:latest");
 
         events.emit(
             Some(ctx.app.id.clone()),
@@ -348,7 +466,7 @@ impl Builder for PackBuilder {
         let output = tokio::process::Command::new("pack")
             .args([
                 "build",
-                &image_tag,
+                image_tag,
                 "--path",
                 ctx.source_dir.to_str().unwrap_or("."),
             ])
@@ -371,8 +489,8 @@ impl Builder for PackBuilder {
             )));
         }
 
-        let exposed_ports = get_exposed_ports(docker, &image_tag).await;
-        let procfile = extract_procfile(docker, &image_tag).await;
+        let exposed_ports = get_exposed_ports(docker, image_tag).await;
+        let procfile = extract_procfile(docker, image_tag).await;
 
         events.emit(
             Some(ctx.app.id.clone()),
@@ -381,7 +499,7 @@ impl Builder for PackBuilder {
         );
 
         Ok(BuiltImage {
-            tag: image_tag,
+            tag: image_tag.to_string(),
             exposed_ports,
             procfile,
         })
@@ -408,20 +526,19 @@ impl Builder for ImageBuilder {
         _deku_toml: Option<&DekuToml>,
         docker: &Docker,
         events: &EventSender,
+        image_tag: &str,
     ) -> Result<BuiltImage> {
-        let image_tag = format!("deku/{}:latest", ctx.app.name);
-
         events.emit(
             Some(ctx.app.id.clone()),
             "build.started",
             Some(serde_json::json!({ "builder": "image", "app": ctx.app.name })),
         );
 
-        let exposed_ports = get_exposed_ports(docker, &image_tag).await;
-        let procfile = extract_procfile(docker, &image_tag).await;
+        let exposed_ports = get_exposed_ports(docker, image_tag).await;
+        let procfile = extract_procfile(docker, image_tag).await;
 
         Ok(BuiltImage {
-            tag: image_tag,
+            tag: image_tag.to_string(),
             exposed_ports,
             procfile,
         })
@@ -455,9 +572,8 @@ impl Builder for ComposeBuilder {
         _deku_toml: Option<&DekuToml>,
         docker: &Docker,
         events: &EventSender,
+        image_tag: &str,
     ) -> Result<BuiltImage> {
-        let app_name = &ctx.app.name;
-
         let compose_path = [
             "docker-compose.yml",
             "docker-compose.yaml",
@@ -472,7 +588,7 @@ impl Builder for ComposeBuilder {
         let compose_content = std::fs::read_to_string(&compose_path)
             .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
 
-        let compose: serde_yaml::Value = serde_yaml::from_str(&compose_content)
+        let compose: serde_yaml_ng::Value = serde_yaml_ng::from_str(&compose_content)
             .map_err(|e| DekuError::BuildFailed(format!("invalid compose file: {e}")))?;
 
         let services = compose["services"]
@@ -498,7 +614,6 @@ impl Builder for ComposeBuilder {
             .ok_or_else(|| DekuError::BuildFailed("no service found in compose".to_string()))?;
 
         let web_service = &compose["services"][web_service_name];
-        let image_tag = format!("deku/{app_name}:latest");
 
         events.emit(
             Some(ctx.app.id.clone()),
@@ -522,7 +637,7 @@ impl Builder for ComposeBuilder {
 
             let build_opts = BuildImageOptionsBuilder::default()
                 .dockerfile(dockerfile)
-                .t(&image_tag)
+                .t(image_tag)
                 .rm(true)
                 .build();
 
@@ -549,18 +664,15 @@ impl Builder for ComposeBuilder {
             }
         } else if let Some(image) = web_service.get("image").and_then(|v| v.as_str()) {
             let (repo, tag) = image.rsplit_once(':').unwrap_or((image, "latest"));
-            tag_image(
-                docker,
-                &format!("{repo}:{tag}"),
-                &format!("deku/{app_name}"),
-                "latest",
-            )
-            .await
-            .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+            let (target_repo, target_tag) =
+                image_tag.rsplit_once(':').unwrap_or((image_tag, "latest"));
+            tag_image(docker, &format!("{repo}:{tag}"), target_repo, target_tag)
+                .await
+                .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
         }
 
-        let exposed_ports = get_exposed_ports(docker, &image_tag).await;
-        let procfile = extract_procfile(docker, &image_tag).await;
+        let exposed_ports = get_exposed_ports(docker, image_tag).await;
+        let procfile = extract_procfile(docker, image_tag).await;
 
         events.emit(
             Some(ctx.app.id.clone()),
@@ -569,9 +681,98 @@ impl Builder for ComposeBuilder {
         );
 
         Ok(BuiltImage {
-            tag: image_tag,
+            tag: image_tag.to_string(),
             exposed_ports,
             procfile,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        deployment_image_id, deployment_image_tag, infer_port_from_start_command, select_builder,
+    };
+
+    #[test]
+    fn auto_detect_falls_back_to_railpack_without_manifest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let builder = select_builder(temp.path(), None).expect("builder");
+        assert_eq!(builder.name(), "railpack");
+    }
+
+    #[test]
+    fn auto_detect_prefers_dockerfile_over_railpack() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("Dockerfile"), "FROM scratch\n").expect("write");
+        let builder = select_builder(temp.path(), None).expect("builder");
+        assert_eq!(builder.name(), "dockerfile");
+    }
+
+    #[test]
+    fn explicit_nixpacks_is_rejected_with_migration_hint() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let error = select_builder(temp.path(), Some("nixpacks"))
+            .err()
+            .expect("error");
+        assert!(error.to_string().contains("railpack"), "{error}");
+    }
+
+    #[test]
+    fn explicit_unknown_builder_is_rejected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(select_builder(temp.path(), Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn deployment_image_id_is_deterministic_and_hex() {
+        let id = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
+        assert_eq!(deployment_image_id(id), "3f2504e04f89");
+        assert_eq!(deployment_image_id(id), deployment_image_id(id));
+        assert_eq!(deployment_image_id(id).len(), 12);
+        assert!(deployment_image_id(id)
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn deployment_image_tag_is_unique_per_deployment() {
+        let first = deployment_image_tag("demo", "3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+        let second = deployment_image_tag("demo", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        assert_eq!(first, "deku/demo:3f2504e04f89");
+        assert_ne!(first, second);
+        assert!(!first.ends_with(":latest"));
+        assert!(!second.ends_with(":latest"));
+    }
+
+    #[test]
+    fn infers_port_from_port_default() {
+        assert_eq!(
+            infer_port_from_start_command("gunicorn config.wsgi --bind 0.0.0.0:${PORT:-8000}"),
+            Some(8000)
+        );
+    }
+
+    #[test]
+    fn infers_port_from_flags() {
+        assert_eq!(
+            infer_port_from_start_command("node server.js --port 4000"),
+            Some(4000)
+        );
+        assert_eq!(
+            infer_port_from_start_command("node server.js --port=4100"),
+            Some(4100)
+        );
+        assert_eq!(infer_port_from_start_command("app -p 5000"), Some(5000));
+        assert_eq!(
+            infer_port_from_start_command("server listen 9000"),
+            Some(9000)
+        );
+    }
+
+    #[test]
+    fn returns_no_port_when_start_command_has_none() {
+        assert_eq!(infer_port_from_start_command("npm run start"), None);
+        assert_eq!(infer_port_from_start_command("serve on $PORT"), None);
     }
 }

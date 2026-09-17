@@ -1,9 +1,9 @@
-FROM oven/bun:1.3.11 AS deps
+FROM oven/bun:1.4.2 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
-FROM oven/bun:1.3.11 AS build
+FROM oven/bun:1.4.2 AS build
 WORKDIR /app
 ENV EMDASH_DATA_DIR=/data/emdash
 COPY package.json bun.lock ./

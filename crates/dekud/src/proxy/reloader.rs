@@ -1,15 +1,23 @@
 use anyhow::Result;
 
+fn env_override(name: &str) -> Option<String> {
+    if deku_core::dev_hooks::enabled() {
+        std::env::var(name).ok()
+    } else {
+        None
+    }
+}
+
 fn angie_bin() -> String {
-    std::env::var("DEKU_ANGIE_BIN").unwrap_or_else(|_| "angie".to_string())
+    env_override("DEKU_ANGIE_BIN").unwrap_or_else(|| "angie".to_string())
 }
 
 fn kill_bin() -> String {
-    std::env::var("DEKU_KILL_BIN").unwrap_or_else(|_| "kill".to_string())
+    env_override("DEKU_KILL_BIN").unwrap_or_else(|| "kill".to_string())
 }
 
 fn pid_path() -> std::path::PathBuf {
-    std::env::var_os("DEKU_ANGIE_PID_PATH")
+    env_override("DEKU_ANGIE_PID_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/run/angie/angie.pid"))
 }

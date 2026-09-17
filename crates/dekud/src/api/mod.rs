@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::{
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::StatusCode,
     middleware,
     response::{Html, IntoResponse, Response},
@@ -15,7 +15,9 @@ use chrono::{DateTime, Utc};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, UnixListener};
+use tokio::sync::RwLock;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tower_http::services::ServeDir;
@@ -33,10 +35,11 @@ use deku_core::{
     types::{NewApp, ObjectStoreConfig, Upstream},
 };
 use deku_plugin_sdk::context::AppContext;
-use tokio::sync::RwLock;
 
 pub mod auth;
 mod services;
+
+const ARCHIVE_UPLOAD_LIMIT: usize = 512 * 1024 * 1024;
 
 pub struct AppState {
     pub config: DekuConfig,
@@ -46,6 +49,7 @@ pub struct AppState {
     pub events: EventSender,
     pub docker: DockerClient,
     pub plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
+    pub deploy_locks: crate::deploy_lock::AppDeployLocks,
 }
 
 impl AppState {
@@ -64,6 +68,7 @@ impl AppState {
             events,
             docker,
             plugins,
+            deploy_locks: crate::deploy_lock::AppDeployLocks::default(),
         })
     }
 }
@@ -134,7 +139,10 @@ fn build_api_router(state: SharedState) -> Router {
         .route("/api/dashboard/token", post(rotate_dashboard_token))
         .route("/api/version", get(get_version_status))
         // Archive deploy
-        .route("/api/apps/{name}/deploy/archive", post(deploy_archive))
+        .route(
+            "/api/apps/{name}/deploy/archive",
+            post(deploy_archive).layer(DefaultBodyLimit::max(ARCHIVE_UPLOAD_LIMIT)),
+        )
         // Postgres
         .route(
             "/api/postgres/services",
@@ -336,20 +344,30 @@ fn escape_html(value: &str) -> String {
 }
 
 pub async fn serve(state: SharedState) -> anyhow::Result<()> {
+    let make_span = |request: &axum::http::Request<axum::body::Body>| {
+        tracing::info_span!(
+            "http_request",
+            method = %request.method(),
+            path = %request.uri().path(),
+        )
+    };
+
     // Unix socket router — trusted local access, no auth required
     let unix_app = build_api_router(state.clone())
+        .layer(middleware::from_fn(security_headers))
         .merge(build_public_router(state.clone()))
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http().make_span_with(make_span));
 
     // TCP router — dashboard/static assets are public, API routes require dashboard auth.
+    let tcp_api = build_api_router(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ))
+        .layer(middleware::from_fn(security_headers));
     let tcp_app = build_public_router(state.clone())
-        .merge(
-            build_api_router(state.clone()).layer(middleware::from_fn_with_state(
-                state.clone(),
-                auth::require_auth,
-            )),
-        )
-        .layer(TraceLayer::new_for_http());
+        .merge(tcp_api)
+        .layer(TraceLayer::new_for_http().make_span_with(make_span));
 
     let tcp_addr = format!("0.0.0.0:{}", state.config.api_port);
     let tcp_listener = TcpListener::bind(&tcp_addr).await?;
@@ -364,11 +382,31 @@ pub async fn serve(state: SharedState) -> anyhow::Result<()> {
     info!("API listening on {}", sock_path.display());
 
     tokio::try_join!(
-        axum::serve(tcp_listener, tcp_app).into_future(),
+        axum::serve(
+            tcp_listener,
+            tcp_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
         axum::serve(unix_listener, unix_app).into_future(),
     )?;
 
     Ok(())
+}
+
+/// Force no-referrer and no-store on API responses so a token carried in a URL
+/// is not propagated to other origins or retained by caches.
+async fn security_headers(request: axum::extract::Request, next: middleware::Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -378,6 +416,28 @@ fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Va
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(serde_json::json!({ "error": e.to_string() })),
     )
+}
+
+fn multipart_error(error: axum::extract::multipart::MultipartError) -> Response {
+    let status = error.status();
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        return (
+            status,
+            Json(serde_json::json!({
+                "error": format!(
+                    "archive exceeds the {} MiB upload limit",
+                    ARCHIVE_UPLOAD_LIMIT / (1024 * 1024)
+                )
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        status,
+        Json(serde_json::json!({ "error": error.body_text() })),
+    )
+        .into_response()
 }
 
 fn not_found(msg: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
@@ -854,8 +914,27 @@ async fn stream_app_events(
         })?;
 
     let app_id = app.id;
+
+    let history = if params.since.is_some() {
+        let since = params
+            .since
+            .as_deref()
+            .and_then(|value| value.parse::<DateTime<Utc>>().ok());
+        queries::list_events(&state.pool, Some(&app_id), since)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let history_stream = futures::stream::iter(history.into_iter().rev().filter_map(|event| {
+        serde_json::to_string(&event)
+            .ok()
+            .map(|data| Ok::<SseEvent, Infallible>(SseEvent::default().data(data)))
+    }));
+
     let rx = state.events.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(move |result| {
+    let live = BroadcastStream::new(rx).filter_map(move |result| {
         let app_id = app_id.clone();
         match result {
             Ok(event) if event.app_id.as_ref() == Some(&app_id) => serde_json::to_string(&event)
@@ -865,7 +944,7 @@ async fn stream_app_events(
         }
     });
 
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    Ok(Sse::new(history_stream.chain(live)).keep_alive(KeepAlive::default()))
 }
 
 // ── Domains ───────────────────────────────────────────────────────────────────
@@ -1438,9 +1517,11 @@ async fn trigger_deploy(
     let cfg = state.config.clone();
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
+    let deploy_lock = state.deploy_locks.for_app(&app.id);
 
     // Run deploy in background so the HTTP response returns immediately
     tokio::spawn(async move {
+        let _guard = deploy_lock.lock().await;
         if let Err(e) =
             crate::deploy::run_deploy(&pool, &docker, &events, &cfg, plugins.as_ref(), req).await
         {
@@ -1480,8 +1561,10 @@ async fn trigger_rollback(
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
     let to_id = body.deployment_id.clone();
+    let deploy_lock = state.deploy_locks.for_app(&app.id);
 
     tokio::spawn(async move {
+        let _guard = deploy_lock.lock().await;
         if let Err(e) = crate::deploy::rollback(
             &pool,
             &docker,
@@ -2111,14 +2194,6 @@ async fn uninstall_plugin(
 
 // ── Archive deploy ────────────────────────────────────────────────────────────
 
-fn write_temp_archive(bytes: &[u8]) -> std::io::Result<std::path::PathBuf> {
-    use std::io::Write;
-    let mut tmp = tempfile::NamedTempFile::new()?;
-    tmp.write_all(bytes)?;
-    let (_, path) = tmp.keep().map_err(|e| e.error)?;
-    Ok(path)
-}
-
 #[derive(Debug, Deserialize)]
 struct ArchiveDeployQuery {
     builder: Option<String>,
@@ -2146,25 +2221,66 @@ async fn deploy_archive(
             .into_response();
     }
 
-    // Read archive bytes from multipart field named "archive"
-    let mut archive_bytes: Option<Vec<u8>> = None;
+    // Stream the archive field straight to a temp file so a permitted body is
+    // never held in memory.
+    let mut archive_path: Option<std::path::PathBuf> = None;
     loop {
         match multipart.next_field().await {
-            Ok(Some(field)) if field.name() == Some("archive") => match field.bytes().await {
-                Ok(b) => {
-                    archive_bytes = Some(b.to_vec());
-                    break;
+            Ok(Some(mut field)) if field.name() == Some("archive") => {
+                let tmp = match tempfile::NamedTempFile::new() {
+                    Ok(tmp) => tmp,
+                    Err(e) => return internal_error(e).into_response(),
+                };
+                let (file, path) = match tmp.keep() {
+                    Ok(pair) => pair,
+                    Err(e) => return internal_error(e.error).into_response(),
+                };
+                let mut file = tokio::fs::File::from_std(file);
+                let mut total: u64 = 0;
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            total += chunk.len() as u64;
+                            if total > ARCHIVE_UPLOAD_LIMIT as u64 {
+                                let _ = std::fs::remove_file(&path);
+                                return (
+                                    StatusCode::PAYLOAD_TOO_LARGE,
+                                    Json(serde_json::json!({
+                                        "error": format!(
+                                            "archive exceeds the {} MiB upload limit",
+                                            ARCHIVE_UPLOAD_LIMIT / (1024 * 1024)
+                                        )
+                                    })),
+                                )
+                                    .into_response();
+                            }
+                            if let Err(e) = file.write_all(&chunk).await {
+                                let _ = std::fs::remove_file(&path);
+                                return internal_error(e).into_response();
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            let _ = std::fs::remove_file(&path);
+                            return multipart_error(e);
+                        }
+                    }
                 }
-                Err(e) => return internal_error(e).into_response(),
-            },
+                if let Err(e) = file.flush().await {
+                    let _ = std::fs::remove_file(&path);
+                    return internal_error(e).into_response();
+                }
+                archive_path = Some(path);
+                break;
+            }
             Ok(Some(_)) => continue,
             Ok(None) => break,
-            Err(e) => return internal_error(e).into_response(),
+            Err(e) => return multipart_error(e),
         }
     }
 
-    let bytes = match archive_bytes {
-        Some(b) => b,
+    let tmp_path = match archive_path {
+        Some(path) => path,
         None => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -2172,11 +2288,6 @@ async fn deploy_archive(
             )
                 .into_response();
         }
-    };
-
-    let tmp_path = match write_temp_archive(&bytes) {
-        Ok(p) => p,
-        Err(e) => return internal_error(e).into_response(),
     };
     let path_str = tmp_path.to_string_lossy().to_string();
 
@@ -2195,8 +2306,10 @@ async fn deploy_archive(
     let cfg = state.config.clone();
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
+    let deploy_lock = state.deploy_locks.for_app(&app.id);
 
     tokio::spawn(async move {
+        let _guard = deploy_lock.lock().await;
         if let Err(e) =
             crate::deploy::run_deploy(&pool, &docker, &events, &cfg, plugins.as_ref(), req).await
         {

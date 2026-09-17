@@ -1,0 +1,5 @@
+.deku_secret_key
+*.tmp
+db.sqlite3
+staticfiles/
+__pycache__/

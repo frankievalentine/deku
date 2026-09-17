@@ -11,7 +11,7 @@ const {
   title = 'Deku Dashboard',
   description = 'Industrial control surface for managing self-hosted Deku apps.',
 } = Astro.props;
-const dashboardBuildVersion = import.meta.env.PUBLIC_DEKU_RELEASE_VERSION ?? 'v0.1.11';
+const dashboardBuildVersion = import.meta.env.PUBLIC_DEKU_RELEASE_VERSION ?? 'v0.1.12';
 ---
 
 <!doctype html>
@@ -43,6 +43,7 @@ const dashboardBuildVersion = import.meta.env.PUBLIC_DEKU_RELEASE_VERSION ?? 'v0
     </script>
   </head>
   <body data-dashboard-build-version={dashboardBuildVersion}>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <slot />
     <ShellController client:load />
     <script>
@@ -50,6 +51,9 @@ const dashboardBuildVersion = import.meta.env.PUBLIC_DEKU_RELEASE_VERSION ?? 'v0
       import 'basecoat-css/sidebar';
       import 'basecoat-css/command';
       import 'basecoat-css/toast';
+      import { installBasecoatEventBridges } from '../lib/basecoat-compat';
+
+      installBasecoatEventBridges();
     </script>
   </body>
 </html>

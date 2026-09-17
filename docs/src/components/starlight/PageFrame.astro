@@ -9,6 +9,12 @@ const chatModel = import.meta.env.PUBLIC_DOC_CHAT_MODEL;
 const showChat = process.env.PAGE_DOC_CHAT_ENABLED === '1';
 const chatBase = (process.env.PAGE_BASE ?? '').replace(/\/$/, '') || '';
 const locale = (Astro.locals.starlightRoute as { locale?: string } | undefined)?.locale ?? 'en';
+const route = Astro.locals.starlightRoute as
+  | { entry?: { data?: { hero?: unknown } } }
+  | undefined;
+// Splash pages render the hero instead of Starlight's `<h1 id="_top">`, which leaves the
+// skip link without a target. Give the content wrapper that id on those pages only.
+const skipLinkTarget = route?.entry?.data?.hero ? '_top' : undefined;
 ---
 
 {
@@ -19,9 +25,9 @@ const locale = (Astro.locals.starlightRoute as { locale?: string } | undefined)?
           <slot name="header" />
         </header>
         <div class="page-scroll-wrap">
-          <main class="main-frame">
+          <div class="main-frame" id={skipLinkTarget}>
             <slot />
-          </main>
+          </div>
         </div>
       </div>
       <ChatPane
@@ -37,13 +43,97 @@ const locale = (Astro.locals.starlightRoute as { locale?: string } | undefined)?
         <slot name="header" />
       </header>
       <div class="page-scroll-wrap">
-        <main class="main-frame">
+        <div class="main-frame" id={skipLinkTarget}>
           <slot />
-        </main>
+        </div>
       </div>
     </div>
   )
 }
+
+<script>
+  function initMobileMenuAccessibility() {
+    const toggle = document.getElementById("page-mobile-menu-toggle") as HTMLButtonElement | null;
+    const overlay = document.getElementById("page-mobile-menu-overlay");
+    const closeButton = overlay?.querySelector<HTMLButtonElement>(".page-mobile-menu-close");
+
+    if (!toggle || !overlay || !closeButton || toggle.dataset.a11yBound === "true") return;
+
+    toggle.dataset.a11yBound = "true";
+    toggle.setAttribute("aria-haspopup", "dialog");
+    toggle.setAttribute("aria-controls", "page-mobile-menu-overlay");
+    toggle.setAttribute("aria-expanded", "false");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", "Documentation navigation");
+
+    const isOpen = () => overlay.classList.contains("page-mobile-menu-open");
+
+    const focusable = () =>
+      Array.from(
+        overlay.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null);
+
+    const onKeydown = (event: KeyboardEvent) => {
+      if (!isOpen()) return;
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeButton.click();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+
+      const elements = focusable();
+      if (elements.length === 0) return;
+
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && (active === first || !overlay.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeydown);
+    window.addEventListener("pagehide", () => document.removeEventListener("keydown", onKeydown), {
+      once: true,
+    });
+
+    let wasOpen = false;
+
+    new MutationObserver(() => {
+      const open = isOpen();
+      toggle.setAttribute("aria-expanded", String(open));
+
+      if (open) {
+        closeButton.focus();
+      } else if (wasOpen) {
+        const active = document.activeElement;
+        // Hiding the focused element can already have moved focus to <body>, so accept that too.
+        if (active === null || active === document.body || overlay.contains(active)) {
+          toggle.focus();
+        }
+      }
+
+      wasOpen = open;
+    }).observe(overlay, { attributes: true, attributeFilter: ["class", "style"] });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initMobileMenuAccessibility);
+  } else {
+    initMobileMenuAccessibility();
+  }
+</script>
 
 <style>
   .page {

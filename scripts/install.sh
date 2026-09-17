@@ -5,6 +5,7 @@ DEKU_VERSION="${DEKU_VERSION:-latest}"
 DEKU_REPO="${DEKU_REPO:-frankievalentine/deku}"
 DEKU_RELEASE_BASE_URL="${DEKU_RELEASE_BASE_URL:-}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+SHARE_DIR="${SHARE_DIR:-/usr/local/share/deku}"
 CONFIG_DIR="${DEKU_CONFIG_DIR:-${HOME:-/root}/.deku}"
 ANGIE_CONF_DIR="${ANGIE_CONF_DIR:-/etc/angie/conf.d/deku}"
 ANGIE_BASE_CONF="${ANGIE_BASE_CONF:-/etc/angie/conf.d/deku-default.conf}"
@@ -205,8 +206,7 @@ download_checksums() {
     return 0
   fi
 
-  warn "SHA256SUMS not found for this release; continuing without checksum verification."
-  return 1
+  fail "SHA256SUMS not found for this release; refusing to install unverified binaries"
 }
 
 download_dashboard_bundle() {
@@ -220,7 +220,7 @@ verify_artifact() {
   local dest="$2"
 
   if [[ ! -f "${CHECKSUMS_FILE}" ]]; then
-    return 0
+    fail "SHA256SUMS is missing; refusing to install unverified binaries"
   fi
 
   local expected actual
@@ -296,11 +296,19 @@ install_binaries() {
   mkdir -p "$INSTALL_DIR"
   download_artifact "dekud-linux-${arch}" "${TMP_DIR}/dekud"
   download_artifact "deku-linux-${arch}" "${TMP_DIR}/deku"
+  download_artifact "railpack-linux-${arch}" "${TMP_DIR}/railpack"
+  download_artifact "railpack-LICENSE.txt" "${TMP_DIR}/railpack-LICENSE.txt"
   verify_artifact "dekud-linux-${arch}" "${TMP_DIR}/dekud"
   verify_artifact "deku-linux-${arch}" "${TMP_DIR}/deku"
+  verify_artifact "railpack-linux-${arch}" "${TMP_DIR}/railpack"
+  verify_artifact "railpack-LICENSE.txt" "${TMP_DIR}/railpack-LICENSE.txt"
 
   install -m 0755 "${TMP_DIR}/dekud" "${INSTALL_DIR}/dekud"
   install -m 0755 "${TMP_DIR}/deku" "${INSTALL_DIR}/deku"
+  install -m 0755 "${TMP_DIR}/railpack" "${INSTALL_DIR}/railpack"
+
+  mkdir -p "$SHARE_DIR"
+  install -m 0644 "${TMP_DIR}/railpack-LICENSE.txt" "${SHARE_DIR}/railpack-LICENSE.txt"
 }
 
 write_systemd_unit() {
@@ -631,7 +639,7 @@ main() {
 
   log "Installing Deku ${resolved_version} for linux/${arch}"
   install_prerequisites
-  download_checksums || true
+  download_checksums
   install_angie
   install_binaries "$arch"
   write_systemd_unit

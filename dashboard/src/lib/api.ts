@@ -27,7 +27,7 @@ export interface Deployment {
     | 'live'
     | 'failed'
     | 'rolled_back';
-  builder: 'dockerfile' | 'nixpacks' | 'pack' | 'image' | 'archive' | 'compose';
+  builder: 'dockerfile' | 'nixpacks' | 'railpack' | 'pack' | 'image' | 'archive' | 'compose';
   image_tag: string | null;
   created_at: string;
   finished_at: string | null;

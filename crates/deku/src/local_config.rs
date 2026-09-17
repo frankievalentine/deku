@@ -34,7 +34,7 @@ pub struct LocalDekuConfig {
 }
 
 pub fn default_config_dir() -> PathBuf {
-    dirs_next::home_dir()
+    dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/root"))
         .join(".deku")
 }

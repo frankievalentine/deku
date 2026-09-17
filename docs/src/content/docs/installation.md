@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: How to install Deku on your server
+description: How to install Deku on your server.
 ---
 
 Use this flow to install the packaged Deku release on a Linux server.
@@ -9,7 +9,7 @@ Use this flow to install the packaged Deku release on a Linux server.
 
 - Linux server with `apt-get` available
 - Ubuntu 22.04+ or Debian 11+
-- Docker Engine 24+
+- Docker Engine 24+ and the `docker` CLI on `PATH`
 - 512 MB RAM minimum
 - Root access
 
@@ -34,6 +34,8 @@ The installer will:
 `dekud` expects a staged dashboard directory at runtime. The packaged installer handles that for you by unpacking the release dashboard bundle into the configured dashboard directory.
 
 New installs default Deku's embedded SSH deploy server to port `2222`. This avoids the common case where the host's own `sshd` already occupies port `22`. CLI and API deploys do not depend on the SSH listener.
+
+The installer also installs `railpack`, Deku's language-aware builder for sources without a `Dockerfile`. Railpack builds with BuildKit, so `dekud` starts and manages a small `moby/buildkit` container named `deku-buildkit` on first use. Set `[buildkit] host` in the daemon config to point at an external BuildKit instead.
 
 If the installer has an interactive TTY, `deku setup` prompts for values like data directory, API port, SSH port, Angie config directory, global domain, and optional object storage. Without a TTY, it runs with built-in defaults and warns that you can rerun `deku setup` later to customize settings.
 

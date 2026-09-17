@@ -30,16 +30,249 @@ body {
   font-family: var(--deku-font-mono);
 }
 
-.page-content .sl-markdown-content .docs-footprint-note,
-.page-content-panel .docs-footprint-note {
-  margin: -1.4rem 0 1rem;
-  font-size: 0.82rem;
-  line-height: 1.4;
-  color: color-mix(in srgb, var(--sl-color-text-accent) 55%, var(--sl-color-white));
-  letter-spacing: 0.01em;
+/* Local overrides. This file is bundled before @pelagornis/page's stylesheets and before the
+   theme's component <style> blocks, so each override out-specifies the theme (extra `html` or
+   container class) rather than relying on source order. Keep those prefixes when editing. */
+
+@media (min-width: 769px) {
+  /* Brand aligns with the sidebar link text column: sidebar padding (space-6) + link padding (space-4).
+     Full width so those insets hold on any large screen instead of drifting with the theme's 1440px cap. */
+  html .page-header-container {
+    width: 100%;
+    max-width: none;
+    padding: 0 calc(var(--page-space-6) + var(--page-space-4));
+  }
 }
 
-.page-content .sl-markdown-content .docs-footprint-note code,
-.page-content-panel .docs-footprint-note code {
-  font-size: 0.95em;
+.page-content-panel .page-hero {
+  padding: var(--page-space-8) 0 var(--page-space-6);
+  margin-top: 0;
+  margin-bottom: var(--page-space-8);
+  border-radius: var(--page-radius-2xl);
+}
+
+.page-content-panel .page-hero-container {
+  padding: 0 var(--page-space-8);
+  gap: var(--page-space-6);
+}
+
+.page-content-panel .page-hero-title {
+  font-size: 2.5rem;
+  margin-bottom: var(--page-space-3);
+  text-wrap: balance;
+}
+
+.page-content-panel .page-hero-tagline {
+  max-width: 58ch;
+  margin-bottom: var(--page-space-6);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  opacity: 1;
+  text-wrap: pretty;
+}
+
+/* Quiet secondary hero action (`ghost`, from `variant: minimal`); needs [href] to out-specify
+   the theme's dark-theme `.page-button[href]` fill, which otherwise ties on specificity. */
+.page-content-panel .page-hero-actions .page-button-ghost[href] {
+  background: transparent !important;
+  border-color: var(--page-border-strong) !important;
+  color: var(--page-text) !important;
+}
+
+.page-content-panel .page-hero-actions .page-button-ghost[href]:hover {
+  background: var(--page-bg-secondary) !important;
+  border-color: var(--page-accent) !important;
+}
+
+@media (max-width: 768px) {
+  .page-content-panel .page-hero {
+    padding: var(--page-space-6) 0 var(--page-space-5);
+    margin-bottom: var(--page-space-6);
+  }
+
+  .page-content-panel .page-hero-container {
+    padding: 0 var(--page-space-4);
+  }
+
+  .page-content-panel .page-hero-title {
+    font-size: 2rem;
+  }
+}
+
+/* 72ch reading measure. `!important` because the theme caps the no-sidebar variant at 1200px. */
+html .page-content-wrapper {
+  max-width: 72ch !important;
+}
+
+@media (min-width: 1280px) {
+  html:root {
+    --page-sidebar-width: 240px;
+    --page-toc-width: 200px;
+  }
+
+  html .page-sidebar-nav {
+    width: var(--page-sidebar-width);
+  }
+
+  html .page-toc-sidebar,
+  html .page-toc-sticky {
+    width: var(--page-toc-width);
+  }
+
+  html .page-content-wrapper {
+    margin-right: var(--page-space-4);
+  }
+
+  /* Starlight sizes the panel container from its own sidebar width, which is wider than this
+     rail and made the table of contents scroll sideways instead of wrapping. */
+  html .page-toc-sticky {
+    padding: var(--page-space-4);
+    overflow-x: hidden;
+  }
+
+  html .page-toc-sticky .right-sidebar-panel {
+    padding: 0;
+  }
+
+  html .page-toc-sticky .sl-container {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+@media (min-width: 1280px) and (max-width: 1439px) {
+  html .page-toc-sidebar {
+    display: none !important;
+  }
+}
+
+.page-content-panel .expressive-code,
+.page-content-panel .expressive-code pre {
+  max-width: 100%;
+}
+
+.page-content-panel .sl-markdown-content {
+  min-width: 0;
+}
+
+.page-content-panel .sl-markdown-content :is(p, li, td, h1, h2, h3, h4, h5, h6) {
+  overflow-wrap: break-word;
+}
+
+.page-scroll-wrap {
+  scroll-padding-top: var(--page-space-6);
+}
+
+.page-content-panel :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: var(--page-space-6);
+}
+
+.page-content-panel .sl-markdown-content :is(p, li, td) a:not(.sl-anchor-link) {
+  text-decoration: underline;
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.2em;
+}
+
+/* The dark theme forces `a { color: var(--page-text) } !important`, which made body links
+   identical to body text; restore Starlight's accent colour with a stronger selector. */
+[data-theme="dark"]
+  .page-content-panel
+  .sl-markdown-content
+  a:not(.page-btn):not(.page-btn-primary):not(.page-github-btn):not(.sl-anchor-link) {
+  color: var(--sl-color-text-accent) !important;
+}
+
+:where(a, button, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--sl-color-text-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  .page-header-left .page-site-title {
+    min-height: 44px;
+    font-size: 1rem;
+  }
+
+  .page-header-left .page-title-text {
+    display: inline;
+    white-space: nowrap;
+  }
+
+  html .page-header-right .page-search-button,
+  html .page-header-right .page-theme-toggle-button,
+  html .page-header-right .page-language-select-button,
+  html .page-header-right .page-mobile-menu-toggle,
+  html .page-header-right a {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Card styles the theme intended but could not deliver, because its card rules used `:global()`
+   inside a plain stylesheet. Re-expressed here with real selectors. */
+.sl-card {
+  background: var(--page-bg-elevated);
+  border: 1px solid var(--page-border);
+  border-radius: var(--page-radius-lg);
+  overflow: hidden;
+  transition:
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.sl-card:hover {
+  border-color: var(--page-accent);
+  transform: translateY(-2px);
+}
+
+.sl-card-header {
+  padding: var(--page-space-6) var(--page-space-6) 0;
+  border-bottom: none;
+}
+
+.sl-card-title {
+  margin: 0 0 var(--page-space-2);
+  color: var(--page-text);
+  font-size: var(--page-font-size-lg);
+  font-weight: var(--page-font-weight-semibold);
+  line-height: 1.3;
+}
+
+.sl-card-body {
+  padding: var(--page-space-6);
+  color: var(--page-text-secondary);
+  line-height: 1.6;
+}
+
+.sl-card-grid {
+  display: grid;
+  gap: var(--page-space-6);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin: var(--page-space-8) 0;
+}
+
+[data-theme="dark"] .sl-card {
+  background: var(--page-bg-secondary);
+  border-color: var(--page-border);
+}
+
+[data-theme="dark"] .sl-card:hover {
+  background: var(--page-bg-elevated);
 }

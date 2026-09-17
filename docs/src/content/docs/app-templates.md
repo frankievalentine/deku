@@ -5,12 +5,12 @@ description: Local starter app directories for Deku and how to choose the right 
 
 Deku ships a local starter catalog in the repository under `templates/`.
 
-Each starter is a local source directory shaped for Deku's own deploy model:
+These starters are local source directories shaped for Deku's own deploy model:
 
-- They use Deku-supported `dockerfile` or `nixpacks` builders
+- They use Deku-supported `dockerfile` or `railpack` builders
 - They expect Deku-managed services instead of bundled sidecars
 - They stay small enough to inspect, copy, and modify directly
-- Bun is used in the starters where it fits naturally without making the deploy path harder to reason about
+- They use Bun where it fits naturally without making the deploy path harder to reason about
 
 If you already cloned the repository, copy the directory you want from `templates/<name>`. If you are browsing the public docs, use the GitHub links below.
 
@@ -130,14 +130,14 @@ React single-page app built with Vite and Bun, then served from Nginx.
 deku deploy run vite-demo --path /absolute/path/to/repo/templates/vite-react
 ```
 
-## Nixpacks Starters
+## Railpack Starters
 
 ### Django
 
 Django starter that defaults to SQLite for the first deploy and can switch to a managed database later.
 
 - Repo directory: [templates/django](https://github.com/frankievalentine/deku/tree/main/templates/django)
-- Builder: `nixpacks`
+- Builder: `railpack`
 - Package manager: `pip`
 - Best for: Traditional server-rendered apps and admin-heavy backends
 - Health check: `/health`
@@ -152,7 +152,7 @@ deku deploy run django-demo --path /absolute/path/to/repo/templates/django
 Clean SSR-capable Nuxt starter with an explicit production start command.
 
 - Repo directory: [templates/nuxt](https://github.com/frankievalentine/deku/tree/main/templates/nuxt)
-- Builder: `nixpacks`
+- Builder: `railpack`
 - Package manager: `bun`
 - Best for: Vue SSR apps and content-rich product applications
 - Health check: `/api/health`

@@ -1,8 +1,8 @@
 {
   "id": "django",
   "title": "Django Starter",
-  "summary": "A minimal Django starter for Deku using Nixpacks and environment-driven settings.",
-  "builder": "nixpacks",
+  "summary": "A minimal Django starter for Deku using Railpack and environment-driven settings.",
+  "builder": "railpack",
   "stack": "Django",
   "last_verified": "2026-04-09",
   "deploy_path_example": "deku deploy run django-demo --path /absolute/path/to/repo/templates/django",

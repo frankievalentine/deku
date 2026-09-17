@@ -1,4 +1,4 @@
-import { type SubmitEvent, useState } from 'react';
+import { type SubmitEvent, useRef, useState } from 'react';
 import { setToken, verifyToken } from '../lib/api';
 import { showToast } from '../lib/shell';
 
@@ -9,30 +9,29 @@ interface ConnectScreenProps {
 export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [token, setTokenValue] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = token.trim();
+
     if (!trimmed) {
-      showToast({
-        title: 'Dashboard token required',
-        description: 'Paste the one-time dashboard token before connecting.',
-        variant: 'warning',
-      });
+      setError('Paste the dashboard token to connect.');
+      inputRef.current?.focus();
       return;
     }
 
+    setError(null);
     setLoading(true);
 
     try {
       const valid = await verifyToken(trimmed);
       if (!valid) {
-        showToast({
-          title: 'Unable to connect',
-          description:
-            'Invalid token. Use the one-time token from setup, or run `deku dashboard reset-token` on the host.',
-          variant: 'error',
-        });
+        setError(
+          'That token was rejected. Run `deku dashboard reset-token` and paste the new one.'
+        );
+        inputRef.current?.focus();
         return;
       }
 
@@ -44,11 +43,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       });
       onConnected?.();
     } catch {
-      showToast({
-        title: 'Unable to connect',
-        description: 'Unable to reach the daemon. Confirm the API is reachable from this browser.',
-        variant: 'error',
-      });
+      setError('Unable to reach the daemon. Confirm the API is reachable from this browser.');
+      inputRef.current?.focus();
     } finally {
       setLoading(false);
     }
@@ -75,6 +71,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </label>
               <input
                 id="token-input"
+                ref={inputRef}
                 type="password"
                 className="input"
                 placeholder="dku_..."
@@ -82,7 +79,14 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 onChange={(event) => setTokenValue(event.target.value)}
                 autoComplete="current-password"
                 spellCheck={false}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? 'token-error' : undefined}
               />
+              {error ? (
+                <p id="token-error" className="field-error" role="alert">
+                  {error}
+                </p>
+              ) : null}
             </div>
 
             <button type="submit" className="btn btn-primary btn-block" disabled={loading}>

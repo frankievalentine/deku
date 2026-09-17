@@ -12,6 +12,7 @@ Deku is built from a small Rust-first platform stack:
 - [Rust](https://www.rust-lang.org/) for the `deku` CLI, the `dekud` daemon, shared core types, and plugin interfaces
 - [Astro](https://astro.build/) for the dashboard and documentation frontends
 - [Docker Engine](https://www.docker.com/) for app builds, app containers, and managed service containers
+- [BuildKit](https://github.com/moby/buildkit) as the build engine for Railpack language builds
 - [Angie](https://angie.software/) for HTTP routing, reverse proxying, and TLS termination
 - [SQLite](https://www.sqlite.org/) for persisted platform state on the host
 - [Bun](https://bun.sh/) for frontend package management and dashboard/docs build workflows in a source checkout
@@ -30,6 +31,9 @@ Deku currently consists of two binaries:
 - The token is shown once during setup or reset, then stored only as an Argon2id hash in config
 - The dashboard stores the token in the browser after the first sign-in
 - `deku dashboard reset-token` rotates the token and invalidates previous browser sessions
+- Dashboard tokens expire 30 days after they are issued; rotate with `deku dashboard reset-token`
+- The dashboard is served over plain HTTP, so put TLS in front of the API port before exposing it
+  beyond a trusted network
 
 ## API and Event Model
 
@@ -47,6 +51,7 @@ The current server runtime includes:
 
 - `dekud` for orchestration and API handling
 - Docker Engine for app and service containers
+- A managed BuildKit container (`deku-buildkit`) for Railpack language builds
 - Angie for routing and TLS
 - SQLite for persisted platform state
 - The packaged dashboard bundle served by the daemon

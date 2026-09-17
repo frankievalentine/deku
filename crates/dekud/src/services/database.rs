@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::models::{HostConfig, Mount, MountTypeEnum, PortBinding};
+use bollard::models::{HostConfig, Mount, MountType, PortBinding};
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, CreateImageOptionsBuilder, LogsOptionsBuilder,
     RemoveContainerOptionsBuilder, RemoveVolumeOptionsBuilder, WaitContainerOptionsBuilder,
@@ -220,7 +220,7 @@ pub async fn create(
             mounts: Some(vec![Mount {
                 source: Some(volume_name.clone()),
                 target: Some(spec.data_dir.to_string()),
-                typ: Some(MountTypeEnum::VOLUME),
+                typ: Some(MountType::VOLUME),
                 read_only: Some(false),
                 ..Default::default()
             }]),
@@ -647,14 +647,14 @@ pub async fn restore_redis(
             Mount {
                 source: Some(service_config.volume.clone()),
                 target: Some("/data".to_string()),
-                typ: Some(MountTypeEnum::VOLUME),
+                typ: Some(MountType::VOLUME),
                 read_only: Some(false),
                 ..Default::default()
             },
             Mount {
                 source: Some(backup_path.to_string_lossy().to_string()),
                 target: Some("/restore/dump.rdb".to_string()),
-                typ: Some(MountTypeEnum::BIND),
+                typ: Some(MountType::BIND),
                 read_only: Some(true),
                 ..Default::default()
             },

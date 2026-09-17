@@ -1,6 +1,6 @@
 # Nuxt Starter
 
-This template is a clean SSR-capable Nuxt starter for Deku using `nixpacks`.
+This template is a clean SSR-capable Nuxt starter for Deku using `railpack`.
 
 It keeps a framework-default app shape with an explicit production start command.
 The template includes a Bun lockfile so Nixpacks can build it with Bun.
@@ -15,7 +15,7 @@ deku deploy run nuxt-demo --path /absolute/path/to/repo/templates/nuxt
 ## Runtime Notes
 
 - Health endpoint: `/api/health`
-- Builder: `nixpacks`
+- Builder: `railpack`
 - Package manager: `bun`
 - Runtime port: `3000`
 

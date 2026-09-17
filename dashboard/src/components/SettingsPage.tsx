@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { type SubmitEvent, useEffect, useMemo, useState } from 'react';
+import { type SubmitEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
 import { clearToken, getDashboardBuildVersion, setToken } from '../lib/api';
 import {
@@ -12,6 +12,7 @@ import {
   useVersionStatusQuery,
 } from '../lib/query';
 import { copyText, showToast } from '../lib/shell';
+import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import Icon from './Icon';
 
@@ -53,9 +54,12 @@ export default function SettingsPage() {
 function SettingsInner() {
   const queryClient = useQueryClient();
   const [emailDraft, setEmailDraft] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [latestToken, setLatestToken] = useState<string | null>(null);
+  const [confirmRotate, setConfirmRotate] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const emailInput = useRef<HTMLInputElement>(null);
   const settingsQuery = useSettingsSummaryQuery();
   const healthQuery = useDaemonHealthQuery({ refetchInterval: 30_000 });
   const versionQuery = useVersionStatusQuery({ refetchInterval: 300_000 });
@@ -67,7 +71,7 @@ function SettingsInner() {
   const versionError = versionQuery.error
     ? getErrorMessage(versionQuery.error, 'Unable to load release status.')
     : null;
-  const dashboardBuildVersion = useMemo(() => getDashboardBuildVersion() ?? 'v0.1.11', []);
+  const dashboardBuildVersion = useMemo(() => getDashboardBuildVersion() ?? 'v0.1.12', []);
   const health =
     healthQuery.isPending || healthQuery.data === undefined
       ? 'checking'
@@ -111,18 +115,17 @@ function SettingsInner() {
   async function handleSaveEmail(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const email = emailDraft.trim();
+    const nextEmailError = validateEmail(email);
 
-    if (!email) {
-      showToast({
-        title: 'Email required',
-        description: 'Enter a Let’s Encrypt account email before saving.',
-        variant: 'warning',
-      });
+    if (nextEmailError) {
+      setEmailError(nextEmailError);
+      emailInput.current?.focus();
       return;
     }
 
     try {
       setBusy('tls-email');
+      setEmailError(null);
       await setLetsEncryptConfigMutation.mutateAsync(email);
       showToast({
         title: 'TLS email saved',
@@ -141,11 +144,6 @@ function SettingsInner() {
   }
 
   async function handleRotateToken() {
-    const confirmed = window.confirm(
-      'Rotate the dashboard token? Existing browser sessions will stop working.'
-    );
-    if (!confirmed) return;
-
     try {
       setBusy('rotate-token');
       const payload = await rotateDashboardTokenMutation.mutateAsync();
@@ -156,6 +154,7 @@ function SettingsInner() {
       setToken(payload.token);
       window.sessionStorage.setItem('deku_rotated_token', payload.token);
       setLatestToken(payload.token);
+      setConfirmRotate(false);
       await queryClient.invalidateQueries();
       showToast({
         title: 'Access token rotated',
@@ -164,6 +163,7 @@ function SettingsInner() {
         variant: 'success',
       });
     } catch (error) {
+      setConfirmRotate(false);
       showToast({
         title: 'Unable to rotate token',
         description: error instanceof Error ? error.message : 'Token rotation failed.',
@@ -199,15 +199,22 @@ function SettingsInner() {
     });
   }
 
+  if (loading) {
+    return (
+      <div className="panel loading-state">
+        <span className="loading-spinner" />
+        <span>Loading dashboard settings…</span>
+      </div>
+    );
+  }
+
   return (
     <div className="stack-lg">
       <section className="hero-panel">
         <div className="stack-md">
-          <p className="eyebrow">Settings</p>
-          <h1 className="page-title">Global dashboard configuration</h1>
+          <h1 className="page-title">Settings</h1>
           <p className="page-copy">
-            Keep token security, Let’s Encrypt settings, and dashboard-wide integrations in one
-            place.
+            Dashboard token, release status, and Let’s Encrypt configuration for this host.
           </p>
         </div>
         <div className="metrics-grid">
@@ -217,20 +224,21 @@ function SettingsInner() {
           />
           <Metric label="Apps" value={String(state.totalApps)} />
           <Metric label="Services" value={String(state.totalServices)} />
-          <Metric label="TLS Email" value={state.tlsConfigured ? 'Configured' : 'Missing'} />
+          <Metric label="TLS email" value={state.tlsConfigured ? 'Configured' : 'Missing'} />
         </div>
       </section>
 
-      {error ? <p className="callout callout-danger">{error}</p> : null}
+      {error ? (
+        <p className="callout callout-danger" role="alert">
+          {error}
+        </p>
+      ) : null}
 
       <section className="settings-grid">
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Security</p>
-            <h2 className="section-title">Connection and access token</h2>
-          </div>
+          <h2 className="section-title">Connection and access token</h2>
 
-          <div className="data-grid">
+          <dl className="data-grid">
             <div>
               <dt>Status</dt>
               <dd>{connectionSummary}</dd>
@@ -239,36 +247,23 @@ function SettingsInner() {
               <dt>Stored in browser</dt>
               <dd>Yes</dd>
             </div>
-          </div>
+          </dl>
 
-          <div className="form-actions token-action-row">
+          <div className="form-actions settings-token-actions">
             <button
               type="button"
-              className="btn btn-primary shell-action-button"
+              className="btn btn-primary"
               disabled={busy !== null || loading}
-              onClick={() => {
-                void handleRotateToken();
-              }}
+              onClick={() => setConfirmRotate(true)}
             >
               <Icon
                 name="rotate"
                 size={16}
                 className={busy === 'rotate-token' ? 'spin' : undefined}
               />
-              {busy === 'rotate-token' ? (
-                <>
-                  <span className="loading-spinner" />
-                  Rotating…
-                </>
-              ) : (
-                <span>Rotate token</span>
-              )}
+              <span>Rotate token</span>
             </button>
-            <button
-              type="button"
-              className="btn btn-secondary shell-action-button"
-              onClick={handleDisconnect}
-            >
+            <button type="button" className="btn btn-secondary" onClick={handleDisconnect}>
               <Icon name="disconnect" size={16} />
               <span>Disconnect</span>
             </button>
@@ -277,7 +272,7 @@ function SettingsInner() {
           {latestToken ? (
             <div className="settings-token-preview">
               <div className="stack-sm">
-                <p className="eyebrow">Latest rotated token</p>
+                <h3 className="deploy-title">Newest rotated token</h3>
                 <code className="font-mono">{latestToken}</code>
               </div>
               <div className="form-actions">
@@ -292,20 +287,16 @@ function SettingsInner() {
               </div>
             </div>
           ) : (
-            <p className="text-muted">No newly rotated token is cached in this browser session.</p>
+            <p className="text-muted">
+              Rotated tokens are shown once. Rotate the token to generate a new one.
+            </p>
           )}
         </article>
 
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Release</p>
-            <h2 className="section-title">Installed version and updates</h2>
-            <p className="page-copy">
-              Deku checks GitHub Releases server-side and surfaces update availability here.
-            </p>
-          </div>
+          <h2 className="section-title">Version and updates</h2>
 
-          <div className="data-grid">
+          <dl className="data-grid">
             <div>
               <dt>Installed</dt>
               <dd>{versionStatus?.current_version ?? 'Checking…'}</dd>
@@ -322,7 +313,7 @@ function SettingsInner() {
               <dt>Dashboard build</dt>
               <dd>{dashboardBuildVersion}</dd>
             </div>
-          </div>
+          </dl>
 
           {versionStatus?.update_available ? (
             <p className="callout callout-warning">
@@ -346,40 +337,45 @@ function SettingsInner() {
         </article>
 
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">TLS</p>
-            <h2 className="section-title">Let’s Encrypt account email</h2>
-            <p className="page-copy">
-              This email is used for global certificate operations across routed apps.
-            </p>
-          </div>
+          <h2 className="section-title">Let’s Encrypt account email</h2>
+          <p className="text-muted">
+            Used for certificate operations across every routed app on this host.
+          </p>
 
-          <form onSubmit={handleSaveEmail} className="stack-md">
+          <form onSubmit={handleSaveEmail} className="stack-md" noValidate>
             <div className="form-group">
               <label className="form-label" htmlFor="settings-le-email">
                 Account email
               </label>
               <input
                 id="settings-le-email"
+                ref={emailInput}
                 className="input"
                 type="email"
                 value={emailDraft}
-                onChange={(event) => setEmailDraft(event.target.value)}
+                onChange={(event) => {
+                  setEmailDraft(event.target.value);
+                  if (emailError) setEmailError(null);
+                }}
                 placeholder="ops@example.com"
                 disabled={busy !== null}
+                autoComplete="email"
+                spellCheck={false}
+                required
+                aria-invalid={emailError ? true : undefined}
+                aria-describedby={emailError ? 'settings-le-email-error' : undefined}
               />
+              {emailError ? (
+                <p id="settings-le-email-error" className="text-danger">
+                  {emailError}
+                </p>
+              ) : null}
             </div>
             <div className="form-actions">
               <button className="btn btn-primary" type="submit" disabled={busy !== null}>
                 <Icon name="settings" size={16} />
-                {busy === 'tls-email' ? (
-                  <>
-                    <span className="loading-spinner" />
-                    Saving…
-                  </>
-                ) : (
-                  <span>Save email</span>
-                )}
+                {busy === 'tls-email' ? <span className="loading-spinner" /> : null}
+                <span>Save email</span>
               </button>
             </div>
           </form>
@@ -387,21 +383,18 @@ function SettingsInner() {
           <p className="text-muted">
             {state.tlsConfigured
               ? `Current email: ${state.tlsEmail}`
-              : 'No global Let’s Encrypt email has been configured yet.'}
+              : 'No account email is set, so certificate operations cannot run.'}
           </p>
         </article>
 
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Integrations</p>
-            <h2 className="section-title">Storage and services</h2>
-          </div>
+          <h2 className="section-title">Storage and services</h2>
 
           <div className="summary-list">
             <SummaryLink
               href="/object-store"
               icon="object-store"
-              title="Object Store"
+              title="Object store"
               description={
                 state.objectStoreConfigured
                   ? `Configured${state.objectStoreProvider ? ` with ${state.objectStoreProvider}` : ''}`
@@ -411,34 +404,46 @@ function SettingsInner() {
             <SummaryLink
               href="/services"
               icon="services"
-              title="Managed Services"
-              description={`${state.totalServices} configured services`}
+              title="Managed services"
+              description={`${state.totalServices} services configured`}
             />
           </div>
         </article>
 
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Access</p>
-            <h2 className="section-title">SSH keys and plugins</h2>
-          </div>
+          <h2 className="section-title">SSH keys and plugins</h2>
 
           <div className="summary-list">
             <SummaryLink
               href="/ssh-keys"
               icon="ssh-keys"
-              title="SSH Keys"
-              description={`${state.sshKeyCount} keys loaded for access`}
+              title="SSH keys"
+              description={`${state.sshKeyCount} keys registered for CLI access`}
             />
             <SummaryLink
               href="/plugins"
               icon="plugins"
               title="Plugins"
-              description={`${state.pluginCount} loaded plugins`}
+              description={`${state.pluginCount} plugins loaded by the daemon`}
             />
           </div>
         </article>
       </section>
+
+      <ConfirmModal
+        open={confirmRotate}
+        title="Rotate the access token?"
+        description="Every browser session and CLI client using the current token loses access immediately. Copy the replacement token from this page after rotating."
+        confirmLabel="Rotate token"
+        cancelLabel="Keep current token"
+        busy={busy === 'rotate-token'}
+        onConfirm={() => {
+          void handleRotateToken();
+        }}
+        onClose={() => {
+          if (busy === null) setConfirmRotate(false);
+        }}
+      />
     </div>
   );
 }
@@ -450,6 +455,18 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function validateEmail(email: string): string | null {
+  if (!email) {
+    return 'Enter the account email for Let’s Encrypt.';
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return 'Enter a valid email address, such as ops@example.com.';
+  }
+
+  return null;
 }
 
 function SummaryLink({

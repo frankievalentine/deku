@@ -32,6 +32,27 @@ interface ObjectStoreDraft {
   prefix: string;
 }
 
+interface ObjectStoreFieldErrors {
+  provider?: string;
+  bucket?: string;
+  region?: string;
+  endpoint?: string;
+  access_key_id?: string;
+  secret_access_key?: string;
+}
+
+const REQUIRED_DRAFT_FIELDS: ReadonlyArray<{
+  key: keyof ObjectStoreFieldErrors;
+  inputId: string;
+}> = [
+  { key: 'provider', inputId: 'objectstore-provider' },
+  { key: 'bucket', inputId: 'objectstore-bucket' },
+  { key: 'region', inputId: 'objectstore-region' },
+  { key: 'endpoint', inputId: 'objectstore-endpoint' },
+  { key: 'access_key_id', inputId: 'objectstore-access-key' },
+  { key: 'secret_access_key', inputId: 'objectstore-secret-key' },
+];
+
 const EMPTY_DRAFT: ObjectStoreDraft = {
   provider: 'r2',
   bucket: '',
@@ -67,22 +88,39 @@ function ObjectStoreInner() {
   const [loading, setLoading] = useState(true);
   const [linkLoading, setLinkLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<ObjectStoreFieldErrors>({});
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmUnset, setConfirmUnset] = useState(false);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
 
+  function updateField<K extends keyof ObjectStoreDraft>(key: K, value: ObjectStoreDraft[K]) {
+    updateDraft(setDraft, key, value);
+
+    if (!isRequiredDraftField(key)) {
+      return;
+    }
+
+    setFieldErrors((current) => {
+      const next: ObjectStoreFieldErrors = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
+      setLoadError(null);
       const [nextState, nextApps] = await Promise.all([fetchObjectStoreConfig(), fetchApps()]);
       setState(nextState);
       setApps(nextApps);
       setDraft(buildDraft(nextState.object_store));
       setSelectedApp((current) => chooseSelectedApp(current, nextApps));
     } catch (nextError) {
-      setError(
+      setLoadError(
         nextError instanceof Error ? nextError.message : 'Unable to load object store config.'
       );
     } finally {
@@ -103,12 +141,12 @@ function ObjectStoreInner() {
 
     try {
       setLinkLoading(true);
-      setError(null);
+      setActionError(null);
       const nextLink = await fetchAppObjectStoreLink(appName);
       setAppLink(nextLink);
       setAppPrefixDraft(nextLink.link?.prefix ?? '');
     } catch (nextError) {
-      setError(
+      setActionError(
         nextError instanceof Error ? nextError.message : 'Unable to load app object store link.'
       );
     } finally {
@@ -125,13 +163,19 @@ function ObjectStoreInner() {
     const payload = buildPayload(draft);
 
     if (!payload) {
-      setError('Provider, bucket, region, endpoint, access key ID, and secret are required.');
+      const nextErrors = validateDraft(draft);
+      setFieldErrors(nextErrors);
+      const firstMissing = REQUIRED_DRAFT_FIELDS.find((field) => nextErrors[field.key]);
+      if (firstMissing) {
+        document.getElementById(firstMissing.inputId)?.focus();
+      }
       return;
     }
 
     try {
       setBusy('save');
-      setError(null);
+      setActionError(null);
+      setFieldErrors({});
       setNotice(null);
       await setObjectStoreConfig(payload);
       await load();
@@ -139,7 +183,7 @@ function ObjectStoreInner() {
         `Saved ${payload.provider} object store configuration for bucket ${payload.bucket}.`
       );
     } catch (nextError) {
-      setError(
+      setActionError(
         nextError instanceof Error ? nextError.message : 'Unable to save object store config.'
       );
     } finally {
@@ -150,12 +194,12 @@ function ObjectStoreInner() {
   async function handleTest() {
     try {
       setBusy('test');
-      setError(null);
+      setActionError(null);
       setNotice(null);
       await testObjectStoreConfig();
       setNotice('Stored object store configuration passed the connectivity check.');
     } catch (nextError) {
-      setError(
+      setActionError(
         nextError instanceof Error ? nextError.message : 'Unable to test object store config.'
       );
     } finally {
@@ -166,14 +210,14 @@ function ObjectStoreInner() {
   async function handleUnset() {
     try {
       setBusy('unset');
-      setError(null);
+      setActionError(null);
       setNotice(null);
       await unsetObjectStoreConfig();
       setConfirmUnset(false);
       await load();
       setNotice('Object store configuration removed.');
     } catch (nextError) {
-      setError(
+      setActionError(
         nextError instanceof Error ? nextError.message : 'Unable to remove object store config.'
       );
     } finally {
@@ -184,20 +228,22 @@ function ObjectStoreInner() {
   async function handleLink(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedApp) {
-      setError('Select an app first.');
+      setLinkError('Select an app to link.');
+      document.getElementById('objectstore-app')?.focus();
       return;
     }
 
     try {
       setBusy(`link-${selectedApp}`);
-      setError(null);
+      setActionError(null);
+      setLinkError(null);
       setNotice(null);
       const nextLink = await linkAppObjectStore(selectedApp, appPrefixDraft.trim() || null);
       setAppLink(nextLink);
       setAppPrefixDraft(nextLink.link?.prefix ?? '');
       setNotice(`Object store credentials linked to ${selectedApp}.`);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to link app.');
+      setActionError(nextError instanceof Error ? nextError.message : 'Unable to link app.');
     } finally {
       setBusy(null);
     }
@@ -210,27 +256,37 @@ function ObjectStoreInner() {
 
     try {
       setBusy(`unlink-${selectedApp}`);
-      setError(null);
+      setActionError(null);
       setNotice(null);
       await unlinkAppObjectStore(selectedApp);
       setConfirmUnlink(false);
       await loadAppLink(selectedApp);
       setNotice(`Object store credentials removed from ${selectedApp}.`);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to unlink app.');
+      setActionError(nextError instanceof Error ? nextError.message : 'Unable to unlink app.');
     } finally {
       setBusy(null);
     }
   }
 
   if (loading) {
-    return null;
+    return (
+      <div className="panel loading-state">
+        <span className="loading-spinner" />
+        <span>Loading object store configuration…</span>
+      </div>
+    );
   }
 
   if (!state) {
     return (
       <div className="panel error-state">
-        Failed to load object store settings: {error ?? 'unknown error'}
+        <p className="text-danger" role="alert">
+          {loadError ?? 'Unable to load object store configuration.'}
+        </p>
+        <button type="button" className="btn btn-secondary" onClick={() => void load()}>
+          Retry loading configuration
+        </button>
       </div>
     );
   }
@@ -242,11 +298,9 @@ function ObjectStoreInner() {
       <div className="stack-lg">
         <section className="hero-panel">
           <div className="stack-md">
-            <p className="eyebrow">Host storage</p>
-            <h1 className="page-title">Object store configuration</h1>
+            <h1 className="page-title">Object store</h1>
             <p className="page-copy">
-              Configure the S3-compatible store used for managed backups, release storage, and
-              app-level object store credential linking.
+              The S3-compatible store used for managed backups and app credentials.
             </p>
           </div>
           <div className="metrics-grid">
@@ -260,21 +314,26 @@ function ObjectStoreInner() {
           </div>
         </section>
 
-        {notice ? <p className="callout callout-success">{notice}</p> : null}
-        {error ? <p className="callout callout-danger">{error}</p> : null}
+        {notice ? (
+          <p className="callout callout-success" role="status">
+            {notice}
+          </p>
+        ) : null}
+        {(actionError ?? loadError) ? (
+          <p className="callout callout-danger" role="alert">
+            {actionError ?? loadError}
+          </p>
+        ) : null}
 
         <div className="panel-grid object-store-layout">
           <article className="panel stack-md panel-compact">
-            <div className="stack-sm">
-              <p className="eyebrow">Configuration</p>
-              <h2 className="section-title">Connection details</h2>
-              <p className="page-copy">
-                The backend stores a redacted copy of the secret access key, so the dashboard must
-                send a fresh secret on every save.
-              </p>
-            </div>
+            <h2 className="section-title">Connection details</h2>
+            <p className="text-muted">
+              Only a redacted copy of the secret access key is kept, so enter the secret again on
+              every save.
+            </p>
 
-            <form onSubmit={handleSave} className="stack-md">
+            <form onSubmit={handleSave} className="stack-md" noValidate>
               <div className="panel-grid">
                 <div className="form-group">
                   <label className="form-label" htmlFor="objectstore-provider">
@@ -284,10 +343,19 @@ function ObjectStoreInner() {
                     id="objectstore-provider"
                     className="input"
                     value={draft.provider}
-                    onChange={(event) => updateDraft(setDraft, 'provider', event.target.value)}
+                    onChange={(event) => updateField('provider', event.target.value)}
                     placeholder="r2"
                     disabled={busy !== null}
+                    autoComplete="off"
+                    required
+                    aria-invalid={fieldErrors.provider ? true : undefined}
+                    aria-describedby={fieldErrors.provider ? fieldErrorId('provider') : undefined}
                   />
+                  {fieldErrors.provider ? (
+                    <p id={fieldErrorId('provider')} className="text-danger">
+                      {fieldErrors.provider}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="objectstore-bucket">
@@ -297,10 +365,19 @@ function ObjectStoreInner() {
                     id="objectstore-bucket"
                     className="input"
                     value={draft.bucket}
-                    onChange={(event) => updateDraft(setDraft, 'bucket', event.target.value)}
+                    onChange={(event) => updateField('bucket', event.target.value)}
                     placeholder="deku"
                     disabled={busy !== null}
+                    autoComplete="off"
+                    required
+                    aria-invalid={fieldErrors.bucket ? true : undefined}
+                    aria-describedby={fieldErrors.bucket ? fieldErrorId('bucket') : undefined}
                   />
+                  {fieldErrors.bucket ? (
+                    <p id={fieldErrorId('bucket')} className="text-danger">
+                      {fieldErrors.bucket}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="objectstore-region">
@@ -310,10 +387,19 @@ function ObjectStoreInner() {
                     id="objectstore-region"
                     className="input"
                     value={draft.region}
-                    onChange={(event) => updateDraft(setDraft, 'region', event.target.value)}
+                    onChange={(event) => updateField('region', event.target.value)}
                     placeholder="auto"
                     disabled={busy !== null}
+                    autoComplete="off"
+                    required
+                    aria-invalid={fieldErrors.region ? true : undefined}
+                    aria-describedby={fieldErrors.region ? fieldErrorId('region') : undefined}
                   />
+                  {fieldErrors.region ? (
+                    <p id={fieldErrorId('region')} className="text-danger">
+                      {fieldErrors.region}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="objectstore-endpoint">
@@ -323,10 +409,19 @@ function ObjectStoreInner() {
                     id="objectstore-endpoint"
                     className="input"
                     value={draft.endpoint}
-                    onChange={(event) => updateDraft(setDraft, 'endpoint', event.target.value)}
+                    onChange={(event) => updateField('endpoint', event.target.value)}
                     placeholder="https://<account>.r2.cloudflarestorage.com"
                     disabled={busy !== null}
+                    autoComplete="off"
+                    required
+                    aria-invalid={fieldErrors.endpoint ? true : undefined}
+                    aria-describedby={fieldErrors.endpoint ? fieldErrorId('endpoint') : undefined}
                   />
+                  {fieldErrors.endpoint ? (
+                    <p id={fieldErrorId('endpoint')} className="text-danger">
+                      {fieldErrors.endpoint}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="objectstore-access-key">
@@ -336,10 +431,22 @@ function ObjectStoreInner() {
                     id="objectstore-access-key"
                     className="input"
                     value={draft.access_key_id}
-                    onChange={(event) => updateDraft(setDraft, 'access_key_id', event.target.value)}
+                    onChange={(event) => updateField('access_key_id', event.target.value)}
                     placeholder="AKIA..."
                     disabled={busy !== null}
+                    autoComplete="off"
+                    spellCheck={false}
+                    required
+                    aria-invalid={fieldErrors.access_key_id ? true : undefined}
+                    aria-describedby={
+                      fieldErrors.access_key_id ? fieldErrorId('access_key_id') : undefined
+                    }
                   />
+                  {fieldErrors.access_key_id ? (
+                    <p id={fieldErrorId('access_key_id')} className="text-danger">
+                      {fieldErrors.access_key_id}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="objectstore-secret-key">
@@ -350,12 +457,21 @@ function ObjectStoreInner() {
                     className="input"
                     type="password"
                     value={draft.secret_access_key}
-                    onChange={(event) =>
-                      updateDraft(setDraft, 'secret_access_key', event.target.value)
-                    }
+                    onChange={(event) => updateField('secret_access_key', event.target.value)}
                     placeholder={state.configured ? 'Re-enter current secret to save changes' : ''}
                     disabled={busy !== null}
+                    autoComplete="new-password"
+                    required
+                    aria-invalid={fieldErrors.secret_access_key ? true : undefined}
+                    aria-describedby={
+                      fieldErrors.secret_access_key ? fieldErrorId('secret_access_key') : undefined
+                    }
                   />
+                  {fieldErrors.secret_access_key ? (
+                    <p id={fieldErrorId('secret_access_key')} className="text-danger">
+                      {fieldErrors.secret_access_key}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="objectstore-prefix">
@@ -365,9 +481,10 @@ function ObjectStoreInner() {
                     id="objectstore-prefix"
                     className="input"
                     value={draft.prefix}
-                    onChange={(event) => updateDraft(setDraft, 'prefix', event.target.value)}
+                    onChange={(event) => updateField('prefix', event.target.value)}
                     placeholder="backups/deku"
                     disabled={busy !== null}
+                    autoComplete="off"
                   />
                 </div>
               </div>
@@ -391,7 +508,8 @@ function ObjectStoreInner() {
 
               <div className="form-actions">
                 <button className="btn btn-primary" type="submit" disabled={busy !== null}>
-                  {busy === 'save' ? 'Saving…' : 'Save configuration'}
+                  {busy === 'save' ? <span className="loading-spinner" /> : null}
+                  <span>Save configuration</span>
                 </button>
               </div>
             </form>
@@ -399,10 +517,7 @@ function ObjectStoreInner() {
 
           <article className="panel summary-card summary-card-fit summary-card-roomy">
             <div className="summary-card-body">
-              <div className="stack-sm">
-                <p className="eyebrow">Stored config</p>
-                <h2 className="section-title">Status and actions</h2>
-              </div>
+              <h2 className="section-title">Saved configuration</h2>
 
               {state.configured && config ? (
                 <>
@@ -448,8 +563,8 @@ function ObjectStoreInner() {
                 </>
               ) : (
                 <p className="text-muted">
-                  No object store has been configured yet. Save a provider, bucket, endpoint, and
-                  credentials to enable backup storage.
+                  No object store is configured. Fill in Connection details and save to enable
+                  managed backups.
                 </p>
               )}
             </div>
@@ -463,7 +578,8 @@ function ObjectStoreInner() {
                 }}
                 disabled={!state.configured || busy !== null}
               >
-                {busy === 'test' ? 'Testing…' : 'Test configuration'}
+                {busy === 'test' ? <span className="loading-spinner" /> : null}
+                <span>Test configuration</span>
               </button>
               <button
                 type="button"
@@ -477,21 +593,23 @@ function ObjectStoreInner() {
           </article>
 
           <article className="panel stack-md">
-            <div className="stack-sm">
-              <p className="eyebrow">App linking</p>
-              <h2 className="section-title">Credential workflow</h2>
-              <p className="page-copy">
-                Link the saved object store config into an app as managed AWS and S3 environment
-                variables with a per-app prefix.
-              </p>
-            </div>
+            <h2 className="section-title">App credentials</h2>
+            <p className="text-muted">
+              Linking injects the saved credentials into an app as managed AWS and S3 environment
+              variables.
+            </p>
 
             {apps.length === 0 ? (
               <p className="text-muted">
-                Create an app first, then link the configured object store credentials here.
+                No apps exist yet. Create an app to link these credentials to it.
               </p>
             ) : (
               <>
+                {state.configured ? null : (
+                  <p className="callout callout-warning" id="objectstore-link-hint">
+                    Save an object store configuration before linking it to an app.
+                  </p>
+                )}
                 <div className="panel-grid">
                   <div className="form-group">
                     <label className="form-label" htmlFor="objectstore-app">
@@ -501,8 +619,13 @@ function ObjectStoreInner() {
                       id="objectstore-app"
                       className="input"
                       value={selectedApp}
-                      onChange={(event) => setSelectedApp(event.target.value)}
+                      onChange={(event) => {
+                        setSelectedApp(event.target.value);
+                        if (linkError) setLinkError(null);
+                      }}
                       disabled={busy !== null}
+                      aria-invalid={linkError ? true : undefined}
+                      aria-describedby={linkError ? 'objectstore-app-error' : undefined}
                     >
                       {apps.map((app) => (
                         <option key={app.id} value={app.name}>
@@ -510,6 +633,11 @@ function ObjectStoreInner() {
                         </option>
                       ))}
                     </select>
+                    {linkError ? (
+                      <p id="objectstore-app-error" className="text-danger">
+                        {linkError}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="form-group">
                     <label className="form-label" htmlFor="objectstore-app-prefix">
@@ -581,19 +709,20 @@ function ObjectStoreInner() {
                     </dl>
 
                     <div className="stack-sm">
-                      <p className="eyebrow">Managed env keys</p>
+                      <h3 className="deploy-title">Managed environment keys</h3>
                       {appLink.link?.linked_keys.length ? (
-                        <div className="data-grid">
+                        <dl className="data-grid">
                           {appLink.link.linked_keys.map((key) => (
                             <div key={key}>
-                              <dt>Linked</dt>
-                              <dd className="font-mono">{key}</dd>
+                              <dt>{key}</dt>
+                              <dd>Linked</dd>
                             </div>
                           ))}
-                        </div>
+                        </dl>
                       ) : (
                         <p className="text-muted">
-                          No managed object store keys are currently set for this app.
+                          No managed keys are set for this app yet. Link the credentials to add
+                          them.
                         </p>
                       )}
                     </div>
@@ -604,9 +733,11 @@ function ObjectStoreInner() {
                   <button
                     className="btn btn-primary"
                     type="submit"
-                    disabled={busy !== null || !state.configured || !selectedApp}
+                    disabled={busy !== null || !state.configured}
+                    aria-describedby={state.configured ? undefined : 'objectstore-link-hint'}
                   >
-                    {busy === `link-${selectedApp}` ? 'Linking…' : 'Link app'}
+                    {busy === `link-${selectedApp}` ? <span className="loading-spinner" /> : null}
+                    <span>Link app</span>
                   </button>
                   <button
                     type="button"
@@ -678,6 +809,39 @@ function buildDraft(config: ObjectStoreConfig | null): ObjectStoreDraft {
     path_style: config.path_style,
     prefix: config.prefix ?? '',
   };
+}
+
+function fieldErrorId(key: keyof ObjectStoreFieldErrors): string {
+  return `objectstore-${key.replace(/_/g, '-')}-error`;
+}
+
+function isRequiredDraftField(key: keyof ObjectStoreDraft): key is keyof ObjectStoreFieldErrors {
+  return REQUIRED_DRAFT_FIELDS.some((field) => field.key === key);
+}
+
+function validateDraft(draft: ObjectStoreDraft): ObjectStoreFieldErrors {
+  const errors: ObjectStoreFieldErrors = {};
+
+  if (!draft.provider.trim()) {
+    errors.provider = 'Enter the storage provider, such as r2 or s3.';
+  }
+  if (!draft.bucket.trim()) {
+    errors.bucket = 'Enter the bucket name.';
+  }
+  if (!draft.region.trim()) {
+    errors.region = 'Enter the region, or auto when the provider has no regions.';
+  }
+  if (!draft.endpoint.trim()) {
+    errors.endpoint = 'Enter the S3 endpoint URL.';
+  }
+  if (!draft.access_key_id.trim()) {
+    errors.access_key_id = 'Enter the access key ID.';
+  }
+  if (!draft.secret_access_key.trim()) {
+    errors.secret_access_key = 'Enter the secret access key.';
+  }
+
+  return errors;
 }
 
 function buildPayload(draft: ObjectStoreDraft): ObjectStoreConfig | null {

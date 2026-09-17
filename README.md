@@ -111,7 +111,7 @@ Deku supports:
 - Source deploys via `deku deploy run <app> --path <dir>`
 - SSH `git push` deploys as a supported secondary path
 
-Starter templates live under [templates/](templates/) in this repository. They are adapted for Deku's `dockerfile` and `nixpacks` deploy paths.
+Starter templates live under [templates/](templates/) in this repository. They are adapted for Deku's `dockerfile` and `railpack` deploy paths.
 
 Rollout behavior is controlled by `deku.toml`:
 
@@ -139,6 +139,9 @@ Those settings are applied by the live deploy pipeline, not just stored as metad
 - `templates/`: local starter app catalog for common framework deploys
 
 ## Development
+
+Rust 1.94 or newer is required. The floor is declared once as `rust-version` in the workspace
+manifest and inherited by every member crate; CI builds on stable.
 
 Common verification commands:
 

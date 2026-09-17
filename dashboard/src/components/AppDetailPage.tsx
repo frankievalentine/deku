@@ -1,5 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { type SubmitEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  type KeyboardEvent,
+  type RefObject,
+  type SubmitEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
 import type {
   App,
@@ -82,11 +91,20 @@ function AppDetailInner() {
   const [activeTab, setActiveTab] = useState<AppTabId>(() => readTabFromHash(readLocationHash()));
   const [flash, setFlash] = useState<FlashMessage | null>(null);
   const [domainDraft, setDomainDraft] = useState('');
+  const [domainError, setDomainError] = useState<string | null>(null);
   const [configKey, setConfigKey] = useState('');
   const [configValue, setConfigValue] = useState('');
+  const [configError, setConfigError] = useState<string | null>(null);
   const [scaleProcess, setScaleProcess] = useState('web');
   const [scaleCount, setScaleCount] = useState('1');
+  const [scaleError, setScaleError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [tabsScrollable, setTabsScrollable] = useState(false);
+  const tabRefs = useRef(new Map<AppTabId, HTMLButtonElement>());
+  const tabStripRef = useRef<HTMLDivElement | null>(null);
+  const domainInputRef = useRef<HTMLInputElement | null>(null);
+  const configKeyInputRef = useRef<HTMLInputElement | null>(null);
+  const scaleCountInputRef = useRef<HTMLInputElement | null>(null);
   const appQuery = useAppSummaryQuery(appName, { enabled: Boolean(appName) });
   const deploymentsQuery = useAppDeploymentsQuery(appName, {
     enabled: Boolean(appName),
@@ -188,10 +206,46 @@ function AppDetailInner() {
     await invalidateAppDetailQueries(queryClient, appName);
   }, [appName, queryClient]);
 
+  useEffect(() => {
+    if (!state) return;
+
+    const strip = tabStripRef.current?.querySelector('.app-tabs-track');
+    if (!strip) return;
+
+    const measure = () => {
+      setTabsScrollable(strip.scrollWidth - strip.clientWidth > 4);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [state]);
+
+  useEffect(() => {
+    if (!state) return;
+
+    const strip = tabStripRef.current?.querySelector('.app-tabs-track');
+    const tab = tabRefs.current.get(activeTab);
+    if (!strip || !tab) return;
+
+    const stripStart = strip.scrollLeft;
+    const stripEnd = stripStart + strip.clientWidth;
+    const tabStart = tab.offsetLeft;
+    const tabEnd = tabStart + tab.offsetWidth;
+
+    if (tabStart >= stripStart && tabEnd <= stripEnd) return;
+
+    strip.scrollTo({
+      left: Math.max(0, tabStart - (strip.clientWidth - tab.offsetWidth) / 2),
+      behavior: 'auto',
+    });
+  }, [activeTab, state]);
+
   const tabs = useMemo<AppTabDefinition[]>(() => {
     if (!state) {
       return [
-        { id: 'deploy', label: 'Deploy', summary: 'Ship changes' },
+        { id: 'deploy', label: 'Deploy', summary: 'Deployment history' },
         { id: 'proxy', label: 'Proxy', summary: 'Domains and TLS' },
         { id: 'runtime', label: 'Runtime', summary: 'Scale and processes' },
         { id: 'config', label: 'Config', summary: 'Environment vars' },
@@ -243,7 +297,15 @@ function AppDetailInner() {
   async function handleAddDomain(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextDomain = domainDraft.trim();
-    if (!nextDomain || !state || state.app.locked) return;
+    if (!state || state.app.locked) return;
+
+    if (!nextDomain) {
+      setDomainError('Enter a domain to add it to this app.');
+      domainInputRef.current?.focus();
+      return;
+    }
+
+    setDomainError(null);
 
     try {
       setBusy('domain-add');
@@ -282,7 +344,15 @@ function AppDetailInner() {
   async function handleSetConfig(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const key = configKey.trim();
-    if (!key || !state || state.app.locked) return;
+    if (!state || state.app.locked) return;
+
+    if (!key) {
+      setConfigError('Enter a config var key.');
+      configKeyInputRef.current?.focus();
+      return;
+    }
+
+    setConfigError(null);
 
     try {
       setBusy('config-set');
@@ -325,10 +395,13 @@ function AppDetailInner() {
 
     const process = scaleProcess.trim() || 'web';
     const parsedCount = Number(scaleCount);
-    if (!Number.isFinite(parsedCount) || parsedCount < 0) {
-      setFlash({ tone: 'danger', text: 'Replica count must be a non-negative number.' });
+    if (scaleCount.trim().length === 0 || !Number.isInteger(parsedCount) || parsedCount < 0) {
+      setScaleError('Enter a whole number of replicas, 0 or more.');
+      scaleCountInputRef.current?.focus();
       return;
     }
+
+    setScaleError(null);
 
     try {
       setBusy('scale-set');
@@ -353,6 +426,42 @@ function AppDetailInner() {
     const nextHash = `#${nextTab}`;
     const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
     window.history.replaceState({}, '', nextUrl);
+  }
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, tabId: AppTabId) {
+    const currentIndex = tabOrder.indexOf(tabId);
+    let nextIndex: number;
+
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        nextIndex = (currentIndex + 1) % tabOrder.length;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        nextIndex = (currentIndex - 1 + tabOrder.length) % tabOrder.length;
+        break;
+      case 'Home':
+        nextIndex = 0;
+        break;
+      case 'End':
+        nextIndex = tabOrder.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    selectTab(tabOrder[nextIndex], true);
+  }
+
+  function selectTab(nextTab: AppTabId, focusTab: boolean) {
+    handleTabChange(nextTab);
+    if (focusTab) {
+      window.requestAnimationFrame(() => {
+        tabRefs.current.get(nextTab)?.focus();
+      });
+    }
   }
 
   if (!appName) {
@@ -381,58 +490,50 @@ function AppDetailInner() {
 
   return (
     <div className="stack-lg">
-      <section className="hero-panel">
-        <div className="stack-md">
-          <div className="panel-heading panel-heading-top">
-            <p className="eyebrow">App detail</p>
-            <span className="inventory-summary">Created {formatDate(state.app.created_at)}</span>
+      <header className="apps-header">
+        <div className="apps-header-top">
+          <div className="apps-header-copy">
+            <h1 className="page-title">{state.app.name}</h1>
+            <p className="page-copy">Created {formatDate(state.app.created_at)}</p>
           </div>
-          <div className="panel-heading">
-            <div className="stack-sm panel-heading-copy">
-              <h1 className="page-title">{state.app.name}</h1>
-              <p className="page-copy">
-                Deploy, route, scale, inspect, and manage this app without working through a single
-                long page.
-              </p>
-            </div>
-            <StatusBadge status={state.app.status} />
-          </div>
+          <StatusBadge status={state.app.status} />
         </div>
-        <div className="metrics-grid">
-          <Metric label="Domains" value={String(state.domains.length)} />
-          <Metric label="Ports" value={String(state.ports.length)} />
-          <Metric label="Deployments" value={String(state.deployments.length)} />
-          <Metric label="TLS" value={state.app.tls_enabled ? 'On' : 'Off'} />
-        </div>
-      </section>
+        <ul className="apps-metrics">
+          <AppMetric label="Domains" value={String(state.domains.length)} />
+          <AppMetric label="Ports" value={String(state.ports.length)} />
+          <AppMetric label="Deployments" value={String(state.deployments.length)} />
+          <AppMetric label="TLS" value={state.app.tls_enabled ? 'On' : 'Off'} />
+        </ul>
+      </header>
 
       <section className="panel stack-md">
-        <div className="panel-heading panel-heading-top">
-          <div className="stack-sm panel-heading-copy">
-            <p className="eyebrow">Sections</p>
-            <h2 className="section-title">App categories</h2>
+        <div className={`app-tabs${tabsScrollable ? ' is-scrollable' : ''}`} ref={tabStripRef}>
+          <div className="app-tabs-track" role="tablist" aria-label={`${state.app.name} sections`}>
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                id={`tab-${tab.id}`}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`panel-${tab.id}`}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                ref={(element) => {
+                  if (element) {
+                    tabRefs.current.set(tab.id, element);
+                  } else {
+                    tabRefs.current.delete(tab.id);
+                  }
+                }}
+                className={`app-tab${activeTab === tab.id ? ' is-selected' : ''}`}
+                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
+                onClick={() => selectTab(tab.id, false)}
+              >
+                <span className="app-tab-label">{tab.label}</span>
+                <span className="app-tab-summary">{tab.summary}</span>
+              </button>
+            ))}
           </div>
-          <span className="inventory-summary">
-            {tabs.find((tab) => tab.id === activeTab)?.label}
-          </span>
-        </div>
-
-        <div className="app-tab-grid" role="tablist" aria-label={`${state.app.name} sections`}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              id={`tab-${tab.id}`}
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              aria-controls={`panel-${tab.id}`}
-              className={`app-tab-button${activeTab === tab.id ? ' is-selected' : ''}`}
-              onClick={() => handleTabChange(tab.id)}
-            >
-              <strong>{tab.label}</strong>
-              <span>{tab.summary}</span>
-            </button>
-          ))}
         </div>
 
         {state.app.locked ? (
@@ -471,6 +572,8 @@ function AppDetailInner() {
               locked={state.app.locked}
               busy={busy}
               value={domainDraft}
+              error={domainError}
+              inputRef={domainInputRef}
               onDraftChange={setDomainDraft}
               onSubmit={handleAddDomain}
               onRemove={handleRemoveDomain}
@@ -492,6 +595,8 @@ function AppDetailInner() {
             processes={state.processes}
             scaleProcess={scaleProcess}
             scaleCount={scaleCount}
+            error={scaleError}
+            countInputRef={scaleCountInputRef}
             busy={busy}
             onScaleProcessChange={setScaleProcess}
             onScaleCountChange={setScaleCount}
@@ -505,6 +610,8 @@ function AppDetailInner() {
             locked={state.app.locked}
             configKey={configKey}
             configValue={configValue}
+            error={configError}
+            keyInputRef={configKeyInputRef}
             busy={busy}
             onConfigKeyChange={setConfigKey}
             onConfigValueChange={setConfigValue}
@@ -550,6 +657,8 @@ interface DomainPanelProps {
   locked: boolean;
   busy: string | null;
   value: string;
+  error: string | null;
+  inputRef: RefObject<HTMLInputElement | null>;
   onDraftChange: (value: string) => void;
   onSubmit: (event: SubmitEvent<HTMLFormElement>) => Promise<void>;
   onRemove: (domain: string) => Promise<void>;
@@ -560,6 +669,8 @@ function DomainPanel({
   locked,
   busy,
   value,
+  error,
+  inputRef,
   onDraftChange,
   onSubmit,
   onRemove,
@@ -584,19 +695,23 @@ function DomainPanel({
           </label>
           <input
             id="domain-input"
+            ref={inputRef}
             className="input"
             placeholder="app.example.com"
             value={value}
             onChange={(event) => onDraftChange(event.target.value)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? 'domain-input-error' : undefined}
             disabled={locked || busy !== null}
           />
+          {error ? (
+            <p id="domain-input-error" className="form-error">
+              {error}
+            </p>
+          ) : null}
         </div>
         <div className="form-actions">
-          <button
-            className="btn btn-primary"
-            type="submit"
-            disabled={locked || busy !== null || value.trim().length === 0}
-          >
+          <button className="btn btn-primary" type="submit" disabled={locked || busy !== null}>
             {busy === 'domain-add' ? 'Adding…' : 'Add domain'}
           </button>
         </div>
@@ -607,11 +722,14 @@ function DomainPanel({
       ) : (
         <TableScroll>
           <table className="table">
+            <caption className="sr-only">Domains configured for this app</caption>
             <thead>
               <tr>
-                <th>Domain</th>
-                <th>Created</th>
-                <th />
+                <th scope="col">Domain</th>
+                <th scope="col">Created</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -621,12 +739,13 @@ function DomainPanel({
                   <td className="font-mono">{formatDate(domain.created_at)}</td>
                   <td>
                     <button
-                      className="btn btn-danger btn-sm"
+                      className="btn btn-outline btn-danger-outline btn-sm"
+                      type="button"
+                      aria-label={`Remove domain ${domain.domain}`}
                       onClick={() => {
                         void onRemove(domain.domain);
                       }}
                       disabled={locked || busy === `domain-remove-${domain.domain}`}
-                      type="button"
                     >
                       Remove
                     </button>
@@ -648,6 +767,8 @@ interface RuntimePanelProps {
   processes: ProcessRecord[];
   scaleProcess: string;
   scaleCount: string;
+  error: string | null;
+  countInputRef: RefObject<HTMLInputElement | null>;
   busy: string | null;
   onScaleProcessChange: (value: string) => void;
   onScaleCountChange: (value: string) => void;
@@ -661,6 +782,8 @@ function RuntimePanel({
   processes,
   scaleProcess,
   scaleCount,
+  error,
+  countInputRef,
   busy,
   onScaleProcessChange,
   onScaleCountChange,
@@ -697,13 +820,21 @@ function RuntimePanel({
               </label>
               <input
                 id="scale-input"
+                ref={countInputRef}
                 className="input"
                 type="number"
                 min="0"
                 value={scaleCount}
                 onChange={(event) => onScaleCountChange(event.target.value)}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? 'scale-input-error' : undefined}
                 disabled={locked || busy !== null}
               />
+              {error ? (
+                <p id="scale-input-error" className="form-error">
+                  {error}
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="form-actions">
@@ -748,14 +879,15 @@ function RuntimePanel({
         ) : (
           <TableScroll>
             <table className="table">
+              <caption className="sr-only">Running containers for this app</caption>
               <thead>
                 <tr>
-                  <th>Process</th>
-                  <th>Status</th>
-                  <th>Port</th>
-                  <th>Container</th>
-                  <th>Deployment</th>
-                  <th>Started</th>
+                  <th scope="col">Process</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Port</th>
+                  <th scope="col">Container</th>
+                  <th scope="col">Deployment</th>
+                  <th scope="col">Started</th>
                 </tr>
               </thead>
               <tbody>
@@ -794,6 +926,8 @@ interface ConfigPanelProps {
   locked: boolean;
   configKey: string;
   configValue: string;
+  error: string | null;
+  keyInputRef: RefObject<HTMLInputElement | null>;
   busy: string | null;
   onConfigKeyChange: (value: string) => void;
   onConfigValueChange: (value: string) => void;
@@ -806,6 +940,8 @@ function ConfigPanel({
   locked,
   configKey,
   configValue,
+  error,
+  keyInputRef,
   busy,
   onConfigKeyChange,
   onConfigValueChange,
@@ -833,12 +969,22 @@ function ConfigPanel({
             </label>
             <input
               id="config-key"
+              ref={keyInputRef}
               className="input"
               value={configKey}
               onChange={(event) => onConfigKeyChange(event.target.value)}
               placeholder="NODE_ENV"
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? 'config-key-error' : undefined}
+              autoComplete="off"
+              spellCheck={false}
               disabled={locked || busy !== null}
             />
+            {error ? (
+              <p id="config-key-error" className="form-error">
+                {error}
+              </p>
+            ) : null}
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="config-value">
@@ -855,11 +1001,7 @@ function ConfigPanel({
           </div>
         </div>
         <div className="form-actions">
-          <button
-            className="btn btn-primary"
-            type="submit"
-            disabled={locked || busy !== null || configKey.trim().length === 0}
-          >
+          <button className="btn btn-primary" type="submit" disabled={locked || busy !== null}>
             {busy === 'config-set' ? 'Saving…' : 'Set var'}
           </button>
         </div>
@@ -870,12 +1012,15 @@ function ConfigPanel({
       ) : (
         <TableScroll>
           <table className="table">
+            <caption className="sr-only">Config vars visible to this app</caption>
             <thead>
               <tr>
-                <th>Key</th>
-                <th>Value</th>
-                <th>Scope</th>
-                <th />
+                <th scope="col">Key</th>
+                <th scope="col">Value</th>
+                <th scope="col">Scope</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -886,8 +1031,9 @@ function ConfigPanel({
                   <td>{item.is_global ? 'Global' : 'App'}</td>
                   <td>
                     <button
-                      className="btn btn-danger btn-sm"
+                      className="btn btn-outline btn-danger-outline btn-sm"
                       type="button"
+                      aria-label={`Remove config var ${item.key}`}
                       disabled={locked || busy === `config-remove-${item.key}`}
                       onClick={() => {
                         void onRemove(item.key);
@@ -933,12 +1079,13 @@ function DeploymentHistoryPanel({
       ) : (
         <TableScroll>
           <table className="table">
+            <caption className="sr-only">Recent deployments for this app</caption>
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Status</th>
-                <th>Builder</th>
-                <th>Created</th>
+                <th scope="col">ID</th>
+                <th scope="col">Status</th>
+                <th scope="col">Builder</th>
+                <th scope="col">Created</th>
               </tr>
             </thead>
             <tbody>
@@ -970,50 +1117,38 @@ function DeploymentHistoryPanel({
 function AppDetailSkeleton({ activeTab }: { activeTab: AppTabId }) {
   return (
     <div className="stack-lg">
-      <section className="hero-panel">
-        <div className="stack-md">
-          <div className="panel-heading panel-heading-top">
-            <SkeletonBlock className="h-3 w-20" />
-            <SkeletonBlock className="h-5 w-32" />
+      <header className="apps-header">
+        <div className="apps-header-top">
+          <div className="apps-header-copy">
+            <SkeletonBlock className="h-3 w-12" />
+            <SkeletonBlock className="h-9 w-56 max-w-full" />
+            <SkeletonBlock className="h-4 w-full max-w-lg" />
           </div>
-          <div className="panel-heading">
-            <div className="stack-sm panel-heading-copy">
-              <SkeletonBlock className="h-10 w-56 max-w-full" />
-              <SkeletonBlock className="h-4 w-full max-w-lg" />
-              <SkeletonBlock className="h-4 w-5/6 max-w-md" />
-            </div>
-            <SkeletonBlock className="h-8 w-24 rounded-full" />
-          </div>
+          <SkeletonBlock className="h-8 w-24 rounded-full" />
         </div>
-        <div className="metrics-grid">
+        <ul className="apps-metrics">
           {skeletonItems('metric', 4).map((item) => (
-            <div key={item} className="metric-card stack-sm">
+            <li key={item} className="apps-metric">
+              <SkeletonBlock className="h-6 w-10" />
               <SkeletonBlock className="h-3 w-16" />
-              <SkeletonBlock className="h-8 w-14" />
-            </div>
+            </li>
           ))}
-        </div>
-      </section>
+        </ul>
+      </header>
 
       <section className="panel stack-md">
-        <div className="panel-heading panel-heading-top">
-          <div className="stack-sm panel-heading-copy">
-            <SkeletonBlock className="h-3 w-16" />
-            <SkeletonBlock className="h-7 w-44" />
+        <div className="app-tabs">
+          <div className="app-tabs-track">
+            {tabOrder.map((tabId) => (
+              <div
+                key={`tab-skeleton-${tabId}`}
+                className={`app-tab${tabId === activeTab ? ' is-selected' : ''}`}
+              >
+                <SkeletonBlock className="h-4 w-16" />
+                <SkeletonBlock className="h-3 w-20" />
+              </div>
+            ))}
           </div>
-          <SkeletonBlock className="h-5 w-20" />
-        </div>
-
-        <div className="app-tab-grid">
-          {tabOrder.map((tabId) => (
-            <div
-              key={`tab-skeleton-${tabId}`}
-              className={`app-tab-button${tabId === activeTab ? ' is-selected' : ''}`}
-            >
-              <SkeletonBlock className="h-4 w-16" />
-              <SkeletonBlock className="h-3 w-full" />
-            </div>
-          ))}
         </div>
       </section>
 
@@ -1157,12 +1292,12 @@ function SkeletonPanelHeaderCard({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function AppMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="metric-card">
-      <p>{label}</p>
-      <strong>{value}</strong>
-    </div>
+    <li className="apps-metric">
+      <span className="apps-metric-value">{value}</span>
+      <span className="apps-metric-label">{label}</span>
+    </li>
   );
 }
 

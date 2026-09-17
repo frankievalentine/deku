@@ -23,8 +23,20 @@ export default function AppOperationsPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const readyToDelete = confirmName.trim() === appName;
+
+  function requestDelete() {
+    if (!readyToDelete) {
+      setConfirmError(`Type ${appName} to confirm deletion.`);
+      document.getElementById('delete-app-confirm')?.focus();
+      return;
+    }
+
+    setConfirmError(null);
+    setConfirmDelete(true);
+  }
 
   async function handleDelete() {
     try {
@@ -77,10 +89,6 @@ export default function AppOperationsPanel({
             <dt>Lock state</dt>
             <dd>{locked ? 'Locked' : 'Writable'}</dd>
           </div>
-          <div>
-            <dt>Lock control</dt>
-            <dd>{locked ? 'Backend route missing' : 'Backend route missing'}</dd>
-          </div>
         </dl>
 
         <p className={locked ? 'callout callout-warning' : 'callout callout-success'}>
@@ -111,18 +119,30 @@ export default function AppOperationsPanel({
             id="delete-app-confirm"
             className="input"
             value={confirmName}
-            onChange={(event) => setConfirmName(event.target.value)}
+            onChange={(event) => {
+              setConfirmName(event.target.value);
+              if (confirmError) setConfirmError(null);
+            }}
             placeholder={appName}
+            aria-invalid={confirmError ? true : undefined}
+            aria-describedby={confirmError ? 'delete-app-confirm-error' : undefined}
+            autoComplete="off"
+            spellCheck={false}
             disabled={busy !== null}
           />
+          {confirmError ? (
+            <p id="delete-app-confirm-error" className="form-error">
+              {confirmError}
+            </p>
+          ) : null}
         </div>
 
         <div className="form-actions">
           <button
             type="button"
             className="btn btn-danger"
-            disabled={!readyToDelete || busy !== null}
-            onClick={() => setConfirmDelete(true)}
+            disabled={busy !== null}
+            onClick={requestDelete}
           >
             Delete app
           </button>

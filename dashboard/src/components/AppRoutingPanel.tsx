@@ -38,6 +38,7 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
   const [notice, setNotice] = useState<string | null>(null);
   const [hostPort, setHostPort] = useState('');
   const [containerPort, setContainerPort] = useState('');
+  const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null);
   const portsQuery = useAppPortsQuery(appName, { enabled: Boolean(appName) });
   const routingQuery = useAppRoutingStatusQuery(appName, { enabled: Boolean(appName) });
   const tlsQuery = useAppTlsStatusQuery(appName, { enabled: Boolean(appName) });
@@ -85,20 +86,32 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
   );
   const error = actionError ?? queryError;
 
+  function flagFieldError(field: string, message: string) {
+    setFieldError({ field, message });
+    setActionError(null);
+    document.getElementById(field)?.focus();
+  }
+
   async function handleAddPort(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextHostPort = Number(hostPort);
     const nextContainerPort = Number(containerPort);
 
-    if (!Number.isFinite(nextHostPort) || nextHostPort <= 0) {
-      setActionError('Host port must be a positive number.');
+    if (hostPort.trim().length === 0 || !Number.isInteger(nextHostPort) || nextHostPort <= 0) {
+      flagFieldError('host-port', 'Enter the host port as a whole number above 0.');
       return;
     }
 
-    if (!Number.isFinite(nextContainerPort) || nextContainerPort <= 0) {
-      setActionError('Container port must be a positive number.');
+    if (
+      containerPort.trim().length === 0 ||
+      !Number.isInteger(nextContainerPort) ||
+      nextContainerPort <= 0
+    ) {
+      flagFieldError('container-port', 'Enter the container port as a whole number above 0.');
       return;
     }
+
+    setFieldError(null);
 
     try {
       setBusy('port-add');
@@ -189,10 +202,20 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
                 type="number"
                 min="1"
                 value={hostPort}
-                onChange={(event) => setHostPort(event.target.value)}
+                onChange={(event) => {
+                  setHostPort(event.target.value);
+                  if (fieldError?.field === 'host-port') setFieldError(null);
+                }}
+                aria-invalid={fieldError?.field === 'host-port' ? true : undefined}
+                aria-describedby={fieldError?.field === 'host-port' ? 'host-port-error' : undefined}
                 disabled={locked || busy !== null}
                 placeholder="8080"
               />
+              {fieldError?.field === 'host-port' ? (
+                <p id="host-port-error" className="form-error">
+                  {fieldError.message}
+                </p>
+              ) : null}
             </div>
             <div className="form-group">
               <label className="form-label" htmlFor="container-port">
@@ -204,10 +227,22 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
                 type="number"
                 min="1"
                 value={containerPort}
-                onChange={(event) => setContainerPort(event.target.value)}
+                onChange={(event) => {
+                  setContainerPort(event.target.value);
+                  if (fieldError?.field === 'container-port') setFieldError(null);
+                }}
+                aria-invalid={fieldError?.field === 'container-port' ? true : undefined}
+                aria-describedby={
+                  fieldError?.field === 'container-port' ? 'container-port-error' : undefined
+                }
                 disabled={locked || busy !== null}
                 placeholder="3000"
               />
+              {fieldError?.field === 'container-port' ? (
+                <p id="container-port-error" className="form-error">
+                  {fieldError.message}
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="form-actions">
@@ -225,12 +260,15 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
         ) : (
           <TableScroll>
             <table className="table">
+              <caption className="sr-only">Port mappings for this app</caption>
               <thead>
                 <tr>
-                  <th>Host</th>
-                  <th>Container</th>
-                  <th>Protocol</th>
-                  <th />
+                  <th scope="col">Host</th>
+                  <th scope="col">Container</th>
+                  <th scope="col">Protocol</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -242,7 +280,8 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
                     <td>
                       <button
                         type="button"
-                        className="btn btn-danger btn-sm"
+                        className="btn btn-outline btn-danger-outline btn-sm"
+                        aria-label={`Remove port mapping ${port.host_port} to ${port.container_port}`}
                         disabled={locked || busy === `port-remove-${port.id}`}
                         onClick={() => handleRemovePort(port)}
                       >

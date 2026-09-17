@@ -29,7 +29,6 @@ export interface CommandItem {
 export interface ToastAction {
   label: string;
   href?: string;
-  onclick?: string;
 }
 
 export interface ToastConfig {
@@ -49,6 +48,7 @@ interface ToastQueueWindow extends Window {
       title?: string;
       description?: string;
       action?: ToastAction;
+      cancel?: { label: string };
       duration?: number;
     };
   }>;
@@ -106,18 +106,22 @@ export function showToast({
   description,
   variant = 'default',
   action,
-  duration = 5000,
+  duration,
 }: ToastConfig): void {
   if (typeof document === 'undefined' || typeof window === 'undefined') return;
 
   const category: ToastCategory = variant === 'default' ? 'info' : variant;
+  // Errors and toasts that carry an action stay until the user dismisses them.
+  const persistent = category === 'error' || Boolean(action);
+  const resolvedDuration = duration ?? (persistent ? -1 : 5000);
   const detail = {
     config: {
       category,
       title,
       description,
       action,
-      duration,
+      cancel: persistent ? { label: 'Dismiss' } : undefined,
+      duration: resolvedDuration,
     },
   };
 

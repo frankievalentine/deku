@@ -1,7 +1,7 @@
 import path from "node:path";
 import node from "@astrojs/node";
 import react from "@astrojs/react";
-import { auditLogPlugin } from "@emdash-cms/plugin-audit-log";
+import auditLog from "@emdash-cms/plugin-audit-log";
 import { defineConfig } from "astro/config";
 import emdash, { local } from "emdash/astro";
 import { sqlite } from "emdash/db";
@@ -36,7 +36,7 @@ export default defineConfig({
 				directory: uploadsDir,
 				baseUrl: "/_emdash/api/media/file",
 			}),
-			plugins: [auditLogPlugin()],
+			plugins: [auditLog],
 			// HTTPS reverse proxy: uncomment so passkey verify matches browser origin
 			// passkeyPublicOrigin: "https://emdash.local:8443",
 		}),

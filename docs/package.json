@@ -3,8 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "overrides": {
-    "vite": "^7.3.2",
+    "vite": "^8.0.13",
     "yaml": "^2.8.3"
   },
   "scripts": {
@@ -14,13 +17,14 @@
     "check": "astro check"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.38.3",
-    "@pelagornis/page": "^1.2.2",
-    "astro": "^6.1.4"
+    "@astrojs/starlight": "^0.42.1",
+    "@pelagornis/page": "^1.2.5",
+    "astro": "^7.3.3"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.8",
-    "@biomejs/biome": "^2.4.10",
-    "typescript": "^5"
+    "@astrojs/check": "^0.9.10",
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^22.20.3",
+    "typescript": "^6.0.3"
   }
 }

@@ -38,6 +38,9 @@ Contributions should improve:
 
 Rust changes:
 
+Rust 1.94 or newer is required (declared as `rust-version` in the workspace manifest and inherited
+by every member crate).
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings

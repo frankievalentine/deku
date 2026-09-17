@@ -1,24 +1,128 @@
-use axum::{extract::Request, http::StatusCode, middleware::Next, response::IntoResponse, Json};
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+
+use axum::{
+    extract::ConnectInfo,
+    http::{header, StatusCode},
+    middleware::Next,
+    response::IntoResponse,
+    Json,
+};
+use chrono::Utc;
 use deku_core::auth::verify_dashboard_token;
+use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
 use super::SharedState;
+
+/// Bound the number of concurrent Argon2id verifications so a burst of
+/// unauthenticated requests cannot exhaust CPU or the blocking thread pool.
+fn verify_permits() -> &'static Semaphore {
+    static PERMITS: OnceLock<Semaphore> = OnceLock::new();
+    PERMITS.get_or_init(|| Semaphore::new(2))
+}
+
+/// Per-client-IP token bucket. It bounds how often one remote address can make
+/// the daemon run an Argon2 verification, without affecting loopback clients.
+const RATE_LIMIT_CAPACITY: f64 = 120.0;
+const RATE_LIMIT_REFILL_PER_SECOND: f64 = 2.0;
+const RATE_LIMIT_MAX_ENTRIES: usize = 10_000;
+const RATE_LIMIT_STALE_SECONDS: f64 = 300.0;
+
+struct Bucket {
+    tokens: f64,
+    last: Instant,
+}
+
+impl Bucket {
+    fn try_take(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens =
+            (self.tokens + elapsed * RATE_LIMIT_REFILL_PER_SECOND).min(RATE_LIMIT_CAPACITY);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn rate_limit_state() -> &'static Mutex<HashMap<IpAddr, Bucket>> {
+    static STATE: OnceLock<Mutex<HashMap<IpAddr, Bucket>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn rate_limit_allow(ip: IpAddr) -> bool {
+    if ip.is_loopback() {
+        return true;
+    }
+
+    let now = Instant::now();
+    let mut guard = match rate_limit_state().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    if guard.len() > RATE_LIMIT_MAX_ENTRIES {
+        guard.retain(|_, bucket| {
+            now.saturating_duration_since(bucket.last).as_secs_f64() < RATE_LIMIT_STALE_SECONDS
+        });
+    }
+
+    guard
+        .entry(ip)
+        .or_insert(Bucket {
+            tokens: RATE_LIMIT_CAPACITY,
+            last: now,
+        })
+        .try_take(now)
+}
+
+async fn verify_token(token: String, hash: String) -> bool {
+    let Ok(_permit) = verify_permits().acquire().await else {
+        return false;
+    };
+
+    tokio::task::spawn_blocking(move || verify_dashboard_token(&token, &hash))
+        .await
+        .unwrap_or(false)
+}
+
+fn unauthorized() -> axum::response::Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "unauthorized" })),
+    )
+        .into_response()
+}
 
 /// Axum middleware that validates the dashboard bearer token on TCP requests.
 /// Apply only to the TCP router — the Unix socket router is trusted local access.
 pub async fn require_auth(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    request: Request,
+    request: axum::extract::Request,
     next: Next,
 ) -> impl IntoResponse {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
-    let token_hash = state
-        .dashboard_auth
-        .read()
-        .await
-        .as_ref()
-        .map(|value| value.token_hash.clone());
+
+    if let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() {
+        if !rate_limit_allow(peer.ip()) {
+            warn!(%method, %path, "dashboard auth rate limit exceeded");
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, "30")],
+                Json(serde_json::json!({ "error": "too many requests" })),
+            )
+                .into_response();
+        }
+    }
+
+    let token_state = state.dashboard_auth.read().await.clone();
 
     let auth_header = request
         .headers()
@@ -32,17 +136,18 @@ pub async fn require_auth(
             .find_map(|part| part.strip_prefix("token=").map(str::to_owned))
     });
 
-    match (auth_header.or(query_token), token_hash) {
-        (Some(token), Some(hash)) if verify_dashboard_token(&token, &hash) => {
-            next.run(request).await
-        }
-        (Some(_), Some(_)) => {
-            warn!(%method, %path, "dashboard auth rejected request with invalid token");
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "unauthorized" })),
-            )
-                .into_response()
+    match (auth_header.or(query_token), token_state) {
+        (Some(token), Some(auth_state)) => {
+            if auth_state.is_expired(Utc::now()) {
+                warn!(%method, %path, "dashboard auth rejected expired token");
+                return unauthorized();
+            }
+            if verify_token(token, auth_state.token_hash).await {
+                next.run(request).await
+            } else {
+                warn!(%method, %path, "dashboard auth rejected request with invalid token");
+                unauthorized()
+            }
         }
         (Some(_), None) => {
             warn!(%method, %path, "dashboard auth is not configured");
@@ -54,15 +159,34 @@ pub async fn require_auth(
         }
         (None, _) => {
             warn!(%method, %path, "dashboard auth rejected request without token");
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "unauthorized" })),
-            )
-                .into_response()
+            unauthorized()
         }
     }
 }
 
 pub fn log_dashboard_session_verified() {
     info!("dashboard token accepted for browser session");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bucket, RATE_LIMIT_CAPACITY};
+    use std::time::Instant;
+
+    #[test]
+    fn rate_limit_bucket_allows_burst_then_denies() {
+        let start = Instant::now();
+        let mut bucket = Bucket {
+            tokens: RATE_LIMIT_CAPACITY,
+            last: start,
+        };
+
+        for _ in 0..(RATE_LIMIT_CAPACITY as usize) {
+            assert!(bucket.try_take(start));
+        }
+        assert!(!bucket.try_take(start));
+
+        let later = start + std::time::Duration::from_secs(1);
+        assert!(bucket.try_take(later));
+    }
 }

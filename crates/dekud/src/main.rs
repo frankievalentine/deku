@@ -3,10 +3,12 @@ use tracing::{info, warn};
 
 mod api;
 mod build;
+mod buildkit;
 mod config;
 mod container;
 mod db;
 mod deploy;
+mod deploy_lock;
 mod events;
 mod objectstore;
 mod plugins;

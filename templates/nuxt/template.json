@@ -2,7 +2,7 @@
   "id": "nuxt",
   "title": "Nuxt Starter",
   "summary": "A clean Nuxt SSR starter for Deku using Nixpacks and an explicit production start command.",
-  "builder": "nixpacks",
+  "builder": "railpack",
   "stack": "Nuxt",
   "package_manager": "bun",
   "last_verified": "2026-04-09",

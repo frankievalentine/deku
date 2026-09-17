@@ -1,0 +1,29 @@
+/* Settings page styles; pages/settings.astro only.
+
+   The token actions need a grid at tablet and mobile widths, but they also carry the shared
+   `.form-actions` class from global.css. That shared row is right-aligned and wraps, so a
+   wrapped button sits flush right while the other starts at the left edge. global.css is
+   bundled after this file, so the container selector is compounded to win on specificity
+   instead of depending on import order. Desktop (>1199px) keeps the shared row untouched. */
+
+@media (max-width: 1199px) {
+  .form-actions.settings-token-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .settings-token-actions .btn {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    white-space: normal;
+    text-align: center;
+  }
+}
+
+@media (max-width: 599px) {
+  .form-actions.settings-token-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -3,22 +3,14 @@ import { getToken, TOKEN_CHANGE_EVENT } from '../lib/api';
 
 export type TokenAccessState = 'unknown' | 'connected' | 'locked';
 
-function readInitialTokenAccess(): TokenAccessState {
-  if (typeof document !== 'undefined') {
-    return document.documentElement.dataset.dashboardTokenState === 'connected'
-      ? 'connected'
-      : 'locked';
-  }
-
-  if (typeof window !== 'undefined') {
-    return getToken() ? 'connected' : 'locked';
-  }
-
-  return 'locked';
-}
-
+/**
+ * First render is deliberately browser-independent. Reading the token here
+ * would let an authenticated client hydrate a different tree than the server
+ * rendered (ConnectScreen vs the app list), which React reports as a
+ * hydration mismatch. The token is resolved in the effect below.
+ */
 export function useTokenAccess(): TokenAccessState {
-  const [tokenAccess, setTokenAccess] = useState<TokenAccessState>(readInitialTokenAccess);
+  const [tokenAccess, setTokenAccess] = useState<TokenAccessState>('unknown');
 
   useEffect(() => {
     function syncToken() {

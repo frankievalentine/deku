@@ -27,8 +27,11 @@ export default function AppDeployPanel({
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [rollbackTarget, setRollbackTarget] = useState<Deployment | null>(null);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   const rollbackCandidates = useMemo(() => deployments.slice(1, 6), [deployments]);
 
@@ -40,7 +43,15 @@ export default function AppDeployPanel({
   async function handleImageDeploy(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedImage = imageRef.trim();
-    if (!trimmedImage || locked) return;
+    if (locked) return;
+
+    if (!trimmedImage) {
+      setImageError('Enter a container image reference, for example ghcr.io/acme/web:latest.');
+      imageInputRef.current?.focus();
+      return;
+    }
+
+    setImageError(null);
 
     try {
       setBusyAction('image-deploy');
@@ -58,7 +69,15 @@ export default function AppDeployPanel({
 
   async function handleArchiveDeploy(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!archiveFile || locked) return;
+    if (locked) return;
+
+    if (!archiveFile) {
+      setArchiveError('Choose an archive file to deploy.');
+      archiveInputRef.current?.focus();
+      return;
+    }
+
+    setArchiveError(null);
 
     try {
       setBusyAction('archive-deploy');
@@ -102,7 +121,7 @@ export default function AppDeployPanel({
         <div className="panel-heading">
           <div className="stack-sm panel-heading-copy">
             <p className="eyebrow">Deploy</p>
-            <h2 className="section-title">Ship and recover</h2>
+            <h2 className="section-title">Deploy and roll back</h2>
             <p className="page-copy">
               Trigger image deploys, upload archive builds, and roll back to a recent deployment
               without leaving the app page.
@@ -133,19 +152,32 @@ export default function AppDeployPanel({
               </label>
               <input
                 id="image-ref"
+                ref={imageInputRef}
                 className="input"
                 value={imageRef}
-                onChange={(event) => setImageRef(event.target.value)}
+                onChange={(event) => {
+                  setImageRef(event.target.value);
+                  if (imageError) setImageError(null);
+                }}
                 placeholder="ghcr.io/acme/web:2026-04-02"
+                aria-invalid={imageError ? true : undefined}
+                aria-describedby={imageError ? 'image-ref-error' : undefined}
+                autoComplete="off"
+                spellCheck={false}
                 disabled={locked || busyAction !== null}
               />
+              {imageError ? (
+                <p id="image-ref-error" className="form-error">
+                  {imageError}
+                </p>
+              ) : null}
             </div>
 
             <div className="form-actions">
               <button
                 className="btn btn-primary"
                 type="submit"
-                disabled={locked || busyAction !== null || imageRef.trim().length === 0}
+                disabled={locked || busyAction !== null}
               >
                 {busyAction === 'image-deploy' ? 'Starting…' : 'Deploy image'}
               </button>
@@ -167,7 +199,12 @@ export default function AppDeployPanel({
                 ref={archiveInputRef}
                 className="file-input-native"
                 type="file"
-                onChange={(event) => setArchiveFile(event.target.files?.[0] ?? null)}
+                aria-invalid={archiveError ? true : undefined}
+                aria-describedby={archiveError ? 'archive-input-error' : undefined}
+                onChange={(event) => {
+                  setArchiveFile(event.target.files?.[0] ?? null);
+                  if (archiveError) setArchiveError(null);
+                }}
                 disabled={locked || busyAction !== null}
               />
               <label
@@ -184,12 +221,17 @@ export default function AppDeployPanel({
             <p className="deploy-hint">
               {archiveFile ? `Selected: ${archiveFile.name}` : 'Choose a local archive to upload.'}
             </p>
+            {archiveError ? (
+              <p id="archive-input-error" className="form-error">
+                {archiveError}
+              </p>
+            ) : null}
 
             <div className="form-actions">
               <button
                 className="btn btn-secondary"
                 type="submit"
-                disabled={locked || busyAction !== null || archiveFile === null}
+                disabled={locked || busyAction !== null}
               >
                 {busyAction === 'archive-deploy' ? 'Uploading…' : 'Deploy archive'}
               </button>
@@ -213,13 +255,16 @@ export default function AppDeployPanel({
           ) : (
             <TableScroll>
               <table className="table">
+                <caption className="sr-only">Rollback targets for this app</caption>
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>Status</th>
-                    <th>Source</th>
-                    <th>Created</th>
-                    <th />
+                    <th scope="col">ID</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Source</th>
+                    <th scope="col">Created</th>
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -233,8 +278,9 @@ export default function AppDeployPanel({
                       <td className="font-mono">{formatDate(deployment.created_at)}</td>
                       <td>
                         <button
-                          className="btn btn-danger btn-sm"
+                          className="btn btn-outline btn-danger-outline btn-sm"
                           type="button"
+                          aria-label={`Roll back to deployment ${deployment.id.slice(0, 8)}`}
                           onClick={() => setRollbackTarget(deployment)}
                           disabled={locked || busyAction !== null}
                         >

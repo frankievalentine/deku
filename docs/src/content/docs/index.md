@@ -6,38 +6,31 @@ hero:
   title: DEKU
   tagline: A lightweight self-hosted PaaS for deploying and operating apps on your own server with a CLI and built-in dashboard.
   actions:
-    - text: Installation
+    - text: Install Deku
       link: /installation/
+      variant: primary
     - text: Get Started
       link: /get-started/
-    - text: Dashboard Overview
-      link: /dashboard-overview/
+      variant: minimal
 ---
 
-<p class="docs-footprint-note"><code>deku</code>: 9MB, <code>dekud</code>: 16MB, <code>dashboard bundle</code>: 848 KB</p>
+## Start Here
 
-## What You Can Do With Deku
+1. [Install Deku](/installation/) on a Linux server with Docker and root access.
+2. [Get Started](/get-started/) with the dashboard token, your first app, and your first deploy.
 
-- **App lifecycle**: Create apps, deploy from source archives or images, inspect deployment history, and roll back when needed
-- **Starter templates**: Begin from local framework templates adapted for Deku deploys
-- **Runtime management**: Manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries
-- **Built-in services**: Provision Postgres, Redis, and MySQL services and link them to apps
-- **Operational visibility**: Use the dashboard for app, routing, service, object-store, SSH-key, and plugin workflows
-- **CLI-first workflows**: Use `deku` from the terminal for setup, deploys, inspection, and automation-friendly operations
+## Common Guides
 
-## Typical Workflow
+- [Dashboard Overview](/dashboard-overview/) covers the web workflows for apps, deploys, routing, and services.
+- [App Templates](/app-templates/) lists local starter directories you can deploy as-is.
+- [Architecture](/architecture/) explains how the CLI, daemon, dashboard auth, and APIs fit together.
+- [CLI Reference](/reference/cli-reference/) documents the full `deku` command surface.
+- [deku.toml](/reference/deku-toml/) documents build, deploy, and process configuration.
+- [AGENTS.md](/agents/) is a copyable coding-agent workflow for operating Deku.
 
-1. Install Deku on a server.
-2. Save the one-time dashboard token shown during setup, then run `deku dashboard` later if you need the URL or reset guidance.
-3. Create an app and deploy it from the CLI.
-4. Open the dashboard to inspect deployments, manage runtime settings, and monitor the host.
+## What You Can Do
 
-## Key Guides
-
-- Start with [Installation](/installation/).
-- Follow [Get Started](/get-started/) for the first app and first deploy workflow.
-- Use [App Templates](/app-templates/) when you want a local starter app directory to deploy right away.
-- Read [Dashboard Overview](/dashboard-overview/) before managing apps from the web UI.
-- Read [Architecture](/architecture/) for the CLI, daemon, dashboard-auth, and API model.
-- Use [CLI Reference](/reference/cli-reference/) and [deku.toml](/reference/deku-toml/) when working from the terminal.
-- Use [AGENTS.md](/agents/) for a copyable coding-agent workflow for Deku operations.
+- **App lifecycle**: create apps, deploy from source archives or images, inspect deployment history, and roll back.
+- **Runtime management**: manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries.
+- **Built-in services**: provision Postgres, Redis, and MySQL services and link them to apps.
+- **Operational visibility**: use the dashboard for app, routing, service, object-store, SSH-key, and plugin workflows.

@@ -470,7 +470,7 @@ fn normalize_remote_app(raw: &str) -> Option<(String, bool)> {
 }
 
 fn discover_local_public_keys() -> Vec<LocalPublicKey> {
-    let ssh_dir = dirs_next::home_dir()
+    let ssh_dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/root"))
         .join(".ssh");
     if !ssh_dir.exists() {

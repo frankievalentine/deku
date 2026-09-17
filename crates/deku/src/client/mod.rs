@@ -80,8 +80,13 @@ impl DekuClient {
         self.handle_response(res).await
     }
 
-    /// Stream SSE events, calling `on_line` for each `data:` field.
-    pub async fn stream_sse(&self, path: &str, mut on_line: impl FnMut(&str)) -> Result<()> {
+    /// Stream SSE events, calling `on_line` for each `data:` field. Stops when
+    /// `on_line` returns false.
+    pub async fn stream_sse(
+        &self,
+        path: &str,
+        mut on_line: impl FnMut(&str) -> bool,
+    ) -> Result<()> {
         use futures::StreamExt;
         let url = format!("{}{path}", self.base_url);
         let res = self
@@ -99,7 +104,9 @@ impl DekuClient {
                 let line = buf[..pos].trim().to_string();
                 buf.drain(..=pos);
                 if let Some(data) = line.strip_prefix("data: ") {
-                    on_line(data);
+                    if !on_line(data) {
+                        return Ok(());
+                    }
                 }
             }
         }

@@ -9,8 +9,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use bollard::{
     query_parameters::{
-        ListContainersOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder,
-        RemoveVolumeOptionsBuilder, StopContainerOptionsBuilder,
+        ListContainersOptionsBuilder, ListVolumesOptions, RemoveContainerOptionsBuilder,
+        RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder, StopContainerOptionsBuilder,
     },
     Docker,
 };
@@ -44,6 +44,10 @@ const MANAGED_PREFIXES: &[&str] = &[
     "deku-mysql-",
     "deku-helper-",
 ];
+
+fn is_managed_volume_name(name: &str) -> bool {
+    name.starts_with("deku-")
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct UninstallArgs {
@@ -124,6 +128,7 @@ struct ManagedContainer {
 #[derive(Debug, Clone, Default)]
 struct DatabaseState {
     app_names: Vec<String>,
+    image_tags: Vec<String>,
     app_container_ids: Vec<String>,
     service_container_ids: Vec<String>,
     service_volumes: Vec<String>,
@@ -176,6 +181,7 @@ impl Section {
 #[async_trait]
 trait DockerRuntime {
     async fn discover_managed_containers(&self) -> Result<Vec<ManagedContainer>>;
+    async fn discover_managed_volumes(&self) -> Result<Vec<String>>;
     async fn stop_container(&self, id: &str) -> Result<()>;
     async fn remove_container(&self, id: &str) -> Result<()>;
     async fn remove_image(&self, image: &str) -> Result<()>;
@@ -314,6 +320,19 @@ fn resolve_mode(args: &UninstallArgs) -> Result<UninstallMode> {
     prompt.interact().map_err(Into::into)
 }
 
+fn collect_image_tags(app_names: &[String], recorded_tags: &[String]) -> Vec<String> {
+    let mut tags = recorded_tags.to_vec();
+    for name in app_names {
+        let repository_prefix = format!("deku/{name}:");
+        if !tags.iter().any(|tag| tag.starts_with(&repository_prefix)) {
+            tags.push(format!("{repository_prefix}latest"));
+        }
+    }
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
 async fn discover_plan(
     mode: UninstallMode,
     docker_runtime: Option<&dyn DockerRuntime>,
@@ -327,7 +346,7 @@ async fn discover_plan(
     }
 
     let mut warnings = Vec::new();
-    let db_state = match read_database_state(&layout).await {
+    let mut db_state = match read_database_state(&layout).await {
         Ok(state) => state,
         Err(error) => {
             warnings.push(format!(
@@ -364,15 +383,19 @@ async fn discover_plan(
                 "docker container discovery failed: {error}. Docker cleanup may be incomplete."
             )),
         }
+
+        match runtime.discover_managed_volumes().await {
+            Ok(volumes) => db_state.service_volumes.extend(volumes),
+            Err(error) => warnings.push(format!(
+                "docker volume discovery failed: {error}. Build cache volumes may not be cleaned up."
+            )),
+        }
     }
 
-    let mut image_tags = db_state
-        .app_names
-        .iter()
-        .map(|name| format!("deku/{name}:latest"))
-        .collect::<Vec<_>>();
-    image_tags.sort();
-    image_tags.dedup();
+    db_state.service_volumes.sort();
+    db_state.service_volumes.dedup();
+
+    let image_tags = collect_image_tags(&db_state.app_names, &db_state.image_tags);
 
     let mut tls_files = Vec::new();
     for app_name in &db_state.app_names {
@@ -487,6 +510,13 @@ async fn read_database_state(layout: &Layout) -> Result<DatabaseState> {
         .map(|row| row.get::<String, _>("id"))
         .collect::<Vec<_>>();
 
+    let image_tags = sqlx::query("SELECT image_tag FROM deployments WHERE image_tag IS NOT NULL")
+        .fetch_all(&pool)
+        .await?
+        .into_iter()
+        .map(|row| row.get::<String, _>("image_tag"))
+        .collect::<Vec<_>>();
+
     let service_rows = sqlx::query(
         "SELECT container_id, config FROM services WHERE plugin IN ('postgres', 'redis', 'mysql')",
     )
@@ -524,6 +554,7 @@ async fn read_database_state(layout: &Layout) -> Result<DatabaseState> {
 
     Ok(DatabaseState {
         app_names,
+        image_tags,
         app_container_ids,
         service_container_ids,
         service_volumes,
@@ -923,9 +954,12 @@ fn dedupe_nested_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn env_path(name: &str, default: &str) -> PathBuf {
-    env::var_os(name)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default))
+    if deku_core::dev_hooks::enabled() {
+        if let Some(value) = env::var_os(name) {
+            return PathBuf::from(value);
+        }
+    }
+    PathBuf::from(default)
 }
 
 impl RealDockerRuntime {
@@ -982,6 +1016,21 @@ impl DockerRuntime for RealDockerRuntime {
 
         managed.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
         managed.dedup_by(|left, right| left.id == right.id);
+        Ok(managed)
+    }
+
+    async fn discover_managed_volumes(&self) -> Result<Vec<String>> {
+        let response = self.docker.list_volumes(None::<ListVolumesOptions>).await?;
+
+        let mut managed = response
+            .volumes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|volume| volume.name)
+            .filter(|name| is_managed_volume_name(name))
+            .collect::<Vec<_>>();
+        managed.sort();
+        managed.dedup();
         Ok(managed)
     }
 
@@ -1126,6 +1175,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct FakeDockerRuntime {
         discovered: Vec<ManagedContainer>,
+        volumes: Vec<String>,
         ops: Arc<Mutex<Vec<String>>>,
     }
 
@@ -1170,6 +1220,10 @@ mod tests {
     impl DockerRuntime for FakeDockerRuntime {
         async fn discover_managed_containers(&self) -> Result<Vec<ManagedContainer>> {
             Ok(self.discovered.clone())
+        }
+
+        async fn discover_managed_volumes(&self) -> Result<Vec<String>> {
+            Ok(self.volumes.clone())
         }
 
         async fn stop_container(&self, id: &str) -> Result<()> {
@@ -1265,6 +1319,7 @@ mod tests {
                     name: "deku-helper-123".to_string(),
                 },
             ],
+            volumes: vec![],
             ops: Arc::new(Mutex::new(Vec::new())),
         };
 
@@ -1296,6 +1351,7 @@ mod tests {
         let fixture = create_fixture(true).await;
         let docker = FakeDockerRuntime {
             discovered: vec![],
+            volumes: vec![],
             ops: Arc::new(Mutex::new(Vec::new())),
         };
 
@@ -1320,6 +1376,7 @@ mod tests {
                 id: "app-ctr".to_string(),
                 name: "deku.my-app.web.abcd1234-0".to_string(),
             }],
+            volumes: vec![],
             ops: Arc::new(Mutex::new(Vec::new())),
         };
         let plan = discover_plan(UninstallMode::KeepData, Some(&docker))
@@ -1359,6 +1416,7 @@ mod tests {
         let fixture = create_fixture(true).await;
         let docker = FakeDockerRuntime {
             discovered: vec![],
+            volumes: vec!["deku-buildkit-cache".to_string()],
             ops: Arc::new(Mutex::new(Vec::new())),
         };
         let plan = discover_plan(UninstallMode::FullRemove, Some(&docker))
@@ -1380,10 +1438,49 @@ mod tests {
 
         let ops = docker.ops.lock().unwrap().clone();
         assert!(ops.contains(&"remove-volume:deku-postgres-db-data".to_string()));
+        assert!(ops.contains(&"remove-volume:deku-buildkit-cache".to_string()));
         assert!(ops.contains(&"remove-image:deku/my-app:latest".to_string()));
         assert!(ops.contains(&"remove-network:shared-net".to_string()));
 
         fixture.cleanup();
+    }
+
+    #[test]
+    fn managed_volume_name_covers_data_and_buildkit_cache() {
+        assert!(is_managed_volume_name("deku-postgres-db-data"));
+        assert!(is_managed_volume_name("deku-buildkit-cache"));
+        assert!(!is_managed_volume_name("my-app-data"));
+        assert!(!is_managed_volume_name("deku"));
+    }
+
+    #[test]
+    fn collect_image_tags_prefers_recorded_deployment_tags() {
+        let app_names = vec!["my-app".to_string()];
+        let recorded = vec!["deku/my-app:abc123def456".to_string()];
+        assert_eq!(
+            collect_image_tags(&app_names, &recorded),
+            vec!["deku/my-app:abc123def456".to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_image_tags_falls_back_to_legacy_latest() {
+        let app_names = vec!["my-app".to_string()];
+        let recorded: Vec<String> = Vec::new();
+        assert_eq!(
+            collect_image_tags(&app_names, &recorded),
+            vec!["deku/my-app:latest".to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_image_tags_combines_apps_and_dedupes() {
+        let app_names = vec!["alpha".to_string(), "beta".to_string()];
+        let recorded = vec!["deku/beta:bbb".to_string(), "deku/alpha:aaa".to_string()];
+        assert_eq!(
+            collect_image_tags(&app_names, &recorded),
+            vec!["deku/alpha:aaa".to_string(), "deku/beta:bbb".to_string()]
+        );
     }
 
     async fn create_fixture(include_packaged_artifacts: bool) -> TestLayout {
@@ -1483,6 +1580,10 @@ mod tests {
         .await
         .unwrap();
         sqlx::query("CREATE TABLE networks (name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE deployments (image_tag TEXT)")
             .execute(&pool)
             .await
             .unwrap();

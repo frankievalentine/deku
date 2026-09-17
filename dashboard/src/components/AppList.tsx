@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { type SubmitEvent, useEffect, useRef, useState } from 'react';
+import { type SubmitEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
+import type { App } from '../lib/api';
 import {
   getErrorMessage,
   prefetchAppDetail,
@@ -13,6 +14,21 @@ import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import Icon from './Icon';
 import StatusBadge from './StatusBadge';
+import TableScroll from './TableScroll';
+
+const APP_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+function validateAppName(name: string): string | null {
+  if (!name) {
+    return 'Enter an app name to create the app.';
+  }
+
+  if (!APP_NAME_PATTERN.test(name)) {
+    return 'Use lowercase letters, numbers, and hyphens; start with a letter or number.';
+  }
+
+  return null;
+}
 
 function formatRelativeTime(value: string): string {
   const date = new Date(value);
@@ -49,6 +65,7 @@ function AppListInner() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const prefetchedAppsRef = useRef<Set<string>>(new Set());
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
   const appsQuery = useAppsQuery({ refetchInterval: 20_000 });
   const createAppMutation = useCreateAppMutation();
   const deleteAppMutation = useDeleteAppMutation();
@@ -71,10 +88,16 @@ function AppListInner() {
   async function handleCreate(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newAppName.trim();
-    if (!name) return;
+    const nameProblem = validateAppName(name);
+    if (nameProblem) {
+      setCreateError(nameProblem);
+      nameInputRef.current?.focus();
+      return;
+    }
 
     try {
       setSubmitting(true);
+      setCreateError(null);
       await createAppMutation.mutateAsync(name);
       setShowCreate(false);
       setNewAppName('');
@@ -128,73 +151,67 @@ function AppListInner() {
     return <div className="panel error-state">Failed to load apps: {loadError}</div>;
   }
 
-  const liveApps = apps.filter((app) => app.status === 'deployed').length;
-  const lockedApps = apps.filter((app) => app.locked).length;
-  const tlsApps = apps.filter((app) => app.tls_enabled).length;
-
   return (
     <div className="stack-lg">
-      <section className="hero-panel">
-        <div className="stack-md">
-          <p className="eyebrow">Mission control</p>
-          <h1 className="page-title">Application fleet</h1>
-          <p className="page-copy">
-            Track deploy readiness, jump into per-app controls, and use the command palette to move
-            across the dashboard without losing context.
-          </p>
+      <header className="apps-header">
+        <div className="apps-header-top">
+          <div className="apps-header-copy">
+            <p className="eyebrow">Apps</p>
+            <h1 className="page-title">Applications</h1>
+            <p className="page-copy">Open an app to deploy, route, scale, and inspect it.</p>
+          </div>
+          <div className="cluster">
+            <a className="btn btn-secondary" href="/settings">
+              <Icon name="settings" size={16} />
+              <span>Settings</span>
+            </a>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setShowCreate(true);
+                setCreateError(null);
+              }}
+            >
+              <Icon name="create" size={16} />
+              <span>Create app</span>
+            </button>
+          </div>
         </div>
-        <div className="metrics-grid">
-          <Metric label="Total apps" value={String(apps.length)} />
-          <Metric label="Live" value={String(liveApps)} />
-          <Metric label="Locked" value={String(lockedApps)} />
-          <Metric label="TLS enabled" value={String(tlsApps)} />
-        </div>
-      </section>
-
-      <div className="page-header">
-        <div className="stack-sm">
-          <p className="eyebrow">Fleet actions</p>
-          <h2 className="section-title">Manage apps</h2>
-        </div>
-        <div className="cluster">
-          <a className="btn btn-secondary" href="/settings">
-            <Icon name="settings" size={16} />
-            <span>Settings</span>
-          </a>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              setShowCreate(true);
-              setCreateError(null);
-            }}
-          >
-            <Icon name="create" size={16} />
-            <span>New app</span>
-          </button>
-        </div>
-      </div>
+        <AppMetrics apps={apps} />
+      </header>
 
       {showCreate && (
         <div className="panel stack-md panel-accent">
-          <form onSubmit={handleCreate} className="stack-md">
+          <form onSubmit={handleCreate} className="stack-md" noValidate>
             <div className="form-group">
               <label htmlFor="new-app-name" className="form-label">
                 App name
               </label>
               <input
                 id="new-app-name"
+                ref={nameInputRef}
                 type="text"
                 className="input"
                 placeholder="my-app"
                 value={newAppName}
-                onChange={(event) => setNewAppName(event.target.value)}
+                onChange={(event) => {
+                  setNewAppName(event.target.value);
+                  if (createError) setCreateError(null);
+                }}
+                aria-invalid={createError ? true : undefined}
+                aria-describedby={createError ? 'new-app-name-error' : undefined}
                 pattern="[a-z0-9][a-z0-9-]*"
-                title="Lowercase letters, numbers, and hyphens only"
+                title="Use lowercase letters, numbers, and hyphens; start with a letter or number."
                 autoComplete="off"
+                spellCheck={false}
               />
+              {createError ? (
+                <p id="new-app-name-error" className="form-error">
+                  {createError}
+                </p>
+              ) : null}
             </div>
-            {createError ? <p className="callout callout-danger">{createError}</p> : null}
             <div className="form-actions">
               <button
                 type="button"
@@ -209,7 +226,7 @@ function AppListInner() {
               </button>
               <button type="submit" className="btn btn-primary" disabled={submitting}>
                 <Icon name="create" size={16} />
-                <span>{submitting ? 'Creating…' : 'Create'}</span>
+                <span>{submitting ? 'Creating…' : 'Create app'}</span>
               </button>
             </div>
           </form>
@@ -218,75 +235,101 @@ function AppListInner() {
 
       {apps.length === 0 ? (
         <div className="panel empty-state">
-          <p>No apps yet. Create one to seed the deck.</p>
+          <p>No apps yet</p>
+          <p className="text-muted">Create an app to deploy it and watch it run here.</p>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setShowCreate(true);
+              setCreateError(null);
+            }}
+          >
+            <Icon name="create" size={16} />
+            <span>Create app</span>
+          </button>
         </div>
       ) : (
-        <div className="app-grid">
-          {apps.map((app) => (
-            <article key={app.id} className="panel app-card">
-              <div className="cluster justify-between align-start">
-                <div className="stack-sm">
-                  <a
-                    href={`/app?name=${encodeURIComponent(app.name)}`}
-                    className="app-name-link"
-                    onMouseEnter={() => handlePrefetchAppDetail(app.name)}
-                    onFocus={() => handlePrefetchAppDetail(app.name)}
-                  >
-                    {app.name}
-                  </a>
-                  <p className="eyebrow">Created {formatRelativeTime(app.created_at)}</p>
-                </div>
-                <StatusBadge status={app.status} />
-              </div>
-
-              <dl className="data-grid">
-                <div>
-                  <dt>Lock state</dt>
-                  <dd>{app.locked ? 'Locked' : 'Writable'}</dd>
-                </div>
-                <div>
-                  <dt>TLS</dt>
-                  <dd>{app.tls_enabled ? 'Enabled' : 'Off'}</dd>
-                </div>
-                <div>
-                  <dt>App ID</dt>
-                  <dd className="font-mono">{app.id.slice(0, 8)}</dd>
-                </div>
-                <div>
-                  <dt>Status code</dt>
-                  <dd className="font-mono">{app.status}</dd>
-                </div>
-              </dl>
-
-              <div className="cluster justify-between align-center">
-                <div className="cluster">
-                  <a
-                    href={`/app?name=${encodeURIComponent(app.name)}`}
-                    className="btn btn-secondary btn-sm"
-                    onMouseEnter={() => handlePrefetchAppDetail(app.name)}
-                    onFocus={() => handlePrefetchAppDetail(app.name)}
-                  >
-                    Open app
-                  </a>
-                  <a
-                    href={`/deployments?app=${encodeURIComponent(app.name)}`}
-                    className="btn btn-ghost btn-sm"
-                  >
-                    Deployments
-                  </a>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-danger btn-sm"
-                  onClick={() => setDeleteTarget(app.name)}
-                  disabled={deleting === app.name}
-                  aria-label={`Delete ${app.name}`}
-                >
-                  {deleting === app.name ? 'Deleting…' : 'Delete'}
-                </button>
-              </div>
-            </article>
-          ))}
+        <div className="panel apps-table-card">
+          <TableScroll>
+            <table className="table apps-table">
+              <caption className="sr-only">Apps in this Deku fleet</caption>
+              <thead>
+                <tr>
+                  <th scope="col">App</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Access</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {apps.map((app) => (
+                  <tr key={app.id}>
+                    <td>
+                      <a
+                        href={`/app?name=${encodeURIComponent(app.name)}`}
+                        className="apps-row-name"
+                        title={app.name}
+                        onMouseEnter={() => handlePrefetchAppDetail(app.name)}
+                        onFocus={() => handlePrefetchAppDetail(app.name)}
+                      >
+                        {app.name}
+                      </a>
+                    </td>
+                    <td>
+                      <StatusBadge status={app.status} size="sm" />
+                    </td>
+                    <td>
+                      <span className="apps-row-time" title={formatAbsoluteTime(app.created_at)}>
+                        {formatRelativeTime(app.created_at)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="apps-row-access">
+                        <span>{app.locked ? 'Locked' : 'Writable'}</span>{' '}
+                        <span aria-hidden="true">·</span>{' '}
+                        <span className={`apps-tls${app.tls_enabled ? ' is-on' : ''}`}>
+                          {app.tls_enabled ? 'TLS on' : 'TLS off'}
+                        </span>
+                      </span>
+                    </td>
+                    <td>
+                      <div className="apps-row-actions">
+                        <a
+                          href={`/app?name=${encodeURIComponent(app.name)}`}
+                          className="btn btn-secondary btn-sm"
+                          onMouseEnter={() => handlePrefetchAppDetail(app.name)}
+                          onFocus={() => handlePrefetchAppDetail(app.name)}
+                        >
+                          Open
+                          <span className="sr-only"> {app.name}</span>
+                        </a>
+                        <a
+                          href={`/deployments?app=${encodeURIComponent(app.name)}`}
+                          className="btn btn-ghost btn-sm"
+                        >
+                          Deployments
+                          <span className="sr-only"> for {app.name}</span>
+                        </a>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-danger-outline btn-sm"
+                          onClick={() => setDeleteTarget(app.name)}
+                          disabled={deleting === app.name}
+                        >
+                          {deleting === app.name ? 'Deleting…' : 'Delete'}
+                          <span className="sr-only"> {app.name}</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
         </div>
       )}
 
@@ -310,11 +353,35 @@ function AppListInner() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric-card">
-      <p>{label}</p>
-      <strong>{value}</strong>
-    </div>
+function AppMetrics({ apps }: { apps: App[] }) {
+  const metrics = useMemo(
+    () => [
+      { label: 'Apps', value: apps.length },
+      { label: 'Live', value: apps.filter((app) => app.status === 'deployed').length },
+      { label: 'Locked', value: apps.filter((app) => app.locked).length },
+      { label: 'TLS', value: apps.filter((app) => app.tls_enabled).length },
+    ],
+    [apps]
   );
+
+  return (
+    <ul className="apps-metrics">
+      {metrics.map((metric) => (
+        <li key={metric.label} className="apps-metric">
+          <span className="apps-metric-value">{metric.value}</span>
+          <span className="apps-metric-label">{metric.label}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function formatAbsoluteTime(value: string): string {
+  return new Date(value).toLocaleString('en-US', {
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }

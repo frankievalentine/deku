@@ -1,11 +1,11 @@
 FROM composer:2 AS vendor
 WORKDIR /app
-RUN composer create-project laravel/laravel . --prefer-dist --no-interaction "^12.0"
+RUN composer create-project laravel/laravel . --prefer-dist --no-interaction "^13.0"
 COPY overrides/routes/web.php /app/routes/web.php
 COPY overrides/resources/views/welcome.blade.php /app/resources/views/welcome.blade.php
 RUN mkdir -p /app/database && touch /app/database/database.sqlite
 
-FROM php:8.4-cli-alpine
+FROM php:8.5-cli-alpine
 WORKDIR /app
 RUN apk add --no-cache sqlite-dev \
     && docker-php-ext-install pdo pdo_sqlite

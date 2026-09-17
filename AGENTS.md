@@ -59,7 +59,7 @@ deku deploy run <app> --path /absolute/path/to/repo/templates/django
 
 The templates are adapted for Deku:
 
-- Use Deku-supported `dockerfile` or `nixpacks` builders
+- Use Deku-supported `dockerfile` or `railpack` builders
 - Expect Deku-managed services instead of bundled sidecars
 - Stay local to the repo so agents can copy or inspect them directly
 

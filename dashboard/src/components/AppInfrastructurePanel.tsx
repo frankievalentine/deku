@@ -42,6 +42,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
   const [ensurePath, setEnsurePath] = useState('');
   const [cronSchedule, setCronSchedule] = useState('');
   const [cronCommand, setCronCommand] = useState('');
+  const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -73,10 +74,20 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     return state.networks.filter((network) => !attached.has(network.name));
   }, [state]);
 
+  function flagFieldError(field: string, message: string) {
+    setFieldError({ field, message });
+    document.getElementById(field)?.focus();
+  }
+
   async function handleCreateNetwork(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = networkName.trim();
-    if (!name) return;
+    if (!name) {
+      flagFieldError('network-name', 'Enter a network name.');
+      return;
+    }
+
+    setFieldError(null);
 
     try {
       setBusy('network-create');
@@ -96,7 +107,12 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
   async function handleAttachNetwork(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = attachNetworkName.trim();
-    if (!name) return;
+    if (!name) {
+      flagFieldError('attach-network', 'Select a network to attach.');
+      return;
+    }
+
+    setFieldError(null);
 
     try {
       setBusy(`network-attach-${name}`);
@@ -147,7 +163,17 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     event.preventDefault();
     const nextHostPath = hostPath.trim();
     const nextContainerPath = containerPath.trim();
-    if (!nextHostPath || !nextContainerPath) return;
+    if (!nextHostPath) {
+      flagFieldError('host-path', 'Enter the host path to mount.');
+      return;
+    }
+
+    if (!nextContainerPath) {
+      flagFieldError('container-path', 'Enter the container path to mount it at.');
+      return;
+    }
+
+    setFieldError(null);
 
     try {
       setBusy('mount-add');
@@ -183,7 +209,12 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
   async function handleEnsureDirectory(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const path = ensurePath.trim();
-    if (!path) return;
+    if (!path) {
+      flagFieldError('ensure-path', 'Enter the directory path to create.');
+      return;
+    }
+
+    setFieldError(null);
 
     try {
       setBusy('ensure-dir');
@@ -205,7 +236,17 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     event.preventDefault();
     const schedule = cronSchedule.trim();
     const command = cronCommand.trim();
-    if (!schedule || !command) return;
+    if (!schedule) {
+      flagFieldError('cron-schedule', 'Enter a cron schedule, for example 0 * * * *.');
+      return;
+    }
+
+    if (!command) {
+      flagFieldError('cron-command', 'Enter the command to run on that schedule.');
+      return;
+    }
+
+    setFieldError(null);
 
     try {
       setBusy('cron-add');
@@ -278,10 +319,18 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                 id="network-name"
                 className="input"
                 value={networkName}
-                onChange={(event) => setNetworkName(event.target.value)}
+                onChange={(event) => {
+                  setNetworkName(event.target.value);
+                  if (fieldError?.field === 'network-name') setFieldError(null);
+                }}
                 placeholder="private-backplane"
+                aria-invalid={fieldError?.field === 'network-name' ? true : undefined}
+                aria-describedby={
+                  fieldError?.field === 'network-name' ? 'network-name-error' : undefined
+                }
                 disabled={locked || busy !== null}
               />
+              <FieldError field="network-name" error={fieldError} />
             </div>
             <div className="form-actions">
               <button className="btn btn-primary" type="submit" disabled={locked || busy !== null}>
@@ -299,7 +348,14 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                 id="attach-network"
                 className="input"
                 value={attachNetworkName}
-                onChange={(event) => setAttachNetworkName(event.target.value)}
+                onChange={(event) => {
+                  setAttachNetworkName(event.target.value);
+                  if (fieldError?.field === 'attach-network') setFieldError(null);
+                }}
+                aria-invalid={fieldError?.field === 'attach-network' ? true : undefined}
+                aria-describedby={
+                  fieldError?.field === 'attach-network' ? 'attach-network-error' : undefined
+                }
                 disabled={locked || busy !== null}
               >
                 <option value="">Select network</option>
@@ -309,12 +365,13 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                   </option>
                 ))}
               </select>
+              <FieldError field="attach-network" error={fieldError} />
             </div>
             <div className="form-actions">
               <button
                 className="btn btn-secondary"
                 type="submit"
-                disabled={locked || busy !== null || attachNetworkName.length === 0}
+                disabled={locked || busy !== null}
               >
                 {busy?.startsWith('network-attach-') ? 'Attaching…' : 'Attach network'}
               </button>
@@ -323,11 +380,14 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
 
           <TableScroll>
             <table className="table">
+              <caption className="sr-only">Docker networks</caption>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>State</th>
-                  <th />
+                  <th scope="col">Name</th>
+                  <th scope="col">State</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -345,6 +405,7 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
+                              aria-label={`Detach network ${network.name}`}
                               disabled={locked || busy === `network-detach-${network.name}`}
                               onClick={() => handleDetachNetwork(network.name)}
                             >
@@ -353,7 +414,8 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                           ) : null}
                           <button
                             type="button"
-                            className="btn btn-danger btn-sm"
+                            className="btn btn-outline btn-danger-outline btn-sm"
+                            aria-label={`Delete network ${network.name}`}
                             disabled={locked || busy === `network-delete-${network.name}`}
                             onClick={() => handleDeleteNetwork(network.name)}
                           >
@@ -388,10 +450,16 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                 id="host-path"
                 className="input"
                 value={hostPath}
-                onChange={(event) => setHostPath(event.target.value)}
+                onChange={(event) => {
+                  setHostPath(event.target.value);
+                  if (fieldError?.field === 'host-path') setFieldError(null);
+                }}
                 placeholder="/var/lib/deku/apps/demo/data"
+                aria-invalid={fieldError?.field === 'host-path' ? true : undefined}
+                aria-describedby={fieldError?.field === 'host-path' ? 'host-path-error' : undefined}
                 disabled={locked || busy !== null}
               />
+              <FieldError field="host-path" error={fieldError} />
             </div>
             <div className="form-group">
               <label className="form-label" htmlFor="container-path">
@@ -401,10 +469,18 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                 id="container-path"
                 className="input"
                 value={containerPath}
-                onChange={(event) => setContainerPath(event.target.value)}
+                onChange={(event) => {
+                  setContainerPath(event.target.value);
+                  if (fieldError?.field === 'container-path') setFieldError(null);
+                }}
                 placeholder="/app/data"
+                aria-invalid={fieldError?.field === 'container-path' ? true : undefined}
+                aria-describedby={
+                  fieldError?.field === 'container-path' ? 'container-path-error' : undefined
+                }
                 disabled={locked || busy !== null}
               />
+              <FieldError field="container-path" error={fieldError} />
             </div>
             <div className="form-actions">
               <button className="btn btn-primary" type="submit" disabled={locked || busy !== null}>
@@ -422,10 +498,18 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                 id="ensure-path"
                 className="input"
                 value={ensurePath}
-                onChange={(event) => setEnsurePath(event.target.value)}
+                onChange={(event) => {
+                  setEnsurePath(event.target.value);
+                  if (fieldError?.field === 'ensure-path') setFieldError(null);
+                }}
                 placeholder="/var/lib/deku/apps/demo/data"
+                aria-invalid={fieldError?.field === 'ensure-path' ? true : undefined}
+                aria-describedby={
+                  fieldError?.field === 'ensure-path' ? 'ensure-path-error' : undefined
+                }
                 disabled={locked || busy !== null}
               />
+              <FieldError field="ensure-path" error={fieldError} />
             </div>
             <div className="form-actions">
               <button
@@ -443,11 +527,14 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
           ) : (
             <TableScroll>
               <table className="table">
+                <caption className="sr-only">Storage mounts for this app</caption>
                 <thead>
                   <tr>
-                    <th>Host path</th>
-                    <th>Container path</th>
-                    <th />
+                    <th scope="col">Host path</th>
+                    <th scope="col">Container path</th>
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -458,7 +545,8 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                       <td>
                         <button
                           type="button"
-                          className="btn btn-danger btn-sm"
+                          className="btn btn-outline btn-danger-outline btn-sm"
+                          aria-label={`Remove mount ${mount.host_path} to ${mount.container_path}`}
                           disabled={locked || busy === `mount-remove-${mount.id}`}
                           onClick={() => handleRemoveMount(mount)}
                         >
@@ -495,10 +583,18 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
               id="cron-schedule"
               className="input"
               value={cronSchedule}
-              onChange={(event) => setCronSchedule(event.target.value)}
+              onChange={(event) => {
+                setCronSchedule(event.target.value);
+                if (fieldError?.field === 'cron-schedule') setFieldError(null);
+              }}
               placeholder="0 * * * *"
+              aria-invalid={fieldError?.field === 'cron-schedule' ? true : undefined}
+              aria-describedby={
+                fieldError?.field === 'cron-schedule' ? 'cron-schedule-error' : undefined
+              }
               disabled={locked || busy !== null}
             />
+            <FieldError field="cron-schedule" error={fieldError} />
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="cron-command">
@@ -508,10 +604,18 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
               id="cron-command"
               className="input"
               value={cronCommand}
-              onChange={(event) => setCronCommand(event.target.value)}
+              onChange={(event) => {
+                setCronCommand(event.target.value);
+                if (fieldError?.field === 'cron-command') setFieldError(null);
+              }}
               placeholder="bundle exec rake jobs:run"
+              aria-invalid={fieldError?.field === 'cron-command' ? true : undefined}
+              aria-describedby={
+                fieldError?.field === 'cron-command' ? 'cron-command-error' : undefined
+              }
               disabled={locked || busy !== null}
             />
+            <FieldError field="cron-command" error={fieldError} />
           </div>
           <div className="form-actions">
             <button className="btn btn-primary" type="submit" disabled={locked || busy !== null}>
@@ -525,11 +629,14 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
         ) : (
           <TableScroll>
             <table className="table">
+              <caption className="sr-only">Scheduled commands for this app</caption>
               <thead>
                 <tr>
-                  <th>Schedule</th>
-                  <th>Command</th>
-                  <th />
+                  <th scope="col">Schedule</th>
+                  <th scope="col">Command</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -540,7 +647,8 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
                     <td>
                       <button
                         type="button"
-                        className="btn btn-danger btn-sm"
+                        className="btn btn-outline btn-danger-outline btn-sm"
+                        aria-label={`Remove cron entry ${entry.schedule}`}
                         disabled={locked || busy === `cron-remove-${entry.id}`}
                         onClick={() => handleRemoveCron(entry)}
                       >
@@ -555,6 +663,18 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
         )}
       </article>
     </section>
+  );
+}
+
+type FieldErrorState = { field: string; message: string } | null;
+
+function FieldError({ field, error }: { field: string; error: FieldErrorState }) {
+  if (error?.field !== field) return null;
+
+  return (
+    <p id={`${field}-error`} className="form-error">
+      {error.message}
+    </p>
   );
 }
 

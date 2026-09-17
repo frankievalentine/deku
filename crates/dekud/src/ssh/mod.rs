@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use russh::keys::ssh_key::PublicKey;
-use russh::server::{Auth, Msg, Server as RusshServer, Session};
+use russh::server::{Auth, ChannelOpenHandle, Msg, Server as RusshServer, Session};
 use russh::{Channel, ChannelReadHalf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -33,8 +33,6 @@ pub async fn serve(state: SharedState) -> Result<()> {
 }
 
 async fn load_or_generate_host_key(data_dir: &std::path::Path) -> Result<russh::keys::PrivateKey> {
-    use russh::keys::ssh_key::rand_core::OsRng;
-
     let key_path = data_dir.join("ssh_host_ed25519_key");
     if key_path.exists() {
         let pem = tokio::fs::read_to_string(&key_path).await?;
@@ -43,7 +41,8 @@ async fn load_or_generate_host_key(data_dir: &std::path::Path) -> Result<russh::
         return Ok(key);
     }
 
-    let key = russh::keys::PrivateKey::random(&mut OsRng, russh::keys::ssh_key::Algorithm::Ed25519)
+    let mut rng = rand::rng();
+    let key = russh::keys::PrivateKey::random(&mut rng, russh::keys::ssh_key::Algorithm::Ed25519)
         .map_err(|e| anyhow::anyhow!("failed to generate host key: {e}"))?;
 
     tokio::fs::create_dir_all(data_dir).await?;
@@ -156,11 +155,13 @@ impl russh::server::Handler for SshHandler {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
         let state = self.state.clone();
         tokio::spawn(handle_channel(channel, state));
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -452,6 +453,9 @@ async fn run_git_deploy(
         },
         force_builder: None,
     };
+
+    let deploy_lock = state.deploy_locks.for_app(&app.id);
+    let _guard = deploy_lock.lock().await;
 
     crate::deploy::run_deploy(
         &state.pool,

@@ -23,6 +23,7 @@ import {
 } from '../lib/api';
 import { showToast } from '../lib/shell';
 import ConnectScreen from './ConnectScreen';
+import ServiceStateBadge from './ServiceStateBadge';
 import TableScroll from './TableScroll';
 
 interface HostState {
@@ -82,12 +83,15 @@ export default function HostPage() {
 
 function HostInner() {
   const [state, setState] = useState<HostState>(EMPTY_HOST_STATE);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setError(null);
+      setLoading(true);
+      setLoadError(null);
       const [
         apps,
         routing,
@@ -129,7 +133,11 @@ function HostInner() {
 
       setState(nextState);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to load host overview.');
+      setLoadError(
+        nextError instanceof Error ? nextError.message : 'Unable to load host overview.'
+      );
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -140,7 +148,7 @@ function HostInner() {
   async function handleTestObjectStore() {
     try {
       setBusy('objectstore-test');
-      setError(null);
+      setActionError(null);
       await testObjectStoreConfig();
       showToast({
         title: 'Object store test passed',
@@ -148,7 +156,7 @@ function HostInner() {
         variant: 'success',
       });
     } catch (nextError) {
-      setError(
+      setActionError(
         nextError instanceof Error ? nextError.message : 'Unable to test object store config.'
       );
     } finally {
@@ -172,16 +180,34 @@ function HostInner() {
     };
   }, [state]);
 
+  if (loading) {
+    return (
+      <div className="panel loading-state">
+        <span className="loading-spinner" />
+        <span>Loading host overview…</span>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="panel error-state">
+        <p className="text-danger" role="alert">
+          {loadError}
+        </p>
+        <button type="button" className="btn btn-secondary" onClick={() => void load()}>
+          Retry loading host overview
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="stack-lg">
       <section className="hero-panel">
         <div className="stack-md">
-          <p className="eyebrow">Host admin</p>
           <h1 className="page-title">Platform overview</h1>
-          <p className="page-copy">
-            Track global routing, TLS, storage, services, access, and daemon-visible event flow in
-            one place.
-          </p>
+          <p className="page-copy">Routing, TLS, storage, services, and access for this host.</p>
         </div>
         <div className="metrics-grid">
           <Metric label="Apps" value={String(metrics.totalApps)} />
@@ -191,24 +217,17 @@ function HostInner() {
         </div>
       </section>
 
-      {error ? <p className="callout callout-danger">{error}</p> : null}
+      {actionError ? (
+        <p className="callout callout-danger" role="alert">
+          {actionError}
+        </p>
+      ) : null}
 
       <section className="panel-grid">
         <article className="panel summary-card">
           <div className="summary-card-body">
-            <div className="stack-sm">
-              <p className="eyebrow">Fleet</p>
-              <h2 className="section-title">App status</h2>
-            </div>
+            <h2 className="section-title">App status</h2>
             <dl className="data-grid">
-              <div>
-                <dt>Total apps</dt>
-                <dd>{metrics.totalApps}</dd>
-              </div>
-              <div>
-                <dt>Live apps</dt>
-                <dd>{metrics.liveApps}</dd>
-              </div>
               <div>
                 <dt>Locked apps</dt>
                 <dd>{metrics.lockedApps}</dd>
@@ -228,10 +247,7 @@ function HostInner() {
 
         <article className="panel summary-card">
           <div className="summary-card-body">
-            <div className="stack-sm">
-              <p className="eyebrow">Routing and TLS</p>
-              <h2 className="section-title">Global edge status</h2>
-            </div>
+            <h2 className="section-title">Global edge status</h2>
             <dl className="data-grid">
               <div>
                 <dt>Angie validation</dt>
@@ -250,10 +266,6 @@ function HostInner() {
                 <dd>{state.routing.apps.filter((app) => app.issues.length > 0).length}</dd>
               </div>
             </dl>
-            <p className="page-copy">
-              Global TLS configuration now lives in Settings so host overview stays focused on
-              runtime state.
-            </p>
           </div>
           <div className="form-actions summary-card-actions">
             <a className="btn btn-secondary" href="/routing">
@@ -269,10 +281,7 @@ function HostInner() {
       <section className="panel-grid">
         <article className="panel summary-card">
           <div className="summary-card-body">
-            <div className="stack-sm">
-              <p className="eyebrow">Durable storage</p>
-              <h2 className="section-title">Object store</h2>
-            </div>
+            <h2 className="section-title">Object store</h2>
             <dl className="data-grid">
               <div>
                 <dt>Configured</dt>
@@ -291,6 +300,11 @@ function HostInner() {
                 <dd className="font-mono">{state.objectStore.object_store?.endpoint ?? 'Unset'}</dd>
               </div>
             </dl>
+            {state.objectStore.configured ? null : (
+              <p id="host-object-store-test-hint" className="text-muted">
+                Save an object store configuration to enable the connectivity test.
+              </p>
+            )}
           </div>
           <div className="form-actions summary-card-actions">
             <button
@@ -300,6 +314,9 @@ function HostInner() {
                 void handleTestObjectStore();
               }}
               disabled={!state.objectStore.configured || busy !== null}
+              aria-describedby={
+                state.objectStore.configured ? undefined : 'host-object-store-test-hint'
+              }
             >
               {busy === 'objectstore-test' ? 'Testing…' : 'Test config'}
             </button>
@@ -311,10 +328,7 @@ function HostInner() {
 
         <article className="panel summary-card">
           <div className="summary-card-body">
-            <div className="stack-sm">
-              <p className="eyebrow">Managed services</p>
-              <h2 className="section-title">Datastores</h2>
-            </div>
+            <h2 className="section-title">Datastores</h2>
             <dl className="data-grid">
               <div>
                 <dt>Postgres</dt>
@@ -333,13 +347,24 @@ function HostInner() {
                 <dd>{metrics.totalServices}</dd>
               </div>
             </dl>
-            <div className="button-row">
-              {state.services.postgres.slice(0, 2).map((service) => (
-                <span key={service.name} className="service-state service-state-warning">
-                  {service.name}
-                </span>
-              ))}
-            </div>
+            {metrics.totalServices === 0 ? (
+              <p className="text-muted">
+                No managed services yet. Open services to provision Postgres, Redis, or MySQL.
+              </p>
+            ) : (
+              <div className="button-row">
+                {state.services.postgres.slice(0, 2).map((service) => (
+                  <ServiceStateBadge
+                    key={service.name}
+                    label={service.name}
+                    status={service.status}
+                  />
+                ))}
+                {state.services.postgres.length > 2 ? (
+                  <span className="text-muted">and {state.services.postgres.length - 2} more</span>
+                ) : null}
+              </div>
+            )}
           </div>
           <div className="form-actions summary-card-actions">
             <a className="btn btn-secondary" href="/services">
@@ -351,10 +376,7 @@ function HostInner() {
 
       <section className="panel-grid">
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Access</p>
-            <h2 className="section-title">SSH keys and plugins</h2>
-          </div>
+          <h2 className="section-title">SSH keys and plugins</h2>
           <dl className="data-grid">
             <div>
               <dt>SSH keys</dt>
@@ -376,20 +398,20 @@ function HostInner() {
         </article>
 
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Recent activity</p>
-            <h2 className="section-title">Host event feed</h2>
-          </div>
+          <h2 className="section-title">Host event feed</h2>
           {state.recentEvents.length === 0 ? (
-            <p className="text-muted">No daemon events have been recorded yet.</p>
+            <p className="text-muted">
+              No daemon events yet. Deploys, service changes, and token rotations appear here.
+            </p>
           ) : (
             <TableScroll>
               <table className="table">
+                <caption className="sr-only">Recent daemon events for this host</caption>
                 <thead>
                   <tr>
-                    <th>When</th>
-                    <th>Type</th>
-                    <th>App</th>
+                    <th scope="col">When</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">App</th>
                   </tr>
                 </thead>
                 <tbody>

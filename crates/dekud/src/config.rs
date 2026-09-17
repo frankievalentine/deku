@@ -32,7 +32,36 @@ pub struct DekuConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_store: Option<ObjectStoreConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buildkit: Option<BuildkitConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard_auth: Option<DashboardTokenState>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BuildkitConfig {
+    /// When true, `dekud` starts and manages a BuildKit container for Railpack.
+    #[serde(default = "default_buildkit_managed")]
+    pub managed: bool,
+    /// Container image used for the managed BuildKit daemon.
+    #[serde(default = "default_buildkit_image")]
+    pub image: String,
+    /// Container name of the managed BuildKit daemon.
+    #[serde(default = "default_buildkit_container_name")]
+    pub container_name: String,
+    /// Explicit BuildKit endpoint. When set, this overrides the managed container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+}
+
+impl Default for BuildkitConfig {
+    fn default() -> Self {
+        Self {
+            managed: default_buildkit_managed(),
+            image: default_buildkit_image(),
+            container_name: default_buildkit_container_name(),
+            host: None,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -49,10 +78,11 @@ struct RawDekuConfig {
     dashboard_dir: Option<PathBuf>,
     object_store: Option<ObjectStoreConfig>,
     dashboard_auth: Option<DashboardTokenState>,
+    buildkit: Option<BuildkitConfig>,
 }
 
 fn default_config_dir() -> PathBuf {
-    dirs_next::home_dir()
+    dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/root"))
         .join(".deku")
 }
@@ -95,6 +125,18 @@ fn default_container_backend() -> String {
     "docker".to_string()
 }
 
+fn default_buildkit_managed() -> bool {
+    true
+}
+
+fn default_buildkit_image() -> String {
+    "moby/buildkit:v0.33.0".to_string()
+}
+
+fn default_buildkit_container_name() -> String {
+    "deku-buildkit".to_string()
+}
+
 fn default_angie_conf_dir() -> PathBuf {
     PathBuf::from("/etc/angie/conf.d/deku")
 }
@@ -121,16 +163,53 @@ impl Default for DekuConfig {
             angie_conf_dir: default_angie_conf_dir(),
             dashboard_dir: default_dashboard_dir(),
             object_store: None,
+            buildkit: None,
             dashboard_auth: None,
         }
     }
 }
 
 pub fn save(cfg: &DekuConfig) -> Result<()> {
-    std::fs::create_dir_all(config_dir())?;
+    let dir = config_dir();
+    std::fs::create_dir_all(&dir)?;
+    secure_dir(&dir)?;
     std::fs::create_dir_all(&cfg.data_dir)?;
+    secure_dir(&cfg.data_dir)?;
     let contents = toml::to_string_pretty(cfg)?;
-    std::fs::write(config_path(), contents)?;
+    write_private_file(&config_path(), contents.as_bytes())?;
+    Ok(())
+}
+
+pub(crate) fn secure_dir(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+
+    file.write_all(contents)?;
     Ok(())
 }
 
@@ -164,6 +243,7 @@ pub fn load() -> Result<DekuConfig> {
             .dashboard_dir
             .unwrap_or_else(|| default_dashboard_dir_for(&data_dir)),
         object_store: raw.object_store,
+        buildkit: raw.buildkit,
         dashboard_auth: raw.dashboard_auth,
     };
 
@@ -173,6 +253,7 @@ pub fn load() -> Result<DekuConfig> {
 pub fn init_logging(cfg: &DekuConfig) -> Result<()> {
     let log_dir = cfg.data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
+    secure_dir(&log_dir)?;
 
     let file_appender = rolling::daily(&log_dir, "dekud.log");
 
@@ -189,4 +270,44 @@ pub fn init_logging(cfg: &DekuConfig) -> Result<()> {
 
 pub fn dashboard_assets_available(cfg: &DekuConfig) -> bool {
     cfg.dashboard_dir.join("index.html").is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{secure_dir, write_private_file};
+
+    #[cfg(unix)]
+    #[test]
+    fn private_config_file_and_dir_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dir = temp.path().join("cfg");
+        std::fs::create_dir_all(&dir).expect("dir");
+
+        secure_dir(&dir).expect("secure dir");
+        let dir_mode = std::fs::metadata(&dir)
+            .expect("dir meta")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700);
+
+        let file = dir.join("config.toml");
+        write_private_file(&file, b"secret").expect("write");
+        let file_mode = std::fs::metadata(&file)
+            .expect("file meta")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o600);
+
+        write_private_file(&file, b"secret-again").expect("rewrite");
+        let file_mode = std::fs::metadata(&file)
+            .expect("file meta")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o600);
+    }
 }

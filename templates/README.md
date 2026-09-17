@@ -21,10 +21,10 @@ deku deploy run my-app --path /absolute/path/to/repo/templates/node-express
 
 | Template | Builder | Stack | Package Manager |
 | --- | --- | --- | --- |
-| `django` | `nixpacks` | Django | `pip` |
+| `django` | `railpack` | Django | `pip` |
 | `laravel` | `dockerfile` | Laravel | `composer` |
 | `nextjs` | `dockerfile` | Next.js | `npm` |
-| `nuxt` | `nixpacks` | Nuxt | `bun` |
+| `nuxt` | `railpack` | Nuxt | `bun` |
 | `astro` | `dockerfile` | Astro | `bun` |
 | `emdash-blog` | `dockerfile` | Astro + EmDash | `bun` |
 | `node-express` | `dockerfile` | Node + Express | `npm` |

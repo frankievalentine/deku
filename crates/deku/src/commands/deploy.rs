@@ -18,7 +18,7 @@ enum DeployCommands {
         path: String,
         #[arg(long, help = "Docker image to deploy instead of building")]
         image: Option<String>,
-        #[arg(long, help = "Force builder: dockerfile|nixpacks|pack|compose")]
+        #[arg(long, help = "Force builder: dockerfile|railpack|pack|compose")]
         builder: Option<String>,
     },
     /// List deployments for an app
@@ -135,21 +135,18 @@ async fn stream_deploy_logs(client: &DekuClient, app: &str) -> Result<()> {
                 if etype.starts_with("build.") || etype.starts_with("deploy.") {
                     if let Some(line) = evt["payload"]["line"].as_str() {
                         println!("  {line}");
+                    } else if let Some(url) = evt["payload"]["url"].as_str() {
+                        println!("[{etype}] {url}");
                     } else {
                         println!("[{etype}]");
                     }
-                    if etype == "deploy.live"
-                        || etype == "deploy.failed"
-                        || etype == "deploy.rollback"
-                    {
-                        // Signal to stop — we can't break out of a closure easily,
-                        // so just let the SSE stream end naturally or timeout.
-                        if let Some(url) = evt["payload"]["url"].as_str() {
-                            println!("\nApp deployed: {url}");
-                        }
+
+                    if matches!(etype, "deploy.live" | "deploy.failed" | "deploy.rollback") {
+                        return false;
                     }
                 }
             }
+            true
         })
         .await
 }

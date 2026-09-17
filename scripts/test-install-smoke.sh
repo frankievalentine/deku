@@ -183,6 +183,14 @@ EOF
   cp "${fixture_dir}/deku-linux-amd64" "${fixture_dir}/deku-linux-arm64"
   cp "${fixture_dir}/dekud-linux-amd64" "${fixture_dir}/dekud-linux-arm64"
 
+  cat > "${fixture_dir}/railpack-linux-amd64" <<EOF
+#!/usr/bin/env bash
+echo "railpack ${version}"
+EOF
+  chmod 0755 "${fixture_dir}/railpack-linux-amd64"
+  cp "${fixture_dir}/railpack-linux-amd64" "${fixture_dir}/railpack-linux-arm64"
+  printf 'Railpack fixture license\n' > "${fixture_dir}/railpack-LICENSE.txt"
+
   cat > "${fixture_dir}/deku.service" <<'EOF'
 [Unit]
 Description=Deku PaaS Daemon
@@ -216,6 +224,9 @@ EOF
     deku-linux-arm64 \
     dekud-linux-amd64 \
     dekud-linux-arm64 \
+    railpack-linux-amd64 \
+    railpack-linux-arm64 \
+    railpack-LICENSE.txt \
     deku.service \
     angie-deku.conf
   do
@@ -333,6 +344,7 @@ chmod 0755 "${TEST_ROOT}/mockbin/sleep"
 export PATH="${TEST_ROOT}/mockbin:${PATH}"
 export DEKU_CONFIG_DIR="${TEST_ROOT}/config"
 export INSTALL_DIR="${TEST_ROOT}/install/bin"
+export SHARE_DIR="${TEST_ROOT}/install/share"
 export ANGIE_CONF_DIR="${TEST_ROOT}/angie/conf.d/deku"
 export ANGIE_BASE_CONF="${TEST_ROOT}/angie/conf.d/deku-default.conf"
 export SYSTEMD_UNIT_PATH="${TEST_ROOT}/systemd/deku.service"

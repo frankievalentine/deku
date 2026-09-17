@@ -50,7 +50,7 @@ pub async fn run(args: DomainsArgs, client: &DekuClient) -> Result<()> {
             client
                 .post(
                     &format!("/api/apps/{app}/domains"),
-                    serde_json::json!({ "name": domain }),
+                    serde_json::json!({ "domain": domain }),
                 )
                 .await?;
             println!("Domain '{domain}' added to '{app}'.");

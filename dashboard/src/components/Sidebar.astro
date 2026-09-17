@@ -7,6 +7,21 @@ export interface Props {
 }
 
 const { activeNav } = Astro.props;
+
+const NAV_GROUPS = [
+  {
+    id: 'operate',
+    label: 'Operate',
+    items: NAV_ITEMS.filter((item) =>
+      ['apps', 'host', 'routing', 'services', 'object-store', 'ssh-keys'].includes(item.id)
+    ),
+  },
+  {
+    id: 'platform',
+    label: 'Platform',
+    items: NAV_ITEMS.filter((item) => ['plugins', 'settings'].includes(item.id)),
+  },
+];
 ---
 
 <aside
@@ -31,24 +46,33 @@ const { activeNav } = Astro.props;
       </div>
     </div>
 
-    <ul class="sidebar-nav" role="list">
-      {NAV_ITEMS.map((item) => (
-        <li>
-          <a
-            href={item.href}
-            class:list={['nav-link', { active: activeNav === item.id }]}
-            aria-current={activeNav === item.id ? 'page' : undefined}
-          >
-            <Icon name={item.icon} size={18} className="nav-icon" />
+    <div class="sidebar-nav">
+      {NAV_GROUPS.map((group) => (
+        <div class="sidebar-group">
+          <p class="sidebar-group-title" id={`sidebar-group-${group.id}`}>
+            {group.label}
+          </p>
+          <ul class="sidebar-group-list" role="list" aria-labelledby={`sidebar-group-${group.id}`}>
+            {group.items.map((item) => (
+              <li>
+                <a
+                  href={item.href}
+                  class:list={['nav-link', { active: activeNav === item.id }]}
+                  aria-current={activeNav === item.id ? 'page' : undefined}
+                >
+                  <Icon name={item.icon} size={18} className="nav-icon" />
 
-            <span class="nav-text">
-              <span>{item.label}</span>
-              <small>{item.description}</small>
-            </span>
-          </a>
-        </li>
+                  <span class="nav-text">
+                    <span>{item.label}</span>
+                    <small>{item.description}</small>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
       ))}
-    </ul>
+    </div>
 
     <div class="sidebar-locked-note">
       <p class="eyebrow">Connect</p>

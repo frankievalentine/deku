@@ -1,4 +1,4 @@
-import { type SubmitEvent, useEffect, useMemo, useState } from 'react';
+import { type SubmitEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
 import type { ManagedServiceKind, ManagedServiceSummary, ServiceBackup } from '../lib/api';
 import {
@@ -17,6 +17,7 @@ import {
 } from '../lib/query';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
+import ServiceStateBadge from './ServiceStateBadge';
 import TableScroll from './TableScroll';
 
 const SERVICE_KINDS: ManagedServiceKind[] = ['postgres', 'redis', 'mysql'];
@@ -64,12 +65,17 @@ function ServicesInner() {
   const [selectedNames, setSelectedNames] = useState<KindRecord<string>>(emptyKindRecord(''));
   const [createDrafts, setCreateDrafts] = useState<KindRecord<string>>(emptyKindRecord(''));
   const [linkDrafts, setLinkDrafts] = useState<KindRecord<string>>(emptyKindRecord(''));
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [activeKind, setActiveKind] = useState<ManagedServiceKind>('postgres');
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ServiceTarget | null>(null);
+  const [unlinkTarget, setUnlinkTarget] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const linkSelect = useRef<HTMLSelectElement>(null);
   const overviewQuery = useServicesOverviewQuery();
   const createManagedServiceMutation = useCreateManagedServiceMutation();
   const deleteManagedServiceMutation = useDeleteManagedServiceMutation();
@@ -129,12 +135,17 @@ function ServicesInner() {
   async function handleCreate(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = createDrafts[activeKind].trim();
-    if (!name) return;
+    if (!name) {
+      setCreateError(`Enter a name for the new ${KIND_LABELS[activeKind]} service.`);
+      nameInput.current?.focus();
+      return;
+    }
 
     try {
       setBusy(`create-${activeKind}`);
       setActionError(null);
       setNotice(null);
+      setCreateError(null);
       const created = await createManagedServiceMutation.mutateAsync({ kind: activeKind, name });
       setCreateDrafts((current) => ({ ...current, [activeKind]: '' }));
       setSelectedNames((current) => ({ ...current, [activeKind]: created.name }));
@@ -169,12 +180,17 @@ function ServicesInner() {
     if (!activeServiceName) return;
 
     const appName = linkDrafts[activeKind].trim();
-    if (!appName) return;
+    if (!appName) {
+      setLinkError('Select an app to link.');
+      linkSelect.current?.focus();
+      return;
+    }
 
     try {
       setBusy(`link-${activeKind}-${activeServiceName}`);
       setActionError(null);
       setNotice(null);
+      setLinkError(null);
       await linkManagedServiceMutation.mutateAsync({
         kind: activeKind,
         serviceName: activeServiceName,
@@ -189,8 +205,9 @@ function ServicesInner() {
     }
   }
 
-  async function handleUnlink(appName: string) {
-    if (!activeServiceName) return;
+  async function handleUnlink() {
+    const appName = unlinkTarget;
+    if (!appName || !activeServiceName) return;
 
     try {
       setBusy(`unlink-${activeKind}-${activeServiceName}-${appName}`);
@@ -201,9 +218,11 @@ function ServicesInner() {
         serviceName: activeServiceName,
         appName,
       });
+      setUnlinkTarget(null);
       setNotice(`${appName} unlinked from ${activeServiceName}.`);
     } catch (nextError) {
       setActionError(getErrorMessage(nextError, 'Unable to unlink app.'));
+      setUnlinkTarget(null);
     } finally {
       setBusy(null);
     }
@@ -266,18 +285,38 @@ function ServicesInner() {
   }
 
   if (loading) {
-    return null;
+    return (
+      <div className="panel loading-state">
+        <span className="loading-spinner" />
+        <span>Loading managed services…</span>
+      </div>
+    );
+  }
+
+  if (queryError && overviewQuery.data === undefined) {
+    return (
+      <div className="panel error-state">
+        <p className="text-danger" role="alert">
+          {queryError}
+        </p>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => void overviewQuery.refetch()}
+        >
+          Retry loading services
+        </button>
+      </div>
+    );
   }
 
   return (
     <div className="stack-lg">
       <section className="hero-panel">
         <div className="stack-md">
-          <p className="eyebrow">Managed services</p>
-          <h1 className="page-title">Datastores and caches</h1>
+          <h1 className="page-title">Managed services</h1>
           <p className="page-copy">
-            Provision Postgres, Redis, and MySQL services, inspect connection details, link them to
-            apps, and run service-level operations without leaving the dashboard.
+            Provision Postgres, Redis, and MySQL, then connect them to apps.
           </p>
         </div>
         <div className="metrics-grid">
@@ -289,57 +328,70 @@ function ServicesInner() {
       </section>
 
       <section className="panel stack-md">
-        <div className="cluster justify-between align-center">
-          <div className="stack-sm">
-            <p className="eyebrow">Engines</p>
-            <h2 className="section-title">Select a service type</h2>
-          </div>
-          <span className="inventory-summary">{KIND_LABELS[activeKind].toUpperCase()}</span>
-        </div>
+        <h2 className="section-title">Service engines</h2>
 
-        <div className="segment-control" role="tablist" aria-label="Service engines">
+        <fieldset className="segment-control min-w-0" aria-label="Service engines">
           {SERVICE_KINDS.map((kind) => (
             <button
               key={kind}
               type="button"
-              role="tab"
-              aria-selected={activeKind === kind}
+              aria-pressed={activeKind === kind}
               className={`segment-button${activeKind === kind ? ' is-selected' : ''}`}
-              onClick={() => setActiveKind(kind)}
+              onClick={() => {
+                setActiveKind(kind);
+                setCreateError(null);
+                setLinkError(null);
+              }}
             >
               <span>{KIND_LABELS[kind]}</span>
               <strong>{servicesByKind[kind].length}</strong>
             </button>
           ))}
-        </div>
+        </fieldset>
 
-        <p className="page-copy">{KIND_DESCRIPTIONS[activeKind]}</p>
+        <p className="text-muted">{KIND_DESCRIPTIONS[activeKind]}</p>
 
-        {notice ? <p className="callout callout-success">{notice}</p> : null}
-        {error ? <p className="callout callout-danger">{error}</p> : null}
+        {notice ? (
+          <p className="callout callout-success" role="status">
+            {notice}
+          </p>
+        ) : null}
+        {error ? (
+          <p className="callout callout-danger" role="alert">
+            {error}
+          </p>
+        ) : null}
       </section>
 
       <section className="panel-grid">
         <article className="panel stack-md">
-          <div className="stack-sm">
-            <p className="eyebrow">Provision</p>
-            <h2 className="section-title">Create {KIND_LABELS[activeKind]}</h2>
-          </div>
+          <h2 className="section-title">Create {KIND_LABELS[activeKind]}</h2>
 
-          <form onSubmit={handleCreate} className="stack-md">
+          <form onSubmit={handleCreate} className="stack-md" noValidate>
             <div className="form-group">
               <label className="form-label" htmlFor="service-name">
                 Service name
               </label>
               <input
                 id="service-name"
+                ref={nameInput}
                 className="input"
                 value={createDrafts[activeKind]}
-                onChange={(event) =>
-                  setCreateDrafts((current) => ({ ...current, [activeKind]: event.target.value }))
-                }
+                onChange={(event) => {
+                  setCreateDrafts((current) => ({ ...current, [activeKind]: event.target.value }));
+                  if (createError) setCreateError(null);
+                }}
                 placeholder={`${activeKind}-main`}
+                autoComplete="off"
+                required
+                aria-invalid={createError ? true : undefined}
+                aria-describedby={createError ? 'service-name-error' : undefined}
               />
+              {createError ? (
+                <p id="service-name-error" className="text-danger">
+                  {createError}
+                </p>
+              ) : null}
             </div>
             <div className="form-actions">
               <button
@@ -347,20 +399,18 @@ function ServicesInner() {
                 type="submit"
                 disabled={busy === `create-${activeKind}`}
               >
-                {busy === `create-${activeKind}`
-                  ? 'Creating…'
-                  : `Create ${KIND_LABELS[activeKind]}`}
+                {busy === `create-${activeKind}` ? <span className="loading-spinner" /> : null}
+                <span>Create {KIND_LABELS[activeKind]}</span>
               </button>
             </div>
           </form>
 
-          <div className="stack-sm">
-            <p className="eyebrow">Inventory</p>
-            <h3 className="deploy-title">Available now</h3>
-          </div>
+          <h3 className="deploy-title">Existing {KIND_LABELS[activeKind]} services</h3>
 
           {activeServices.length === 0 ? (
-            <p className="text-muted">No {KIND_LABELS[activeKind]} services exist yet.</p>
+            <p className="text-muted">
+              No {KIND_LABELS[activeKind]} services yet. Create one with the form above.
+            </p>
           ) : (
             <div className="service-list">
               {activeServices.map((service) => {
@@ -376,7 +426,7 @@ function ServicesInner() {
                   >
                     <div className="cluster justify-between align-center">
                       <strong>{service.name}</strong>
-                      <ServiceState status={service.status} />
+                      <ServiceStateBadge status={service.status} />
                     </div>
                     <span className="service-list-meta">
                       {service.container_id ? truncateId(service.container_id) : 'pending'}
@@ -391,13 +441,10 @@ function ServicesInner() {
         <article className="panel stack-md">
           {!activeServiceName ? (
             <>
-              <div className="stack-sm">
-                <p className="eyebrow">Inspect</p>
-                <h2 className="section-title">No service selected</h2>
-              </div>
+              <h2 className="section-title">No service selected</h2>
               <p className="page-copy">
-                Create or select a {KIND_LABELS[activeKind]} service to inspect its connection
-                details, links, logs, and service-specific operations.
+                Select a {KIND_LABELS[activeKind]} service to see its connection details, links,
+                logs, and backups.
               </p>
             </>
           ) : detailQuery.isPending && !activeDetail ? (
@@ -407,23 +454,21 @@ function ServicesInner() {
             </div>
           ) : !activeDetail ? (
             <>
-              <div className="stack-sm">
-                <p className="eyebrow">Inspect</p>
-                <h2 className="section-title">Service unavailable</h2>
-              </div>
-              <p className="text-danger">Unable to load detail for {activeServiceName}.</p>
+              <h2 className="section-title">Service unavailable</h2>
+              <p className="text-danger" role="alert">
+                Unable to load details for {activeServiceName}. Refresh the page to try again.
+              </p>
             </>
           ) : (
             <>
               <div className="cluster justify-between align-start">
                 <div className="stack-sm">
-                  <p className="eyebrow">Service detail</p>
                   <h2 className="section-title">{activeDetail.name}</h2>
                   <p className="page-copy">
                     {KIND_LABELS[activeKind]} service created {formatDate(activeDetail.created_at)}.
                   </p>
                 </div>
-                <ServiceState status={activeDetail.status} />
+                <ServiceStateBadge status={activeDetail.status} />
               </div>
 
               <dl className="data-grid">
@@ -447,10 +492,7 @@ function ServicesInner() {
                 </div>
               </dl>
 
-              <div className="stack-sm">
-                <p className="eyebrow">Connection</p>
-                <h3 className="deploy-title">Resolved connection values</h3>
-              </div>
+              <h3 className="deploy-title">Connection values</h3>
 
               <dl className="connection-grid">
                 {Object.entries(activeDetail.connection).map(([key, value]) => (
@@ -462,26 +504,28 @@ function ServicesInner() {
               </dl>
 
               <div className="stack-md">
-                <div className="stack-sm">
-                  <p className="eyebrow">Links</p>
-                  <h3 className="deploy-title">Attached apps</h3>
-                </div>
+                <h3 className="deploy-title">Attached apps</h3>
 
-                <form onSubmit={handleLink} className="stack-md">
+                <form onSubmit={handleLink} className="stack-md" noValidate>
                   <div className="form-group">
                     <label className="form-label" htmlFor="link-app">
                       Link to app
                     </label>
                     <select
                       id="link-app"
+                      ref={linkSelect}
                       className="input"
                       value={linkDrafts[activeKind]}
-                      onChange={(event) =>
+                      onChange={(event) => {
                         setLinkDrafts((current) => ({
                           ...current,
                           [activeKind]: event.target.value,
-                        }))
-                      }
+                        }));
+                        if (linkError) setLinkError(null);
+                      }}
+                      required
+                      aria-invalid={linkError ? true : undefined}
+                      aria-describedby={linkError ? 'link-app-error' : undefined}
                     >
                       <option value="">Select app</option>
                       {availableApps.map((app) => (
@@ -490,31 +534,41 @@ function ServicesInner() {
                         </option>
                       ))}
                     </select>
+                    {linkError ? (
+                      <p id="link-app-error" className="text-danger">
+                        {linkError}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="form-actions">
                     <button
                       className="btn btn-secondary"
                       type="submit"
-                      disabled={
-                        busy === `link-${activeKind}-${activeServiceName}` ||
-                        linkDrafts[activeKind].length === 0
-                      }
+                      disabled={busy === `link-${activeKind}-${activeServiceName}`}
                     >
-                      {busy === `link-${activeKind}-${activeServiceName}` ? 'Linking…' : 'Link app'}
+                      {busy === `link-${activeKind}-${activeServiceName}` ? (
+                        <span className="loading-spinner" />
+                      ) : null}
+                      <span>Link app</span>
                     </button>
                   </div>
                 </form>
 
                 {activeDetail.links.length === 0 ? (
-                  <p className="text-muted">This service is not linked to any apps yet.</p>
+                  <p className="text-muted">
+                    No apps use this service yet. Link one above to inject its connection values.
+                  </p>
                 ) : (
                   <TableScroll>
                     <table className="table">
+                      <caption className="sr-only">Apps linked to this service</caption>
                       <thead>
                         <tr>
-                          <th>App</th>
-                          <th>Env key</th>
-                          <th />
+                          <th scope="col">App</th>
+                          <th scope="col">Env key</th>
+                          <th scope="col">
+                            <span className="sr-only">Actions</span>
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -526,10 +580,9 @@ function ServicesInner() {
                               <button
                                 type="button"
                                 className="btn btn-danger btn-sm"
-                                disabled={
-                                  busy === `unlink-${activeKind}-${activeServiceName}-${link.name}`
-                                }
-                                onClick={() => handleUnlink(link.name)}
+                                aria-label={`Unlink ${link.name}`}
+                                disabled={busy !== null}
+                                onClick={() => setUnlinkTarget(link.name)}
                               >
                                 Unlink
                               </button>
@@ -544,10 +597,7 @@ function ServicesInner() {
 
               <div className="stack-md">
                 <div className="cluster justify-between align-center">
-                  <div className="stack-sm">
-                    <p className="eyebrow">Logs</p>
-                    <h3 className="deploy-title">Recent container output</h3>
-                  </div>
+                  <h3 className="deploy-title">Recent container output</h3>
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
@@ -556,16 +606,17 @@ function ServicesInner() {
                     }}
                     disabled={busy === `logs-${activeKind}-${activeServiceName}`}
                   >
-                    {busy === `logs-${activeKind}-${activeServiceName}`
-                      ? 'Refreshing…'
-                      : activeLogs.length === 0
-                        ? 'Load logs'
-                        : 'Refresh logs'}
+                    {busy === `logs-${activeKind}-${activeServiceName}` ? (
+                      <span className="loading-spinner" />
+                    ) : null}
+                    <span>{activeLogs.length === 0 ? 'Load logs' : 'Refresh logs'}</span>
                   </button>
                 </div>
 
                 {activeLogs.length === 0 ? (
-                  <p className="text-muted">Logs are loaded on demand for the selected service.</p>
+                  <p className="text-muted">
+                    Logs are not loaded automatically. Select Load logs to fetch the last 120 lines.
+                  </p>
                 ) : (
                   <pre className="service-log">{activeLogs.join('\n')}</pre>
                 )}
@@ -574,10 +625,7 @@ function ServicesInner() {
               {supportsBackups(activeKind) ? (
                 <div className="stack-md">
                   <div className="cluster justify-between align-center">
-                    <div className="stack-sm">
-                      <p className="eyebrow">Backups</p>
-                      <h3 className="deploy-title">Snapshots and restore</h3>
-                    </div>
+                    <h3 className="deploy-title">Snapshots and restore</h3>
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"
@@ -586,23 +634,31 @@ function ServicesInner() {
                       }}
                       disabled={busy === `backup-${activeServiceName}`}
                     >
-                      {busy === `backup-${activeServiceName}` ? 'Starting…' : 'Create backup'}
+                      {busy === `backup-${activeServiceName}` ? (
+                        <span className="loading-spinner" />
+                      ) : null}
+                      <span>Create backup</span>
                     </button>
                   </div>
 
                   {activeBackups.length === 0 ? (
-                    <p className="text-muted">No backups recorded yet.</p>
+                    <p className="text-muted">
+                      No backups yet. Create one before making a change you might need to roll back.
+                    </p>
                   ) : (
                     <TableScroll>
                       <table className="table">
+                        <caption className="sr-only">Backups for {activeServiceName}</caption>
                         <thead>
                           <tr>
-                            <th>ID</th>
-                            <th>Created</th>
-                            <th>Format</th>
-                            <th>Size</th>
-                            <th>Restored</th>
-                            <th />
+                            <th scope="col">ID</th>
+                            <th scope="col">Created</th>
+                            <th scope="col">Format</th>
+                            <th scope="col">Size</th>
+                            <th scope="col">Restored</th>
+                            <th scope="col">
+                              <span className="sr-only">Actions</span>
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -619,6 +675,7 @@ function ServicesInner() {
                                 <button
                                   type="button"
                                   className="btn btn-danger btn-sm"
+                                  aria-label={`Restore backup ${backup.id.slice(0, 8)}`}
                                   onClick={() =>
                                     setRestoreTarget({
                                       kind: activeKind,
@@ -657,25 +714,31 @@ function ServicesInner() {
 
       <article className="panel stack-md">
         <div className="cluster justify-between align-center">
-          <div className="stack-sm">
-            <p className="eyebrow">Fleet view</p>
-            <h2 className="section-title">{KIND_LABELS[activeKind]} inventory</h2>
-          </div>
-          <span className="text-muted">{activeServices.length} service(s)</span>
+          <h2 className="section-title">{KIND_LABELS[activeKind]} inventory</h2>
+          <span className="text-muted">
+            {activeServices.length} {activeServices.length === 1 ? 'service' : 'services'}
+          </span>
         </div>
 
         {activeServices.length === 0 ? (
-          <p className="text-muted">Nothing provisioned for this engine yet.</p>
+          <p className="text-muted">
+            No {KIND_LABELS[activeKind]} services yet. Create one to see it here.
+          </p>
         ) : (
           <TableScroll>
             <table className="table">
+              <caption className="sr-only">
+                Every {KIND_LABELS[activeKind]} service on this host
+              </caption>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Status</th>
-                  <th>Container</th>
-                  <th>Created</th>
-                  <th />
+                  <th scope="col">Name</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Container</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -683,7 +746,7 @@ function ServicesInner() {
                   <tr key={service.id}>
                     <td>{service.name}</td>
                     <td>
-                      <ServiceState status={service.status} />
+                      <ServiceStateBadge status={service.status} />
                     </td>
                     <td className="font-mono">
                       {service.container_id ? truncateId(service.container_id) : 'pending'}
@@ -693,6 +756,7 @@ function ServicesInner() {
                       <button
                         type="button"
                         className="btn btn-secondary btn-sm"
+                        aria-label={`Inspect ${service.name}`}
                         onClick={() =>
                           setSelectedNames((current) => ({
                             ...current,
@@ -725,7 +789,27 @@ function ServicesInner() {
         onConfirm={() => {
           void handleDelete();
         }}
-        onClose={() => setDeleteTarget(null)}
+        onClose={() => {
+          if (busy === null) setDeleteTarget(null);
+        }}
+      />
+
+      <ConfirmModal
+        open={unlinkTarget !== null}
+        title={`Unlink ${unlinkTarget ?? 'app'}?`}
+        description={`This removes the managed connection variables for ${activeServiceName || 'this service'} from ${unlinkTarget ?? 'the app'}. The app keeps running without them.`}
+        confirmLabel="Unlink app"
+        cancelLabel="Keep link"
+        busy={
+          unlinkTarget !== null &&
+          busy === `unlink-${activeKind}-${activeServiceName}-${unlinkTarget}`
+        }
+        onConfirm={() => {
+          void handleUnlink();
+        }}
+        onClose={() => {
+          if (busy === null) setUnlinkTarget(null);
+        }}
       />
 
       <ConfirmModal
@@ -742,7 +826,9 @@ function ServicesInner() {
         onConfirm={() => {
           void handleRestore();
         }}
-        onClose={() => setRestoreTarget(null)}
+        onClose={() => {
+          if (busy === null) setRestoreTarget(null);
+        }}
       />
     </div>
   );
@@ -755,18 +841,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
-}
-
-function ServiceState({ status }: { status: string }) {
-  const normalized = status.toLowerCase();
-  const tone =
-    normalized.includes('run') || normalized.includes('ready') || normalized.includes('up')
-      ? 'success'
-      : normalized.includes('fail') || normalized.includes('error')
-        ? 'danger'
-        : 'warning';
-
-  return <span className={`service-state service-state-${tone}`}>{status}</span>;
 }
 
 function serviceKey(kind: ManagedServiceKind, name: string): string {

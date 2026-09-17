@@ -93,7 +93,7 @@ deku deploy run agent-demo --path /absolute/path/to/repo/templates/django
 
 These starters are adapted for Deku:
 
-- They use Deku-supported `dockerfile` or `nixpacks` builders
+- They use Deku-supported `dockerfile` or `railpack` builders
 - They expect Deku-managed services instead of bundled sidecars
 - They stay local to the repo so agents can inspect and modify them directly
 
@@ -287,9 +287,7 @@ If Deku adds MCP later, the first MCP server should expose only stable platform 
 
 The first MCP design should not include dynamic plugin surfaces.
 
-Start MCP-later work only after:
-
-- Start only after the CLI/API workflow documented here is stable and verified
+Start MCP-later work only after the CLI/API workflow documented on this page is stable and verified.
 
 ## AGENTS.md
 
@@ -355,7 +353,7 @@ deku deploy run <app> --path /absolute/path/to/repo/templates/django
 
 The templates are adapted for Deku:
 
-- Use Deku-supported `dockerfile` or `nixpacks` builders
+- Use Deku-supported `dockerfile` or `railpack` builders
 - Expect Deku-managed services instead of bundled sidecars
 - Stay local to the repo so agents can copy or inspect them directly
 

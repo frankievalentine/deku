@@ -1,12 +1,53 @@
 import os
+import secrets
 from pathlib import Path
 
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SECRET_KEY = os.environ.get("SECRET_KEY", "deku-django-template-secret-key")
+
+
+def _resolve_secret_key() -> str:
+    configured = os.environ.get("SECRET_KEY")
+    if configured:
+        return configured
+
+    key_path = Path(os.environ.get("DEKU_SECRET_KEY_FILE", BASE_DIR / ".deku_secret_key"))
+    generated = secrets.token_urlsafe(64)
+
+    staging = key_path.with_name(f"{key_path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError:
+        descriptor = None
+
+    if descriptor is not None:
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(generated)
+            try:
+                os.link(staging, key_path)
+            except FileExistsError:
+                pass
+        finally:
+            try:
+                os.unlink(staging)
+            except OSError:
+                pass
+
+    try:
+        return key_path.read_text(encoding="utf-8").strip() or generated
+    except OSError:
+        return generated
+
+
+SECRET_KEY = _resolve_secret_key()
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get("ALLOWED_HOSTS", "*").split(",")
+    if host.strip()
+]
 
 INSTALLED_APPS = [
     "django.contrib.admin",

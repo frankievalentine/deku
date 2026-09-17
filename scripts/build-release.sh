@@ -19,6 +19,9 @@ release_artifacts=(
   "install.sh"
   "deku.service"
   "angie-deku.conf"
+  "railpack-linux-amd64"
+  "railpack-linux-arm64"
+  "railpack-LICENSE.txt"
 )
 
 log() {
@@ -111,6 +114,33 @@ package_support_files() {
   chmod 0644 "${DIST_DIR}/angie-deku.conf"
 }
 
+fetch_railpack() {
+  log "Fetching Railpack ${RAILPACK_VERSION}"
+  local base="https://github.com/railwayapp/railpack/releases/download/v${RAILPACK_VERSION}"
+  local work="${ROOT_DIR}/target/railpack"
+  rm -rf "$work"
+  mkdir -p "$work"
+  curl -fsSL -o "${work}/checksums.txt" "${base}/checksums.txt"
+
+  local arch asset expected actual
+  for arch in amd64 arm64; do
+    case "$arch" in
+      amd64) asset="railpack-v${RAILPACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" ;;
+      arm64) asset="railpack-v${RAILPACK_VERSION}-arm64-unknown-linux-musl.tar.gz" ;;
+    esac
+    curl -fsSL -o "${work}/${asset}" "${base}/${asset}"
+    expected="$(awk -v a="$asset" '$2 == a { print $1 }' "${work}/checksums.txt")"
+    actual="$(checksum_file "${work}/${asset}" | awk '{ print $1 }')"
+    [[ -n "$expected" && "$expected" == "$actual" ]] || {
+      printf 'railpack checksum mismatch for %s\n' "$asset" >&2
+      exit 1
+    }
+    tar -xzf "${work}/${asset}" -C "$work" railpack LICENSE
+    cp "${work}/railpack" "${DIST_DIR}/railpack-linux-${arch}"
+    cp "${work}/LICENSE" "${DIST_DIR}/railpack-LICENSE.txt"
+  done
+}
+
 write_checksums() {
   (
     cd "${DIST_DIR}"
@@ -132,6 +162,7 @@ build_dashboard
 build_binaries
 package_binaries
 package_support_files
+fetch_railpack
 write_checksums
 
 log "Artifacts written to ${DIST_DIR}"

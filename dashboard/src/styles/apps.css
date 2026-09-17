@@ -1,0 +1,315 @@
+/*
+ * App page styles: Apps list header and rows, the app detail tab strip, and inline
+ * form errors. Imported by pages/index.astro and pages/app.astro; every value comes
+ * from a token in global.css, so this adds no new color, radius, or motion scale.
+ */
+
+:root {
+  --app-danger-outline-fg: oklch(0.5 0.19 26);
+}
+
+.dark {
+  --app-danger-outline-fg: oklch(0.78 0.15 24);
+}
+
+.apps-header {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.apps-header-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.apps-header-copy {
+  display: grid;
+  gap: var(--space-2);
+  min-width: min(100%, 22rem);
+}
+
+.apps-header h1 {
+  margin: 0;
+  font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.75rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.apps-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  margin: 0;
+  padding: var(--space-4) 0 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.apps-metric {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 4.5rem;
+}
+
+.apps-metric-value {
+  font-family: var(--font-heading);
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.apps-metric-label {
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.apps-table-card {
+  padding: var(--space-2) var(--space-5) var(--space-3);
+}
+
+.apps-table-card .apps-table {
+  min-width: 50rem;
+}
+
+.apps-table-card .apps-table th,
+.apps-table-card .apps-table td {
+  padding: 0.8rem var(--space-6) 0.8rem 0;
+  vertical-align: middle;
+  width: 1%;
+  white-space: nowrap;
+}
+
+.apps-table-card .apps-table th:last-child,
+.apps-table-card .apps-table td:last-child {
+  padding-inline-end: 0;
+}
+
+.apps-table-card .apps-table th:first-child,
+.apps-table-card .apps-table td:first-child {
+  width: auto;
+  min-width: 11rem;
+  white-space: normal;
+}
+
+.apps-row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: max-content;
+}
+
+.apps-row-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.9rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.apps-row-name:hover,
+.apps-row-name:focus-visible {
+  color: var(--color-accent);
+}
+
+.apps-row-time {
+  color: var(--color-text-soft);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.apps-row-access {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.apps-tls {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.apps-tls.is-on {
+  color: var(--tone-success-fg);
+}
+
+.btn-outline.btn-danger-outline {
+  color: var(--app-danger-outline-fg);
+  border-color: var(--tone-danger-border);
+  background: transparent;
+}
+
+.btn-outline.btn-danger-outline:hover,
+.btn-outline.btn-danger-outline:focus-visible {
+  color: var(--app-danger-outline-fg);
+  border-color: var(--app-danger-outline-fg);
+  background: var(--tone-danger-bg);
+}
+
+.app-tabs {
+  position: relative;
+}
+
+.app-tabs-track {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  padding: 0 var(--space-6) var(--space-2) 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.app-tabs-track::-webkit-scrollbar {
+  height: 6px;
+}
+
+.app-tabs-track::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+.app-tabs::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: var(--space-8);
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--color-bg-surface));
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.app-tabs.is-scrollable::after {
+  opacity: 1;
+}
+
+.app-tab {
+  display: grid;
+  gap: 0.1rem;
+  flex: 0 0 auto;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.9rem;
+  scroll-snap-align: start;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-soft);
+  text-align: left;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.app-tab-label {
+  font-family: var(--font-heading);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.app-tab-summary {
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.app-tab:hover,
+.app-tab:focus-visible {
+  border-color: var(--color-surface-selection-border);
+  background: var(--color-surface-subtle-strong);
+}
+
+.app-tab.is-selected {
+  border-color: var(--color-surface-selection-border);
+  background: var(--color-surface-selection);
+}
+
+.app-tab.is-selected .app-tab-summary {
+  color: var(--color-text-soft);
+}
+
+.form-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  color: var(--tone-danger-fg);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.form-error::before {
+  content: "!";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.12rem;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@media (max-width: 1023px) {
+  .apps-table-card {
+    padding-inline: var(--space-4);
+  }
+
+  .apps-table-card .apps-table th,
+  .apps-table-card .apps-table td {
+    padding-inline-end: var(--space-3);
+  }
+}
+
+@media (max-width: 640px) {
+  .apps-header {
+    padding: var(--space-4);
+  }
+
+  .apps-header-top {
+    flex-direction: column;
+  }
+
+  .apps-header-top .cluster {
+    width: 100%;
+  }
+
+  .apps-header-top .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .apps-table-card {
+    padding-inline: var(--space-3);
+  }
+
+  .apps-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3) var(--space-4);
+  }
+}

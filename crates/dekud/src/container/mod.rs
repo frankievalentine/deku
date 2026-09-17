@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bollard::container::LogOutput;
 use bollard::models::{
-    HostConfig, Mount, MountTypeEnum, PortBinding, PortMap, RestartPolicy, RestartPolicyNameEnum,
+    HostConfig, Mount, MountType, PortBinding, PortMap, RestartPolicy, RestartPolicyNameEnum,
 };
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, CreateImageOptionsBuilder, LogsOptionsBuilder,
@@ -60,7 +60,7 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
         .map(|(host, container)| Mount {
             source: Some(host.clone()),
             target: Some(container.clone()),
-            typ: Some(MountTypeEnum::BIND),
+            typ: Some(MountType::BIND),
             read_only: Some(false),
             ..Default::default()
         })
@@ -146,6 +146,11 @@ pub async fn pull_image(
     }
 
     Ok(())
+}
+
+/// Return true when an image reference already exists in the local Docker daemon.
+pub async fn image_exists(docker: &Docker, reference: &str) -> bool {
+    docker.inspect_image(reference).await.is_ok()
 }
 
 /// Collect up to `tail` log lines from a container.

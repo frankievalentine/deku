@@ -16,7 +16,7 @@ const { title, activeNav } = Astro.props;
     <Sidebar activeNav={activeNav} />
     <div class="shell-body">
       <Header />
-      <main class="shell-main">
+      <main id="main" tabindex="-1" class="shell-main">
         <div class="shell-content section-fade">
           <slot />
         </div>

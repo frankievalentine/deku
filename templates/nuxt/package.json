@@ -9,6 +9,6 @@
     "start": "node .output/server/index.mjs"
   },
   "dependencies": {
-    "nuxt": "4.4.2"
+    "nuxt": "4.5.2"
   }
 }
