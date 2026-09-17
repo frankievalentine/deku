@@ -1,6 +1,11 @@
 import { type SubmitEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
-import type { ManagedServiceKind, ManagedServiceSummary, ServiceBackup } from '../lib/api';
+import {
+  MANAGED_SERVICE_KINDS,
+  type ManagedServiceKind,
+  type ManagedServiceSummary,
+  type ServiceBackup,
+} from '../lib/api';
 import {
   getErrorMessage,
   getFirstQueryError,
@@ -15,24 +20,20 @@ import {
   useTriggerServiceBackupMutation,
   useUnlinkManagedServiceMutation,
 } from '../lib/query';
+import { SERVICE_KIND_DESCRIPTIONS, SERVICE_KIND_LABELS } from '../lib/service-meta';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import ServiceStateBadge from './ServiceStateBadge';
 import TableScroll from './TableScroll';
 
-const SERVICE_KINDS: ManagedServiceKind[] = ['postgres', 'redis', 'mysql'];
+const SERVICE_KINDS: ManagedServiceKind[] = [...MANAGED_SERVICE_KINDS];
 
-const KIND_LABELS: Record<ManagedServiceKind, string> = {
-  postgres: 'Postgres',
-  redis: 'Redis',
-  mysql: 'MySQL',
-};
+const KIND_LABELS = SERVICE_KIND_LABELS;
 
-const KIND_DESCRIPTIONS: Record<ManagedServiceKind, string> = {
-  postgres: 'Managed relational database instances with backup and restore controls.',
-  redis: 'Managed Redis caches for ephemeral state, queues, and session workloads.',
-  mysql: 'Managed MySQL instances for apps that need MySQL-compatible relational storage.',
-};
+const KIND_DESCRIPTIONS = SERVICE_KIND_DESCRIPTIONS;
+
+/// Every engine Deku provisions has an object-store backup implementation.
+const BACKUP_KINDS = new Set<ManagedServiceKind>(MANAGED_SERVICE_KINDS);
 
 interface ServiceTarget {
   kind: ManagedServiceKind;
@@ -40,7 +41,7 @@ interface ServiceTarget {
 }
 
 interface RestoreTarget {
-  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>;
+  kind: ManagedServiceKind;
   serviceName: string;
   backup: ServiceBackup;
 }
@@ -92,12 +93,11 @@ function ServicesInner() {
   const activeServices = servicesByKind[activeKind];
   const activeServiceName = selectedNames[activeKind];
   const activeServiceKey = activeServiceName ? serviceKey(activeKind, activeServiceName) : null;
-  const backupKind = supportsBackups(activeKind) ? activeKind : 'postgres';
   const detailQuery = useManagedServiceDetailQuery(activeKind, activeServiceName || '__none__', {
     enabled: Boolean(activeServiceName),
   });
-  const backupsQuery = useManagedServiceBackupsQuery(backupKind, activeServiceName || '__none__', {
-    enabled: Boolean(activeServiceName) && supportsBackups(activeKind),
+  const backupsQuery = useManagedServiceBackupsQuery(activeKind, activeServiceName || '__none__', {
+    enabled: Boolean(activeServiceName),
   });
   const logsQuery = useManagedServiceLogsQuery(activeKind, activeServiceName || '__none__', 120, {
     enabled: false,
@@ -316,13 +316,17 @@ function ServicesInner() {
         <div className="stack-md">
           <h1 className="page-title">Managed services</h1>
           <p className="page-copy">
-            Provision Postgres, Redis, and MySQL, then connect them to apps.
+            Provision Postgres, MySQL, MariaDB, Redis, or MongoDB, then connect them to apps.
           </p>
         </div>
         <div className="metrics-grid">
-          <Metric label="Postgres" value={String(servicesByKind.postgres.length)} />
-          <Metric label="Redis" value={String(servicesByKind.redis.length)} />
-          <Metric label="MySQL" value={String(servicesByKind.mysql.length)} />
+          {SERVICE_KINDS.map((kind) => (
+            <Metric
+              key={kind}
+              label={KIND_LABELS[kind]}
+              value={String(servicesByKind[kind].length)}
+            />
+          ))}
           <Metric label="Total" value={String(totalServices)} />
         </div>
       </section>
@@ -655,6 +659,7 @@ function ServicesInner() {
                             <th scope="col">Created</th>
                             <th scope="col">Format</th>
                             <th scope="col">Size</th>
+                            <th scope="col">Encryption</th>
                             <th scope="col">Restored</th>
                             <th scope="col">
                               <span className="sr-only">Actions</span>
@@ -668,6 +673,9 @@ function ServicesInner() {
                               <td className="font-mono">{formatDate(backup.created_at)}</td>
                               <td className="font-mono">{backup.format}</td>
                               <td className="font-mono">{formatBytes(backup.size_bytes)}</td>
+                              <td className="font-mono">
+                                {backup.encryption === 'none' ? 'None' : backup.encryption}
+                              </td>
                               <td className="font-mono">
                                 {backup.restored_at ? formatDate(backup.restored_at) : 'No'}
                               </td>
@@ -847,10 +855,8 @@ function serviceKey(kind: ManagedServiceKind, name: string): string {
   return `${kind}:${name}`;
 }
 
-function supportsBackups(
-  kind: ManagedServiceKind
-): kind is Extract<ManagedServiceKind, 'postgres' | 'redis'> {
-  return kind === 'postgres' || kind === 'redis';
+function supportsBackups(kind: ManagedServiceKind): boolean {
+  return BACKUP_KINDS.has(kind);
 }
 
 function emptyKindRecord<T>(value: T): KindRecord<T> {
@@ -858,6 +864,8 @@ function emptyKindRecord<T>(value: T): KindRecord<T> {
     postgres: value,
     redis: value,
     mysql: value,
+    mariadb: value,
+    mongodb: value,
   };
 }
 
@@ -869,6 +877,8 @@ function chooseSelectedNames(
     postgres: chooseSelectedName(current.postgres, services.postgres),
     redis: chooseSelectedName(current.redis, services.redis),
     mysql: chooseSelectedName(current.mysql, services.mysql),
+    mariadb: chooseSelectedName(current.mariadb, services.mariadb),
+    mongodb: chooseSelectedName(current.mongodb, services.mongodb),
   };
 }
 

@@ -22,6 +22,17 @@ enum PsCommands {
         #[arg(help = "PROCESS=COUNT pairs (e.g. web=2 worker=1)", num_args = 1..)]
         pairs: Vec<String>,
     },
+    /// Show or set memory/CPU limits
+    Limits {
+        #[arg(help = "App name")]
+        app: String,
+        #[arg(long, help = "Process type (default: all processes)")]
+        process: Option<String>,
+        #[arg(long, help = "CPU limit, e.g. 0.5 or 500m")]
+        cpu: Option<String>,
+        #[arg(long, help = "Memory limit, e.g. 512m or 1g")]
+        memory: Option<String>,
+    },
 }
 
 pub async fn run(args: PsArgs, client: &DekuClient) -> Result<()> {
@@ -67,6 +78,51 @@ pub async fn run(args: PsArgs, client: &DekuClient) -> Result<()> {
                 )
                 .await?;
             println!("Scaling updated for '{app}'.");
+        }
+
+        PsCommands::Limits {
+            app,
+            process,
+            cpu,
+            memory,
+        } => {
+            if cpu.is_none() && memory.is_none() {
+                let data = client.get(&format!("/api/apps/{app}/limits")).await?;
+                let empty = Vec::new();
+                let limits = data.as_array().unwrap_or(&empty);
+                if limits.is_empty() {
+                    println!("No limits set for '{app}'.");
+                } else {
+                    println!("{:<16} {:<10} {:<10}", "PROCESS", "CPU", "MEMORY");
+                    println!("{}", "-".repeat(38));
+                    for limit in limits {
+                        println!(
+                            "{:<16} {:<10} {:<10}",
+                            limit["process_type"].as_str().unwrap_or("-"),
+                            limit["cpu"].as_str().unwrap_or("-"),
+                            limit["memory"].as_str().unwrap_or("-"),
+                        );
+                    }
+                }
+            } else {
+                let data = client
+                    .post(
+                        &format!("/api/apps/{app}/limits"),
+                        serde_json::json!({
+                            "process_type": process,
+                            "cpu": cpu,
+                            "memory": memory,
+                        }),
+                    )
+                    .await?;
+                println!(
+                    "Limits set for '{}' (cpu: {}, memory: {}). {}",
+                    app,
+                    data["cpu"].as_str().unwrap_or("-"),
+                    data["memory"].as_str().unwrap_or("-"),
+                    data["note"].as_str().unwrap_or("")
+                );
+            }
         }
     }
     Ok(())

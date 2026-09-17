@@ -30,6 +30,20 @@ enum AppsCommands {
         #[arg(help = "App name")]
         name: String,
     },
+    /// Rename an app, keeping its settings and running containers
+    Rename {
+        #[arg(help = "Current app name")]
+        name: String,
+        #[arg(help = "New app name")]
+        new_name: String,
+    },
+    /// Copy an app's settings into a new app
+    Clone {
+        #[arg(help = "App to copy from")]
+        name: String,
+        #[arg(help = "Name for the copy")]
+        new_name: String,
+    },
 }
 
 pub async fn run(args: AppsArgs, client: &DekuClient) -> Result<()> {
@@ -84,6 +98,51 @@ pub async fn run(args: AppsArgs, client: &DekuClient) -> Result<()> {
         AppsCommands::Info { name } => {
             let data = client.get(&format!("/api/apps/{name}")).await?;
             println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+
+        AppsCommands::Rename { name, new_name } => {
+            let data = client
+                .post(
+                    &format!("/api/apps/{name}/rename"),
+                    serde_json::json!({ "name": new_name }),
+                )
+                .await?;
+            println!(
+                "Renamed '{}' to '{}'.",
+                name,
+                data["name"].as_str().unwrap_or(&new_name)
+            );
+            println!("Running containers keep serving, but their names still reference '{name}'.");
+            println!(
+                "Run a deploy to refresh them, and update any git remote that used the old name."
+            );
+        }
+
+        AppsCommands::Clone { name, new_name } => {
+            let data = client
+                .post(
+                    &format!("/api/apps/{name}/clone"),
+                    serde_json::json!({ "name": new_name }),
+                )
+                .await?;
+            println!("Cloned '{name}' to '{new_name}'.");
+            if let Some(copied) = data.get("copied") {
+                println!(
+                    "Copied: {} config vars, {} resource limits, {} redirects, auth: {}.",
+                    copied["config_vars"].as_u64().unwrap_or(0),
+                    copied["resource_limits"].as_u64().unwrap_or(0),
+                    copied["redirects"].as_u64().unwrap_or(0),
+                    if copied["auth"].as_bool().unwrap_or(false) {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                );
+                if let Some(skipped) = copied["skipped"].as_array() {
+                    let names: Vec<&str> = skipped.iter().filter_map(|v| v.as_str()).collect();
+                    println!("Not copied: {}.", names.join(", "));
+                }
+            }
         }
     }
     Ok(())

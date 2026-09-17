@@ -93,7 +93,7 @@ If behavior changes, update the relevant documentation in the same change. Commo
 
 - `README.md`
 - `docs/`
-- `AGENTS.md` when coding-agent workflow guidance changes
+- `AGENTS.md` when coding-agent workflow guidance changes (the `/agents/` docs page renders that file at build time)
 - `CONTRIBUTING.md` when contributor workflow guidance changes
 - `.codex/deku-ops.md` when local run or test instructions change
 

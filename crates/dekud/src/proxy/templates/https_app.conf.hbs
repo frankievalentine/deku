@@ -20,8 +20,17 @@ server {
     access_log /var/log/angie/deku_{{app_name}}_access.log;
     error_log  /var/log/angie/deku_{{app_name}}_error.log;
 
-    location / {
-        proxy_pass         http://deku_{{app_name}};
+{{#if maintenance}}    location / {
+        return 503{{#if maintenance_message}} "{{maintenance_message}}"{{/if}};
+    }
+{{else}}{{#each redirects}}    location = {{this.source_path}} {
+        return {{this.code}} {{this.target}};
+    }
+{{/each}}    location / {
+{{#if auth_basic}}        auth_basic "Deku";
+        auth_basic_user_file {{auth_basic_user_file}};
+{{/if}}{{#if forward_auth}}        auth_request /__deku_auth;
+{{/if}}        proxy_pass         http://deku_{{app_name}};
         proxy_http_version 1.1;
         proxy_set_header   Upgrade $http_upgrade;
         proxy_set_header   Connection "upgrade";
@@ -31,4 +40,12 @@ server {
         proxy_set_header   X-Forwarded-Proto $scheme;
         proxy_read_timeout 60s;
     }
-}
+{{#if forward_auth}}
+    location = /__deku_auth {
+        internal;
+        proxy_pass              {{forward_auth}};
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        X-Original-URI $request_uri;
+    }
+{{/if}}{{/if}}}

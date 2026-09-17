@@ -382,6 +382,10 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
             <dd className="font-mono">{state.tls.not_after ?? 'Unavailable'}</dd>
           </div>
           <div className="connection-card">
+            <dt>Valid for</dt>
+            <dd className="font-mono">{describeCertificateLifecycle(state.tls)}</dd>
+          </div>
+          <div className="connection-card">
             <dt>Subject</dt>
             <dd className="font-mono">{state.tls.subject ?? 'Unavailable'}</dd>
           </div>
@@ -390,6 +394,18 @@ export default function AppRoutingPanel({ appName, locked, onAppRefresh }: AppRo
             <dd className="font-mono">{state.routing.proxy_config_path}</dd>
           </div>
         </dl>
+
+        {certificateWarning(state.tls) ? (
+          <p
+            className={
+              state.tls.lifecycle === 'expired' || state.tls.lifecycle === 'missing'
+                ? 'callout callout-danger'
+                : 'callout callout-warning'
+            }
+          >
+            {certificateWarning(state.tls)}
+          </p>
+        ) : null}
 
         {state.routing.issues.length === 0 && !state.tls.inspection_error ? (
           <p className="callout callout-success">
@@ -523,4 +539,29 @@ function SkeletonBlock({ className }: { className: string }) {
 
 function skeletonItems(prefix: string, count: number): string[] {
   return Array.from({ length: count }, (_, index) => `${prefix}-${index}`);
+}
+
+function describeCertificateLifecycle(tls: CertificateStatus): string {
+  const { lifecycle, days_remaining: days } = tls;
+  if (lifecycle === 'missing') return 'No certificate';
+  if (lifecycle === 'unknown') return 'Not inspectable';
+  if (typeof days !== 'number') return 'Unavailable';
+  if (days < 0) return `Expired ${Math.abs(days)} day(s) ago`;
+  if (days === 0) return 'Expires today';
+  return `${days} day(s)`;
+}
+
+function certificateWarning(tls: CertificateStatus): string | null {
+  switch (tls.lifecycle) {
+    case 'expired':
+      return 'This certificate has expired. TLS handshakes will fail until it is renewed. Deku does not renew certificates itself.';
+    case 'expiring':
+      return 'This certificate is close to expiry. Renew it before it lapses; Deku does not renew certificates itself.';
+    case 'missing':
+      return 'TLS is enabled but the certificate or private key file is missing.';
+    case 'unknown':
+      return 'The certificate could not be inspected. Check the files on the host.';
+    default:
+      return null;
+  }
 }

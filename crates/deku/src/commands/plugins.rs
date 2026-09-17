@@ -27,10 +27,19 @@ enum PluginsCommands {
 pub async fn run(args: PluginsArgs, client: &DekuClient) -> Result<()> {
     match args.command {
         PluginsCommands::List => {
+            let runtime = client.get("/api/plugins/runtime").await?;
+            let available = runtime["available"].as_bool().unwrap_or(false);
+            if !available {
+                println!(
+                    "The dynamic plugin runtime is not compiled into this build. {}",
+                    runtime["message"].as_str().unwrap_or("")
+                );
+            }
+
             let data = client.get("/api/plugins").await?;
             if let Some(plugins) = data.as_array() {
                 if plugins.is_empty() {
-                    println!("No plugins installed.");
+                    println!("No plugins loaded.");
                 } else {
                     println!("{:<24} VERSION", "NAME");
                     println!("{}", "-".repeat(40));

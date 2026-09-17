@@ -114,7 +114,7 @@ pub async fn run(args: PostgresArgs, client: &DekuClient) -> Result<()> {
             let data = client
                 .get(&format!("/api/postgres/services/{name}/backups"))
                 .await?;
-            print_backup_table(&data);
+            super::render::print_backup_table(&data);
         }
         PostgresCommands::Restore { name, backup } => {
             client
@@ -197,24 +197,4 @@ fn print_connect_details(data: &serde_json::Value) {
         connection["username"].as_str().unwrap_or("deku"),
         connection["database"].as_str().unwrap_or(name),
     );
-}
-
-fn print_backup_table(data: &serde_json::Value) {
-    if let Some(backups) = data.as_array() {
-        if backups.is_empty() {
-            println!("No backups.");
-            return;
-        }
-        println!("{:<36} {:<12} {:<20} RESTORED", "ID", "SIZE", "CREATED");
-        println!("{}", "-".repeat(96));
-        for backup in backups {
-            println!(
-                "{:<36} {:<12} {:<20} {}",
-                backup["id"].as_str().unwrap_or("-"),
-                backup["size_bytes"].as_i64().unwrap_or_default(),
-                backup["created_at"].as_str().unwrap_or("-"),
-                backup["restored_at"].as_str().unwrap_or("-"),
-            );
-        }
-    }
 }

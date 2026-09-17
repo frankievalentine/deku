@@ -100,6 +100,125 @@ pub fn select_builder(source: &Path, forced: Option<&str>) -> Result<Box<dyn Bui
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Dockerfile build inputs resolved from `deku.toml`.
+pub struct DockerfileParams {
+    pub dockerfile: String,
+    pub context: std::path::PathBuf,
+    pub buildargs: HashMap<String, String>,
+}
+
+pub fn dockerfile_params(source_dir: &Path, deku_toml: Option<&DekuToml>) -> DockerfileParams {
+    let build = deku_toml.and_then(|t| t.build.as_ref());
+    let dockerfile = build
+        .and_then(|b| b.dockerfile.as_deref())
+        .unwrap_or("Dockerfile")
+        .to_string();
+    let context = build
+        .and_then(|b| b.context.as_deref())
+        .map(|c| source_dir.join(c))
+        .unwrap_or_else(|| source_dir.to_path_buf());
+    let buildargs = build
+        .and_then(|b| b.args.as_ref())
+        .cloned()
+        .unwrap_or_default();
+
+    DockerfileParams {
+        dockerfile,
+        context,
+        buildargs,
+    }
+}
+
+pub fn compose_file_names() -> [&'static str; 4] {
+    [
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    ]
+}
+
+/// What the web service in a Compose file needs in order to produce an image.
+pub enum ComposeWebTarget {
+    Build { context: String, dockerfile: String },
+    Image { reference: String },
+}
+
+pub struct ComposeWeb {
+    pub service_name: String,
+    pub target: ComposeWebTarget,
+}
+
+/// Resolve the web service of a Compose file to a concrete build or image target.
+pub fn compose_web(source: &Path) -> Result<ComposeWeb> {
+    let compose_path = compose_file_names()
+        .iter()
+        .map(|f| source.join(f))
+        .find(|p| p.exists())
+        .ok_or_else(|| DekuError::BuildFailed("no compose file found".to_string()))?;
+
+    let compose_content = std::fs::read_to_string(&compose_path)
+        .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+
+    let compose: serde_yaml_ng::Value = serde_yaml_ng::from_str(&compose_content)
+        .map_err(|e| DekuError::BuildFailed(format!("invalid compose file: {e}")))?;
+
+    let services = compose["services"]
+        .as_mapping()
+        .ok_or_else(|| DekuError::BuildFailed("no services in compose file".to_string()))?;
+
+    // Find web service: prefer `web`, then `x-deku-web: true`, then first service
+    let web_service_name = services
+        .keys()
+        .find(|k| k.as_str() == Some("web"))
+        .or_else(|| {
+            services.keys().find(|k| {
+                k.as_str().is_some_and(|name| {
+                    compose["services"][name]
+                        .get("x-deku-web")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                })
+            })
+        })
+        .or_else(|| services.keys().next())
+        .and_then(|k| k.as_str())
+        .ok_or_else(|| DekuError::BuildFailed("no service found in compose".to_string()))?
+        .to_string();
+
+    let web_service = &compose["services"][web_service_name.as_str()];
+
+    let target = if web_service.get("build").is_some() {
+        let context = web_service["build"]
+            .get("context")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".")
+            .to_string();
+        let dockerfile = web_service["build"]
+            .get("dockerfile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Dockerfile")
+            .to_string();
+        ComposeWebTarget::Build {
+            context,
+            dockerfile,
+        }
+    } else if let Some(image) = web_service.get("image").and_then(|v| v.as_str()) {
+        ComposeWebTarget::Image {
+            reference: image.to_string(),
+        }
+    } else {
+        return Err(DekuError::BuildFailed(
+            "compose web service has neither 'build' nor 'image'".to_string(),
+        ));
+    };
+
+    Ok(ComposeWeb {
+        service_name: web_service_name,
+        target,
+    })
+}
+
 pub(crate) async fn get_exposed_ports(docker: &Docker, image_tag: &str) -> Vec<u16> {
     let Ok(info) = docker.inspect_image(image_tag).await else {
         return vec![];
@@ -118,7 +237,7 @@ pub(crate) async fn get_exposed_ports(docker: &Docker, image_tag: &str) -> Vec<u
 }
 
 /// Spin up an ephemeral container to read the Procfile from the image.
-async fn extract_procfile(docker: &Docker, image_tag: &str) -> Vec<ProcfileEntry> {
+pub(crate) async fn extract_procfile(docker: &Docker, image_tag: &str) -> Vec<ProcfileEntry> {
     let name = format!(
         "deku-procfile-{}",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
@@ -192,22 +311,10 @@ impl Builder for DockerfileBuilder {
     ) -> Result<BuiltImage> {
         let app_name = &ctx.app.name;
 
-        let dockerfile = deku_toml
-            .and_then(|t| t.build.as_ref())
-            .and_then(|b| b.dockerfile.as_deref())
-            .unwrap_or("Dockerfile");
-
-        let context_path = deku_toml
-            .and_then(|t| t.build.as_ref())
-            .and_then(|b| b.context.as_deref())
-            .map(|c| ctx.source_dir.join(c))
-            .unwrap_or_else(|| ctx.source_dir.clone());
-
-        let buildargs: HashMap<String, String> = deku_toml
-            .and_then(|t| t.build.as_ref())
-            .and_then(|b| b.args.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let params = dockerfile_params(&ctx.source_dir, deku_toml);
+        let dockerfile = params.dockerfile.as_str();
+        let context_path = params.context;
+        let buildargs = params.buildargs;
 
         events.emit(
             Some(ctx.app.id.clone()),
@@ -450,7 +557,7 @@ impl Builder for PackBuilder {
     async fn build(
         &self,
         ctx: &BuildContext,
-        _deku_toml: Option<&DekuToml>,
+        deku_toml: Option<&DekuToml>,
         docker: &Docker,
         events: &EventSender,
         image_tag: &str,
@@ -464,15 +571,20 @@ impl Builder for PackBuilder {
         );
 
         let output = tokio::process::Command::new("pack")
-            .args([
-                "build",
+            .args(pack_build_args(
                 image_tag,
-                "--path",
                 ctx.source_dir.to_str().unwrap_or("."),
-            ])
+                deku_toml,
+            ))
             .output()
             .await
-            .map_err(|e| DekuError::BuildFailed(format!("pack not found: {e}")))?;
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => DekuError::BuildFailed(
+                    "the pack CLI is not on PATH; install it from buildpacks.io, or deploy with a Dockerfile or the railpack builder"
+                        .to_string(),
+                ),
+                _ => DekuError::BuildFailed(format!("failed to run pack: {error}")),
+            })?;
 
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             events.emit(
@@ -483,9 +595,18 @@ impl Builder for PackBuilder {
         }
 
         if !output.status.success() {
+            // pack prints actionable guidance (such as how to set a default
+            // builder) on stdout, so fall back to it when stderr is empty.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = if stderr.trim().is_empty() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let tail: Vec<&str> = stdout.lines().rev().take(6).collect();
+                tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+            } else {
+                stderr.trim().to_string()
+            };
             return Err(DekuError::BuildFailed(format!(
-                "pack build failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+                "pack build failed: {detail}"
             )));
         }
 
@@ -504,6 +625,35 @@ impl Builder for PackBuilder {
             procfile,
         })
     }
+}
+
+/// Arguments for `pack build`.
+///
+/// `--builder` is only passed when `deku.toml` sets `pack_builder`: without it
+/// `pack` uses its own host-wide default builder, and fails with its own hint if
+/// none is configured.
+pub(crate) fn pack_build_args(
+    image_tag: &str,
+    source_dir: &str,
+    deku_toml: Option<&DekuToml>,
+) -> Vec<String> {
+    let mut args = vec![
+        "build".to_string(),
+        image_tag.to_string(),
+        "--path".to_string(),
+        source_dir.to_string(),
+    ];
+
+    if let Some(builder) = deku_toml
+        .and_then(|toml| toml.build.as_ref())
+        .and_then(|build| build.pack_builder.as_deref())
+        .filter(|builder| !builder.trim().is_empty())
+    {
+        args.push("--builder".to_string());
+        args.push(builder.to_string());
+    }
+
+    args
 }
 
 // ── Pre-built image ───────────────────────────────────────────────────────────
@@ -574,46 +724,8 @@ impl Builder for ComposeBuilder {
         events: &EventSender,
         image_tag: &str,
     ) -> Result<BuiltImage> {
-        let compose_path = [
-            "docker-compose.yml",
-            "docker-compose.yaml",
-            "compose.yml",
-            "compose.yaml",
-        ]
-        .iter()
-        .map(|f| ctx.source_dir.join(f))
-        .find(|p| p.exists())
-        .ok_or_else(|| DekuError::BuildFailed("no compose file found".to_string()))?;
-
-        let compose_content = std::fs::read_to_string(&compose_path)
-            .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
-
-        let compose: serde_yaml_ng::Value = serde_yaml_ng::from_str(&compose_content)
-            .map_err(|e| DekuError::BuildFailed(format!("invalid compose file: {e}")))?;
-
-        let services = compose["services"]
-            .as_mapping()
-            .ok_or_else(|| DekuError::BuildFailed("no services in compose file".to_string()))?;
-
-        // Find web service: prefer `web`, then `x-deku-web: true`, then first service
-        let web_service_name = services
-            .keys()
-            .find(|k| k.as_str() == Some("web"))
-            .or_else(|| {
-                services.keys().find(|k| {
-                    k.as_str().is_some_and(|name| {
-                        compose["services"][name]
-                            .get("x-deku-web")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                    })
-                })
-            })
-            .or_else(|| services.keys().next())
-            .and_then(|k| k.as_str())
-            .ok_or_else(|| DekuError::BuildFailed("no service found in compose".to_string()))?;
-
-        let web_service = &compose["services"][web_service_name];
+        let web = compose_web(&ctx.source_dir)?;
+        let web_service_name = web.service_name.as_str();
 
         events.emit(
             Some(ctx.app.id.clone()),
@@ -621,54 +733,51 @@ impl Builder for ComposeBuilder {
             Some(serde_json::json!({ "builder": "compose", "service": web_service_name })),
         );
 
-        if web_service.get("build").is_some() {
-            let build_context = web_service["build"]
-                .get("context")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
-            let dockerfile = web_service["build"]
-                .get("dockerfile")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Dockerfile");
+        match web.target {
+            ComposeWebTarget::Build {
+                context,
+                dockerfile,
+            } => {
+                let full_context = ctx.source_dir.join(&context);
+                let tar_bytes = create_tar_gz(&full_context)
+                    .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
 
-            let full_context = ctx.source_dir.join(build_context);
-            let tar_bytes =
-                create_tar_gz(&full_context).map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+                let build_opts = BuildImageOptionsBuilder::default()
+                    .dockerfile(&dockerfile)
+                    .t(image_tag)
+                    .rm(true)
+                    .build();
 
-            let build_opts = BuildImageOptionsBuilder::default()
-                .dockerfile(dockerfile)
-                .t(image_tag)
-                .rm(true)
-                .build();
-
-            let mut stream = docker.build_image(build_opts, None, Some(body_full(tar_bytes)));
-            while let Some(item) = stream.next().await {
-                match item {
-                    Ok(info) => {
-                        if let Some(line) = info.stream {
-                            let line = line.trim_end().to_string();
-                            if !line.is_empty() {
-                                events.emit(
-                                    Some(ctx.app.id.clone()),
-                                    "build.log",
-                                    Some(serde_json::json!({ "line": line })),
-                                );
+                let mut stream = docker.build_image(build_opts, None, Some(body_full(tar_bytes)));
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(info) => {
+                            if let Some(line) = info.stream {
+                                let line = line.trim_end().to_string();
+                                if !line.is_empty() {
+                                    events.emit(
+                                        Some(ctx.app.id.clone()),
+                                        "build.log",
+                                        Some(serde_json::json!({ "line": line })),
+                                    );
+                                }
+                            }
+                            if let Some(err) = info.error_detail.and_then(|e| e.message) {
+                                return Err(DekuError::BuildFailed(err));
                             }
                         }
-                        if let Some(err) = info.error_detail.and_then(|e| e.message) {
-                            return Err(DekuError::BuildFailed(err));
-                        }
+                        Err(e) => return Err(DekuError::BuildFailed(e.to_string())),
                     }
-                    Err(e) => return Err(DekuError::BuildFailed(e.to_string())),
                 }
             }
-        } else if let Some(image) = web_service.get("image").and_then(|v| v.as_str()) {
-            let (repo, tag) = image.rsplit_once(':').unwrap_or((image, "latest"));
-            let (target_repo, target_tag) =
-                image_tag.rsplit_once(':').unwrap_or((image_tag, "latest"));
-            tag_image(docker, &format!("{repo}:{tag}"), target_repo, target_tag)
-                .await
-                .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+            ComposeWebTarget::Image { reference } => {
+                let (repo, tag) = reference.rsplit_once(':').unwrap_or((&reference, "latest"));
+                let (target_repo, target_tag) =
+                    image_tag.rsplit_once(':').unwrap_or((image_tag, "latest"));
+                tag_image(docker, &format!("{repo}:{tag}"), target_repo, target_tag)
+                    .await
+                    .map_err(|e| DekuError::BuildFailed(e.to_string()))?;
+            }
         }
 
         let exposed_ports = get_exposed_ports(docker, image_tag).await;
@@ -692,13 +801,58 @@ impl Builder for ComposeBuilder {
 mod tests {
     use super::{
         deployment_image_id, deployment_image_tag, infer_port_from_start_command, select_builder,
+        ComposeWebTarget,
     };
+    use deku_core::types::DekuToml;
 
     #[test]
     fn auto_detect_falls_back_to_railpack_without_manifest() {
         let temp = tempfile::tempdir().expect("tempdir");
         let builder = select_builder(temp.path(), None).expect("builder");
         assert_eq!(builder.name(), "railpack");
+    }
+
+    #[test]
+    fn pack_args_use_the_configured_builder_when_present() {
+        let without = super::pack_build_args("img", "/src", None);
+        assert_eq!(without, vec!["build", "img", "--path", "/src"]);
+
+        let with: DekuToml = toml::from_str(
+            "[build]\nbuilder = \"pack\"\npack_builder = \"paketobuildpacks/builder-jammy-base\"\n",
+        )
+        .expect("deku.toml");
+        let args = super::pack_build_args("img", "/src", Some(&with));
+        assert_eq!(
+            args,
+            vec![
+                "build",
+                "img",
+                "--path",
+                "/src",
+                "--builder",
+                "paketobuildpacks/builder-jammy-base"
+            ]
+        );
+    }
+
+    #[test]
+    fn pack_args_ignore_a_blank_builder() {
+        let toml_doc: DekuToml =
+            toml::from_str("[build]\npack_builder = \"   \"\n").expect("deku.toml");
+        let args = super::pack_build_args("img", "/src", Some(&toml_doc));
+        assert!(!args.contains(&"--builder".to_string()));
+    }
+
+    #[test]
+    fn auto_detect_selects_pack_for_a_project_toml() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("project.toml"),
+            "[project]\nid = \"io.buildpacks.demo\"\n",
+        )
+        .expect("write");
+        let builder = select_builder(temp.path(), None).expect("builder");
+        assert_eq!(builder.name(), "pack");
     }
 
     #[test]
@@ -774,5 +928,54 @@ mod tests {
     fn returns_no_port_when_start_command_has_none() {
         assert_eq!(infer_port_from_start_command("npm run start"), None);
         assert_eq!(infer_port_from_start_command("serve on $PORT"), None);
+    }
+
+    #[test]
+    fn compose_web_prefers_named_web_service_build_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("docker-compose.yml"),
+            "services:\n  api:\n    image: nginx\n  web:\n    build:\n      context: ./app\n      dockerfile: Dockerfile.prod\n",
+        )
+        .expect("write");
+
+        let web = super::compose_web(temp.path()).expect("compose");
+        assert_eq!(web.service_name, "web");
+        match web.target {
+            ComposeWebTarget::Build {
+                context,
+                dockerfile,
+            } => {
+                assert_eq!(context, "./app");
+                assert_eq!(dockerfile, "Dockerfile.prod");
+            }
+            ComposeWebTarget::Image { reference } => {
+                panic!("expected build, got image {reference}")
+            }
+        }
+    }
+
+    #[test]
+    fn compose_web_falls_back_to_image_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            temp.path().join("compose.yaml"),
+            "services:\n  web:\n    image: ghcr.io/acme/app:1.2.3\n",
+        )
+        .expect("write");
+
+        let web = super::compose_web(temp.path()).expect("compose");
+        match web.target {
+            ComposeWebTarget::Image { reference } => {
+                assert_eq!(reference, "ghcr.io/acme/app:1.2.3");
+            }
+            ComposeWebTarget::Build { .. } => panic!("expected image target"),
+        }
+    }
+
+    #[test]
+    fn compose_web_reports_missing_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(super::compose_web(temp.path()).is_err());
     }
 }

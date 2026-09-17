@@ -5,6 +5,7 @@
     "": {
       "name": "@deku/docs",
       "dependencies": {
+        "@astrojs/mdx": "^8.0.1",
         "@astrojs/starlight": "^0.42.1",
         "@pelagornis/page": "^1.2.5",
         "astro": "^7.3.3",

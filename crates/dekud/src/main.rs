@@ -1,15 +1,23 @@
 use anyhow::Result;
 use tracing::{info, warn};
 
+mod alerts;
 mod api;
+mod app_name;
+mod backup_crypto;
+mod backup_scheduler;
 mod build;
+mod build_remote;
 mod buildkit;
 mod config;
+mod console;
 mod container;
 mod db;
 mod deploy;
 mod deploy_lock;
 mod events;
+mod hooks;
+mod metrics;
 mod objectstore;
 mod plugins;
 mod proxy;
@@ -45,6 +53,9 @@ async fn main() -> Result<()> {
 
     let event_bus = events::EventBus::new(pool.clone());
     let state = api::AppState::new(cfg.clone(), pool, event_bus, docker, plugin_registry);
+
+    backup_scheduler::spawn(state.clone());
+    alerts::spawn(state.clone());
 
     tokio::try_join!(api::serve(state.clone()), async {
         if let Err(error) = ssh::serve(state.clone()).await {

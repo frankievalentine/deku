@@ -31,6 +31,12 @@ enum MysqlCommands {
         #[arg(short = 'n', default_value_t = 100)]
         lines: usize,
     },
+    /// Create a backup in the configured object store
+    Backup { name: String },
+    /// List backups for a mysql service
+    Backups { name: String },
+    /// Restore a backup into a mysql service
+    Restore { name: String, backup: String },
 }
 
 pub async fn run(args: MysqlArgs, client: &DekuClient) -> Result<()> {
@@ -83,6 +89,34 @@ pub async fn run(args: MysqlArgs, client: &DekuClient) -> Result<()> {
                     println!("{}", line.as_str().unwrap_or(""));
                 }
             }
+        }
+        MysqlCommands::Backup { name } => {
+            let data = client
+                .post(
+                    &format!("/api/mysql/services/{name}/backups"),
+                    serde_json::json!({}),
+                )
+                .await?;
+            println!(
+                "Created backup {} ({} bytes)",
+                data["id"].as_str().unwrap_or("-"),
+                data["size_bytes"].as_i64().unwrap_or_default()
+            );
+        }
+        MysqlCommands::Backups { name } => {
+            let data = client
+                .get(&format!("/api/mysql/services/{name}/backups"))
+                .await?;
+            super::render::print_backup_table(&data);
+        }
+        MysqlCommands::Restore { name, backup } => {
+            client
+                .post(
+                    &format!("/api/mysql/services/{name}/restore/{backup}"),
+                    serde_json::json!({}),
+                )
+                .await?;
+            println!("Restored backup '{backup}' into '{name}'.");
         }
     }
     Ok(())

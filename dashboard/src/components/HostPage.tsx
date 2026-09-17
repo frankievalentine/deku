@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
 import type {
+  AlertRecord,
   App,
   EventRecord,
   LetsEncryptConfig,
+  ManagedServiceKind,
   ManagedServiceSummary,
   ObjectStoreState,
   Plugin,
@@ -11,6 +13,7 @@ import type {
   SshKey,
 } from '../lib/api';
 import {
+  fetchAlerts,
   fetchApps,
   fetchEvents,
   fetchLetsEncryptConfig,
@@ -19,8 +22,10 @@ import {
   fetchPlugins,
   fetchRoutingStatus,
   fetchSshKeys,
+  MANAGED_SERVICE_KINDS,
   testObjectStoreConfig,
 } from '../lib/api';
+import { SERVICE_KIND_LABELS } from '../lib/service-meta';
 import { showToast } from '../lib/shell';
 import ConnectScreen from './ConnectScreen';
 import ServiceStateBadge from './ServiceStateBadge';
@@ -34,11 +39,8 @@ interface HostState {
   sshKeys: SshKey[];
   plugins: Plugin[];
   recentEvents: EventRecord[];
-  services: {
-    postgres: ManagedServiceSummary[];
-    redis: ManagedServiceSummary[];
-    mysql: ManagedServiceSummary[];
-  };
+  alerts: AlertRecord[];
+  services: Record<ManagedServiceKind, ManagedServiceSummary[]>;
 }
 const EMPTY_HOST_STATE: HostState = {
   apps: [],
@@ -60,12 +62,19 @@ const EMPTY_HOST_STATE: HostState = {
   sshKeys: [],
   plugins: [],
   recentEvents: [],
-  services: {
+  alerts: [],
+  services: emptyServiceKindRecord(),
+};
+
+function emptyServiceKindRecord(): Record<ManagedServiceKind, ManagedServiceSummary[]> {
+  return {
     postgres: [],
     redis: [],
     mysql: [],
-  },
-};
+    mariadb: [],
+    mongodb: [],
+  };
+}
 
 export default function HostPage() {
   const tokenAccess = useTokenAccess();
@@ -100,9 +109,8 @@ function HostInner() {
         sshKeys,
         plugins,
         recentEvents,
-        postgres,
-        redis,
-        mysql,
+        alerts,
+        ...serviceLists
       ] = await Promise.all([
         fetchApps(),
         fetchRoutingStatus(),
@@ -111,9 +119,8 @@ function HostInner() {
         fetchSshKeys(),
         fetchPlugins(),
         fetchEvents(),
-        fetchManagedServices('postgres'),
-        fetchManagedServices('redis'),
-        fetchManagedServices('mysql'),
+        fetchAlerts(),
+        ...MANAGED_SERVICE_KINDS.map((kind) => fetchManagedServices(kind)),
       ]);
 
       const nextState = {
@@ -124,11 +131,10 @@ function HostInner() {
         sshKeys,
         plugins,
         recentEvents: recentEvents.slice(0, 18),
-        services: {
-          postgres,
-          redis,
-          mysql,
-        },
+        alerts,
+        services: Object.fromEntries(
+          MANAGED_SERVICE_KINDS.map((kind, index) => [kind, serviceLists[index]])
+        ) as Record<ManagedServiceKind, ManagedServiceSummary[]>,
       };
 
       setState(nextState);
@@ -168,8 +174,10 @@ function HostInner() {
     const liveApps = state.apps.filter((app) => app.status === 'deployed').length;
     const lockedApps = state.apps.filter((app) => app.locked).length;
     const readyRoutes = state.routing.apps.filter((app) => app.status === 'ready').length;
-    const totalServices =
-      state.services.postgres.length + state.services.redis.length + state.services.mysql.length;
+    const totalServices = Object.values(state.services).reduce(
+      (count, list) => count + list.length,
+      0
+    );
 
     return {
       totalApps: state.apps.length,
@@ -179,6 +187,12 @@ function HostInner() {
       totalServices,
     };
   }, [state]);
+
+  // Flattened for the datastore badges, which span every service kind.
+  const allServices = useMemo(
+    () => MANAGED_SERVICE_KINDS.flatMap((kind) => state.services[kind]),
+    [state.services]
+  );
 
   if (loading) {
     return (
@@ -330,18 +344,12 @@ function HostInner() {
           <div className="summary-card-body">
             <h2 className="section-title">Datastores</h2>
             <dl className="data-grid">
-              <div>
-                <dt>Postgres</dt>
-                <dd>{state.services.postgres.length}</dd>
-              </div>
-              <div>
-                <dt>Redis</dt>
-                <dd>{state.services.redis.length}</dd>
-              </div>
-              <div>
-                <dt>MySQL</dt>
-                <dd>{state.services.mysql.length}</dd>
-              </div>
+              {MANAGED_SERVICE_KINDS.map((kind) => (
+                <div key={kind}>
+                  <dt>{SERVICE_KIND_LABELS[kind]}</dt>
+                  <dd>{state.services[kind].length}</dd>
+                </div>
+              ))}
               <div>
                 <dt>Total</dt>
                 <dd>{metrics.totalServices}</dd>
@@ -349,19 +357,20 @@ function HostInner() {
             </dl>
             {metrics.totalServices === 0 ? (
               <p className="text-muted">
-                No managed services yet. Open services to provision Postgres, Redis, or MySQL.
+                No managed services yet. Open services to provision Postgres, MySQL, MariaDB, Redis,
+                or MongoDB.
               </p>
             ) : (
               <div className="button-row">
-                {state.services.postgres.slice(0, 2).map((service) => (
+                {allServices.slice(0, 2).map((service) => (
                   <ServiceStateBadge
-                    key={service.name}
+                    key={`${service.plugin}:${service.name}`}
                     label={service.name}
                     status={service.status}
                   />
                 ))}
-                {state.services.postgres.length > 2 ? (
-                  <span className="text-muted">and {state.services.postgres.length - 2} more</span>
+                {allServices.length > 2 ? (
+                  <span className="text-muted">and {allServices.length - 2} more</span>
                 ) : null}
               </div>
             )}
@@ -395,6 +404,42 @@ function HostInner() {
               Open plugins
             </a>
           </div>
+        </article>
+
+        <article className="panel stack-md">
+          <h2 className="section-title">Alerts</h2>
+          {state.alerts.length === 0 ? (
+            <p className="text-muted">
+              No active alerts. Certificates, container health, backups, object store reachability,
+              and disk usage are checked on a timer.
+            </p>
+          ) : (
+            <TableScroll>
+              <table className="table">
+                <caption className="sr-only">Active alerts for this host</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Severity</th>
+                    <th scope="col">Rule</th>
+                    <th scope="col">Subject</th>
+                    <th scope="col">Since</th>
+                    <th scope="col">Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.alerts.map((alert) => (
+                    <tr key={alert.id}>
+                      <td className="font-mono">{alert.severity}</td>
+                      <td className="font-mono">{alert.rule}</td>
+                      <td className="font-mono">{alert.subject}</td>
+                      <td className="font-mono">{formatDate(alert.first_seen_at)}</td>
+                      <td>{alert.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TableScroll>
+          )}
         </article>
 
         <article className="panel stack-md">

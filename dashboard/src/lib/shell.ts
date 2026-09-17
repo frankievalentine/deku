@@ -6,6 +6,7 @@ export interface NavItem {
   id: string;
   icon: IconName;
   description: string;
+  external?: boolean;
 }
 
 export interface CommandItem {
@@ -15,6 +16,7 @@ export interface CommandItem {
   kind: 'page' | 'action';
   icon: IconName;
   href?: string;
+  external?: boolean;
   shortcutKey?: string;
   action?:
     | 'open-create-app'
@@ -91,6 +93,14 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'plugins',
     icon: 'plugins',
     description: 'Review loaded plugins',
+  },
+  {
+    href: '/api/docs',
+    label: 'API',
+    id: 'api',
+    icon: 'api',
+    description: 'REST API reference',
+    external: true,
   },
   {
     href: '/settings',

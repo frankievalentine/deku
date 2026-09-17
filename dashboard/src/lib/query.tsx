@@ -43,6 +43,7 @@ import {
   fetchTlsStatus,
   fetchVersionStatus,
   linkManagedService,
+  MANAGED_SERVICE_KINDS,
   type ManagedServiceDetail,
   type ManagedServiceKind,
   type ManagedServiceSummary,
@@ -119,7 +120,7 @@ export const queryKeys = {
     overview: ['services', 'overview'] as const,
     list: (kind: ManagedServiceKind) => ['services', 'list', kind] as const,
     detail: (kind: ManagedServiceKind, name: string) => ['services', 'detail', kind, name] as const,
-    backups: (kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>, name: string) =>
+    backups: (kind: ManagedServiceKind, name: string) =>
       ['services', 'backups', kind, name] as const,
   },
   settings: {
@@ -299,20 +300,16 @@ export function servicesOverviewQueryOptions(options?: QueryEnabledOnly) {
   return queryOptions({
     queryKey: queryKeys.services.overview,
     queryFn: async (): Promise<ServiceOverview> => {
-      const [apps, postgres, redis, mysql] = await Promise.all([
+      const [apps, ...serviceLists] = await Promise.all([
         fetchApps(),
-        fetchManagedServices('postgres'),
-        fetchManagedServices('redis'),
-        fetchManagedServices('mysql'),
+        ...MANAGED_SERVICE_KINDS.map((kind) => fetchManagedServices(kind)),
       ]);
 
       return {
         apps,
-        servicesByKind: {
-          postgres,
-          redis,
-          mysql,
-        },
+        servicesByKind: Object.fromEntries(
+          MANAGED_SERVICE_KINDS.map((kind, index) => [kind, serviceLists[index]])
+        ) as Record<ManagedServiceKind, ManagedServiceSummary[]>,
       };
     },
     enabled: options?.enabled,
@@ -340,7 +337,7 @@ export function managedServiceDetailQueryOptions(
 }
 
 export function useManagedServiceBackupsQuery(
-  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  kind: ManagedServiceKind,
   name: string,
   options?: QueryEnabledOnly
 ) {
@@ -348,7 +345,7 @@ export function useManagedServiceBackupsQuery(
 }
 
 export function managedServiceBackupsQueryOptions(
-  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  kind: ManagedServiceKind,
   name: string,
   options?: QueryEnabledOnly
 ) {
@@ -861,13 +858,8 @@ export function useTriggerServiceBackupMutation() {
 
 export function triggerServiceBackupMutationOptions(queryClient: QueryClientType) {
   return mutationOptions({
-    mutationFn: ({
-      kind,
-      name,
-    }: {
-      kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>;
-      name: string;
-    }) => triggerServiceBackup(kind, name),
+    mutationFn: ({ kind, name }: { kind: ManagedServiceKind; name: string }) =>
+      triggerServiceBackup(kind, name),
     onSuccess: async (_result, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({
@@ -894,7 +886,7 @@ export function restoreServiceBackupMutationOptions(queryClient: QueryClientType
       name,
       backupId,
     }: {
-      kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>;
+      kind: ManagedServiceKind;
       name: string;
       backupId: string;
     }) => restoreServiceBackup(kind, name, backupId),

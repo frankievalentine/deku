@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  Braces,
   Cloud,
   Command,
   Copy,
@@ -34,6 +35,7 @@ export type IconName =
   | 'ssh-keys'
   | 'plugins'
   | 'settings'
+  | 'api'
   | 'search'
   | 'menu'
   | 'theme-light'
@@ -58,6 +60,7 @@ const ICONS: Record<IconName, ComponentType<SVGProps<SVGSVGElement>>> = {
   'ssh-keys': KeyRound,
   plugins: PlugZap,
   settings: Settings2,
+  api: Braces,
   search: Search,
   menu: Menu,
   'theme-light': SunMedium,

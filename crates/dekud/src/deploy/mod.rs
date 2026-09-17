@@ -36,9 +36,209 @@ pub struct DeployRequest {
     pub app_name: String,
     pub source: DeploySource,
     pub force_builder: Option<String>,
+    /// `None` uses the configured build host when one exists, `local` disables
+    /// offloading for this deploy, and any other value must match the configured
+    /// build host name.
+    pub build_host: Option<String>,
+}
+
+/// Decide whether this deploy should build on the configured build host.
+fn resolve_build_host<'a>(
+    cfg: &'a DekuConfig,
+    requested: Option<&str>,
+) -> anyhow::Result<Option<&'a crate::config::BuildHostConfig>> {
+    match requested {
+        None => Ok(cfg.build_host.as_ref()),
+        Some("local") => Ok(None),
+        Some(name) => match cfg.build_host.as_ref() {
+            Some(host) if host.name == name => Ok(Some(host)),
+            Some(host) => Err(anyhow::anyhow!(
+                "unknown build host '{name}'; configured host is '{}', or pass '--build-host local'",
+                host.name
+            )),
+            None => Err(anyhow::anyhow!(
+                "no build host is configured; run 'deku build-host setup' or pass '--build-host local'"
+            )),
+        },
+    }
+}
+
+// ── Source build (local or remote build host) ─────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn build_from_source(
+    docker: &DockerClient,
+    events: &EventSender,
+    cfg: &DekuConfig,
+    plugins: &crate::plugins::PluginRegistry,
+    req: &DeployRequest,
+    app: &deku_core::types::App,
+    deploy_id: &str,
+    source_path: &std::path::Path,
+    image_tag: &str,
+    use_build_host: bool,
+) -> anyhow::Result<(BuiltImage, Option<DekuToml>)> {
+    let deku_toml = load_deku_toml(source_path);
+    let forced = req.force_builder.as_deref().or_else(|| {
+        deku_toml
+            .as_ref()
+            .and_then(|t| t.build.as_ref())
+            .and_then(|b| b.builder.as_deref())
+    });
+
+    let builder = select_builder(source_path, forced).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let builder_name = builder.name();
+
+    if use_build_host && crate::build_remote::supports_remote_build(builder_name) {
+        let registry = cfg.registry.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote builds require a registry: configure one with 'deku registry setup', or pass '--build-host local'"
+            )
+        })?;
+        let reference = registry.image_reference(&app.name, deploy_id);
+        let host_name = cfg
+            .build_host
+            .as_ref()
+            .map(|host| host.name.as_str())
+            .unwrap_or("build host");
+
+        let ctx = BuildContext {
+            app: app.clone(),
+            source_dir: source_path.to_path_buf(),
+            data_dir: cfg.data_dir.clone(),
+            buildkit_host: None,
+        };
+
+        tracing::info!(
+            app = %app.name,
+            builder = builder_name,
+            build_host = host_name,
+            "building on remote build host"
+        );
+        plugins.run_pre_build(&ctx).await;
+        crate::hooks::fire(
+            cfg,
+            crate::hooks::HookEvent::PreBuild,
+            crate::hooks::HookEventData {
+                app,
+                deployment: None,
+                detail: serde_json::json!({
+                    "deploy_id": deploy_id,
+                    "builder": builder_name,
+                    "build_host": host_name,
+                }),
+            },
+        )
+        .await?;
+        crate::build_remote::build_remote(
+            source_path,
+            builder_name,
+            deku_toml.as_ref(),
+            cfg,
+            events,
+            &app.id,
+            &reference,
+        )
+        .await?;
+        plugins.run_post_build(&ctx).await;
+        crate::hooks::fire(
+            cfg,
+            crate::hooks::HookEvent::PostBuild,
+            crate::hooks::HookEventData {
+                app,
+                deployment: None,
+                detail: serde_json::json!({ "deploy_id": deploy_id, "builder": builder_name }),
+            },
+        )
+        .await?;
+
+        events.emit(
+            Some(app.id.clone()),
+            "build.log",
+            Some(serde_json::json!({ "line": format!("Pulling {reference} on the deploy host") })),
+        );
+        let events_clone = events.clone();
+        let app_id_clone = app.id.clone();
+        container::pull_image(docker, &reference, |status| {
+            events_clone.emit(
+                Some(app_id_clone.clone()),
+                "build.log",
+                Some(serde_json::json!({ "line": status })),
+            );
+        })
+        .await?;
+        container::tag_image(
+            docker,
+            &reference,
+            &deployment_image_repo(&app.name),
+            &deployment_image_id(deploy_id),
+        )
+        .await?;
+
+        let exposed_ports = get_exposed_ports(docker, image_tag).await;
+        let procfile = crate::build::extract_procfile(docker, image_tag).await;
+
+        return Ok((
+            BuiltImage {
+                tag: image_tag.to_string(),
+                exposed_ports,
+                procfile,
+            },
+            deku_toml,
+        ));
+    }
+
+    let buildkit_host = if builder_name == "railpack" {
+        Some(crate::buildkit::resolve_host(docker, cfg).await?)
+    } else {
+        None
+    };
+    let ctx = BuildContext {
+        app: app.clone(),
+        source_dir: source_path.to_path_buf(),
+        data_dir: cfg.data_dir.clone(),
+        buildkit_host,
+    };
+
+    tracing::info!(app = %app.name, builder = builder_name, "selected builder");
+    plugins.run_pre_build(&ctx).await;
+    crate::hooks::fire(
+        cfg,
+        crate::hooks::HookEvent::PreBuild,
+        crate::hooks::HookEventData {
+            app,
+            deployment: None,
+            detail: serde_json::json!({ "deploy_id": deploy_id, "builder": builder_name }),
+        },
+    )
+    .await?;
+    let built = builder
+        .build(&ctx, deku_toml.as_ref(), docker, events, image_tag)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    plugins.run_post_build(&ctx).await;
+    crate::hooks::fire(
+        cfg,
+        crate::hooks::HookEvent::PostBuild,
+        crate::hooks::HookEventData {
+            app,
+            deployment: None,
+            detail: serde_json::json!({ "deploy_id": deploy_id, "builder": builder_name }),
+        },
+    )
+    .await?;
+    Ok((built, deku_toml))
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────
+/// Replica indices that failed their readiness check, in order.
+fn unready_replicas(results: &[(usize, u16, bool)]) -> Vec<usize> {
+    results
+        .iter()
+        .filter(|(_, _, ready)| !ready)
+        .map(|(replica, _, _)| *replica)
+        .collect()
+}
 
 async fn run_health_check(host_port: u16, path: &str, timeout_secs: u64, attempts: u32) -> bool {
     let url = format!("http://127.0.0.1:{host_port}{path}");
@@ -175,6 +375,34 @@ pub async fn run_deploy(
     // Wrap the rest in a closure so we can always update deployment status on failure
     let result = do_deploy(pool, docker, events, cfg, plugins, &req, &mut deployment).await;
 
+    // Resolve the app once for hook payloads; a hook failure never changes the
+    // deploy outcome, so these two events are advisory.
+    if let Ok(app) = queries::get_app(pool, app_name).await {
+        let (event, detail) = match &result {
+            Ok(_) => (
+                crate::hooks::HookEvent::DeploySucceeded,
+                serde_json::json!({ "deploy_id": deploy_id }),
+            ),
+            Err(error) => (
+                crate::hooks::HookEvent::DeployFailed,
+                serde_json::json!({ "deploy_id": deploy_id, "error": error.to_string() }),
+            ),
+        };
+        if let Err(error) = crate::hooks::fire(
+            cfg,
+            event,
+            crate::hooks::HookEventData {
+                app: &app,
+                deployment: Some(&deployment),
+                detail,
+            },
+        )
+        .await
+        {
+            tracing::warn!("{} hook reported an error: {error}", event.as_str());
+        }
+    }
+
     match result {
         Ok(ref _image_tag) => {
             queries::update_app_status(pool, app_id, AppStatus::Deployed).await?;
@@ -221,6 +449,7 @@ async fn do_deploy(
     let app_name = &req.app_name;
     let deploy_id = &deployment.id;
     let app = queries::get_app_by_id(pool, app_id).await?;
+    let use_build_host = resolve_build_host(cfg, req.build_host.as_deref())?.is_some();
 
     // ── Build phase ───────────────────────────────────────────────────────────
 
@@ -316,30 +545,19 @@ async fn do_deploy(
             tar_archive.unpack(tmp_dir.path())?;
 
             let source_path = tmp_dir.path().to_path_buf();
-            let deku_toml = load_deku_toml(&source_path);
-
-            let builder = select_builder(&source_path, req.force_builder.as_deref())
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let buildkit_host = if builder.name() == "railpack" {
-                Some(crate::buildkit::resolve_host(docker, cfg).await?)
-            } else {
-                None
-            };
-            let ctx = BuildContext {
-                app: app.clone(),
-                source_dir: source_path.clone(),
-                data_dir: cfg.data_dir.clone(),
-                buildkit_host,
-            };
-
-            tracing::info!(app = app_name, builder = builder.name(), "selected builder");
-            plugins.run_pre_build(&ctx).await;
-            let built = builder
-                .build(&ctx, deku_toml.as_ref(), docker, events, &image_tag)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            plugins.run_post_build(&ctx).await;
-            (built, deku_toml)
+            build_from_source(
+                docker,
+                events,
+                cfg,
+                plugins,
+                req,
+                &app,
+                deploy_id,
+                &source_path,
+                &image_tag,
+                use_build_host,
+            )
+            .await?
         }
 
         DeploySource::Source { path } => {
@@ -372,35 +590,19 @@ async fn do_deploy(
                 }
             }
 
-            let deku_toml = load_deku_toml(path);
-            let forced = req.force_builder.as_deref().or_else(|| {
-                deku_toml
-                    .as_ref()
-                    .and_then(|t| t.build.as_ref())
-                    .and_then(|b| b.builder.as_deref())
-            });
-
-            let builder = select_builder(path, forced).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let buildkit_host = if builder.name() == "railpack" {
-                Some(crate::buildkit::resolve_host(docker, cfg).await?)
-            } else {
-                None
-            };
-            let ctx = BuildContext {
-                app: app.clone(),
-                source_dir: path.clone(),
-                data_dir: cfg.data_dir.clone(),
-                buildkit_host,
-            };
-
-            tracing::info!(app = app_name, builder = builder.name(), "selected builder");
-            plugins.run_pre_build(&ctx).await;
-            let built = builder
-                .build(&ctx, deku_toml.as_ref(), docker, events, &image_tag)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            plugins.run_post_build(&ctx).await;
-            (built, deku_toml)
+            build_from_source(
+                docker,
+                events,
+                cfg,
+                plugins,
+                req,
+                &app,
+                deploy_id,
+                path,
+                &image_tag,
+                use_build_host,
+            )
+            .await?
         }
     };
 
@@ -466,6 +668,18 @@ async fn do_deploy(
         })
         .await;
 
+    // A blocking pre_deploy hook can stop the rollout before any container moves.
+    crate::hooks::fire(
+        cfg,
+        crate::hooks::HookEvent::PreDeploy,
+        crate::hooks::HookEventData {
+            app: &app,
+            deployment: Some(deployment),
+            detail: serde_json::json!({ "image_tag": built.tag }),
+        },
+    )
+    .await?;
+
     // Collect previous containers for retirement
     let previous_containers = queries::list_containers_for_app(pool, app_id).await?;
 
@@ -485,6 +699,10 @@ async fn do_deploy(
     let scales = queries::get_process_scales(pool, app_id).await?;
 
     let mut new_container_ids = Vec::new();
+    // Every web replica, as (replica index, host port). Readiness must cover all
+    // of them: a deploy that goes live with one broken replica is worse than one
+    // that keeps the previous version serving.
+    let mut web_replicas: Vec<(usize, u16)> = Vec::new();
     let mut web_host_port: Option<u16> = None;
 
     for entry in &run_entries {
@@ -498,6 +716,7 @@ async fn do_deploy(
                 if i == 0 {
                     web_host_port = Some(p);
                 }
+                web_replicas.push((i, p));
                 p
             } else {
                 0 // non-web processes don't need host port binding
@@ -618,14 +837,34 @@ async fn do_deploy(
 
         tokio::time::sleep(std::time::Duration::from_secs(health_wait)).await;
 
-        let healthy = run_health_check(port, &health_path, health_timeout, health_attempts).await;
+        // Gate the whole rollout on every replica, not just the first one.
+        let mut results: Vec<(usize, u16, bool)> = Vec::with_capacity(web_replicas.len());
+        for (replica, replica_port) in &web_replicas {
+            let ready =
+                run_health_check(*replica_port, &health_path, health_timeout, health_attempts)
+                    .await;
+            events.emit(
+                Some(app_id.clone()),
+                "deploy.replica_ready",
+                Some(serde_json::json!({
+                    "replica": replica,
+                    "port": replica_port,
+                    "ready": ready,
+                })),
+            );
+            results.push((*replica, *replica_port, ready));
+        }
 
-        if !healthy {
-            // Rollback: stop new containers
+        let unready = unready_replicas(&results);
+        if !unready.is_empty() {
+            // Rollback: stop new containers, keep the previous version serving.
             events.emit(
                 Some(app_id.clone()),
                 "deploy.rollback",
-                Some(serde_json::json!({ "reason": "health checks failed" })),
+                Some(serde_json::json!({
+                    "reason": "health checks failed",
+                    "unready_replicas": unready,
+                })),
             );
             for id in &new_container_ids {
                 let _ = container::stop_container(docker, id, 10).await;
@@ -635,7 +874,12 @@ async fn do_deploy(
             queries::update_deployment(pool, deploy_id, DeployStatus::Failed, Some(&built.tag))
                 .await?;
             return Err(anyhow::anyhow!(
-                "health checks failed after {health_attempts} attempts"
+                "health checks failed for web {} after {health_attempts} attempts",
+                if unready.len() == 1 {
+                    format!("replica {}", unready[0])
+                } else {
+                    format!("replicas {unready:?}")
+                }
             ));
         }
 
@@ -646,10 +890,16 @@ async fn do_deploy(
             .map(|app| app.tls_enabled)
             .unwrap_or(false);
         if !domains.is_empty() {
-            let upstreams = vec![deku_core::types::Upstream {
-                host: "127.0.0.1".to_string(),
-                port,
-            }];
+            // One upstream per web replica, so scaling the web process actually
+            // spreads traffic instead of leaving extra replicas idle.
+            let upstreams: Vec<deku_core::types::Upstream> = web_replicas
+                .iter()
+                .map(|(_, replica_port)| deku_core::types::Upstream {
+                    host: "127.0.0.1".to_string(),
+                    port: *replica_port,
+                })
+                .collect();
+            let extras = proxy::load_extras(pool, app_id).await.unwrap_or_default();
             if let Err(e) = proxy::apply_app_config(
                 &cfg.angie_conf_dir,
                 app_name,
@@ -657,6 +907,10 @@ async fn do_deploy(
                     domains: &domains,
                     upstreams: &upstreams,
                     tls: tls_enabled,
+                    auth: extras.auth.as_ref(),
+                    maintenance: extras.maintenance,
+                    maintenance_message: extras.maintenance_message.as_deref(),
+                    redirects: &extras.redirects,
                 }),
             )
             .await
@@ -740,11 +994,26 @@ async fn do_deploy(
 
     plugins
         .run_post_deploy(&DeployContext {
-            app,
+            app: app.clone(),
             deployment: deployment.clone(),
             data_dir: cfg.data_dir.clone(),
         })
         .await;
+
+    if let Err(error) = crate::hooks::fire(
+        cfg,
+        crate::hooks::HookEvent::PostDeploy,
+        crate::hooks::HookEventData {
+            app: &app,
+            deployment: Some(deployment),
+            detail: serde_json::json!({ "image_tag": built.tag }),
+        },
+    )
+    .await
+    {
+        // Post-deploy hooks are advisory; the rollout already succeeded.
+        tracing::warn!("post_deploy hook reported an error: {error}");
+    }
 
     // ── Retire old containers ─────────────────────────────────────────────────
 
@@ -905,6 +1174,7 @@ pub async fn rollback(
             reference: image_tag.to_string(),
         },
         force_builder: Some("image".to_string()),
+        build_host: Some("local".to_string()),
     };
 
     run_deploy(pool, docker, events, cfg, plugins, req).await?;
@@ -933,7 +1203,7 @@ fn load_deku_toml(source_dir: &std::path::Path) -> Option<DekuToml> {
 }
 
 /// Parse memory string like "512m", "1g", "1024k" into bytes.
-fn parse_memory_bytes(mem: &str) -> Option<i64> {
+pub(crate) fn parse_memory_bytes(mem: &str) -> Option<i64> {
     let mem = mem.trim().to_lowercase();
     if let Some(stripped) = mem.strip_suffix('g') {
         return stripped.parse::<i64>().ok().map(|n| n * 1024 * 1024 * 1024);
@@ -949,7 +1219,7 @@ fn parse_memory_bytes(mem: &str) -> Option<i64> {
 
 /// Parse CPU string like "0.5" (cores) or "500m" (millicores) into Docker cpu_quota.
 /// Docker cpu_period defaults to 100_000 µs. quota = cores * period.
-fn parse_cpu_quota(cpu: &str) -> Option<i64> {
+pub(crate) fn parse_cpu_quota(cpu: &str) -> Option<i64> {
     let cpu = cpu.trim().to_lowercase();
     const PERIOD: i64 = 100_000;
 
@@ -967,6 +1237,37 @@ fn parse_cpu_quota(cpu: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use deku_core::types::NewApp;
+
+    #[test]
+    fn unready_replicas_reports_every_failing_index() {
+        let results = vec![
+            (0usize, 30001u16, true),
+            (1, 30002, false),
+            (2, 30003, false),
+        ];
+        assert_eq!(super::unready_replicas(&results), vec![1, 2]);
+    }
+
+    #[test]
+    fn unready_replicas_is_empty_when_all_are_ready() {
+        let results = vec![(0usize, 30001u16, true), (1, 30002, true)];
+        assert!(super::unready_replicas(&results).is_empty());
+        assert!(super::unready_replicas(&[]).is_empty());
+    }
+
+    #[test]
+    fn parses_memory_and_cpu_limits() {
+        assert_eq!(parse_memory_bytes("512m"), Some(512 * 1024 * 1024));
+        assert_eq!(parse_memory_bytes("1g"), Some(1024 * 1024 * 1024));
+        assert_eq!(parse_memory_bytes("1024k"), Some(1024 * 1024));
+        assert_eq!(parse_memory_bytes("2048"), Some(2048));
+        assert_eq!(parse_memory_bytes("512q"), None);
+
+        assert_eq!(parse_cpu_quota("0.5"), Some(50_000));
+        assert_eq!(parse_cpu_quota("500m"), Some(50_000));
+        assert_eq!(parse_cpu_quota("1"), Some(100_000));
+        assert_eq!(parse_cpu_quota("fast"), None);
+    }
 
     fn docker_tests_enabled() -> bool {
         std::env::var("DEKU_DOCKER_IT").is_ok()
@@ -1029,6 +1330,7 @@ mod tests {
                         reference: reference.to_string(),
                     },
                     force_builder: None,
+                    build_host: None,
                 },
             )
             .await

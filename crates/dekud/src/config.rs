@@ -35,6 +35,188 @@ pub struct DekuConfig {
     pub buildkit: Option<BuildkitConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard_auth: Option<DashboardTokenState>,
+    /// Docker registry used by remote build hosts to transfer images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<RegistryConfig>,
+    /// SSH build host that offloads image builds off the deploy host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_host: Option<BuildHostConfig>,
+    /// Out-of-process lifecycle hooks, delivered over HTTP.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HookConfig>,
+    /// Key material used to encrypt service backups before upload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_encryption: Option<BackupEncryptionConfig>,
+    /// Background alert evaluation.
+    #[serde(default)]
+    pub alerts: AlertsConfig,
+}
+
+/// Settings for the fixed-rule alert watcher.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AlertsConfig {
+    /// Evaluate rules on a timer. Disable to rely on `/api/metrics` alone.
+    #[serde(default = "default_alerts_enabled")]
+    pub enabled: bool,
+    /// Seconds between evaluations.
+    #[serde(default = "default_alert_interval_secs")]
+    pub interval_secs: u64,
+    /// Filesystem usage that raises a warning.
+    #[serde(default = "default_disk_warn_percent")]
+    pub disk_warn_percent: u8,
+    /// Filesystem usage that raises a critical alert.
+    #[serde(default = "default_disk_critical_percent")]
+    pub disk_critical_percent: u8,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_alerts_enabled(),
+            interval_secs: default_alert_interval_secs(),
+            disk_warn_percent: default_disk_warn_percent(),
+            disk_critical_percent: default_disk_critical_percent(),
+        }
+    }
+}
+
+fn default_alerts_enabled() -> bool {
+    true
+}
+
+fn default_alert_interval_secs() -> u64 {
+    300
+}
+
+fn default_disk_warn_percent() -> u8 {
+    85
+}
+
+fn default_disk_critical_percent() -> u8 {
+    95
+}
+
+/// Key material for encrypting service backups at rest.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackupEncryptionConfig {
+    /// Inline key: 64 hex characters or base64-encoded 32 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// File containing the key, read on every use. Prefer this over `key` so
+    /// the secret stays out of the config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HookConfig {
+    /// Endpoint that receives lifecycle events.
+    pub url: String,
+    /// Shared secret. When set, each request carries an HMAC-SHA256 signature
+    /// of the body in `X-Deku-Signature`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Events to deliver, e.g. `["pre_deploy", "deploy.failed"]`. Omit for all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<String>>,
+    /// When true, a failing hook fails a `pre_build` or `pre_deploy` event.
+    #[serde(default)]
+    pub blocking: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RegistryConfig {
+    /// Registry host plus optional repository owner path, e.g. `ghcr.io/acme`.
+    pub server: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// Repository prefix inserted between the server and the app name.
+    #[serde(default = "default_registry_namespace")]
+    pub namespace: String,
+}
+
+impl RegistryConfig {
+    pub fn redacted(&self) -> Self {
+        let mut clone = self.clone();
+        clone.password = match self.password.as_deref() {
+            Some(password) if !password.is_empty() => Some("********".to_string()),
+            other => other.map(str::to_string),
+        };
+        clone
+    }
+
+    pub fn has_credentials(&self) -> bool {
+        self.username
+            .as_deref()
+            .is_some_and(|u| !u.trim().is_empty())
+            && self.password.as_deref().is_some_and(|p| !p.is_empty())
+    }
+
+    /// Repository (without tag) for an app, e.g. `ghcr.io/acme/deku/myapp`.
+    pub fn repository(&self, app_name: &str) -> String {
+        let server = self.server.trim().trim_end_matches('/');
+        let namespace = self.namespace.trim().trim_matches('/');
+        if namespace.is_empty() {
+            format!("{server}/{app_name}")
+        } else {
+            format!("{server}/{namespace}/{app_name}")
+        }
+    }
+
+    /// Immutable image reference for a deployment.
+    pub fn image_reference(&self, app_name: &str, deploy_id: &str) -> String {
+        format!(
+            "{}:{}",
+            self.repository(app_name),
+            crate::build::deployment_image_id(deploy_id)
+        )
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BuildHostConfig {
+    /// Logical name accepted by `--build-host`.
+    #[serde(default = "default_build_host_name")]
+    pub name: String,
+    /// SSH destination, `user@host` or `ssh://user@host[:port]`.
+    pub host: String,
+    /// Private key handed to `ssh -i`. Falls back to the local SSH config/agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_file: Option<PathBuf>,
+    /// BuildKit endpoint used by railpack on the build host.
+    #[serde(default = "default_remote_buildkit_host")]
+    pub buildkit_host: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshTarget {
+    pub destination: String,
+    pub port: Option<u16>,
+}
+
+impl BuildHostConfig {
+    pub fn ssh_target(&self) -> SshTarget {
+        let trimmed = self.host.trim();
+        let raw = trimmed.strip_prefix("ssh://").unwrap_or(trimmed);
+        match raw.rsplit_once(':') {
+            Some((host, port))
+                if !host.contains(':')
+                    && !port.is_empty()
+                    && port.chars().all(|c| c.is_ascii_digit()) =>
+            {
+                SshTarget {
+                    destination: host.to_string(),
+                    port: port.parse().ok(),
+                }
+            }
+            _ => SshTarget {
+                destination: raw.to_string(),
+                port: None,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -79,6 +261,11 @@ struct RawDekuConfig {
     object_store: Option<ObjectStoreConfig>,
     dashboard_auth: Option<DashboardTokenState>,
     buildkit: Option<BuildkitConfig>,
+    registry: Option<RegistryConfig>,
+    build_host: Option<BuildHostConfig>,
+    hooks: Option<Vec<HookConfig>>,
+    backup_encryption: Option<BackupEncryptionConfig>,
+    alerts: Option<AlertsConfig>,
 }
 
 fn default_config_dir() -> PathBuf {
@@ -137,6 +324,18 @@ fn default_buildkit_container_name() -> String {
     "deku-buildkit".to_string()
 }
 
+fn default_registry_namespace() -> String {
+    "deku".to_string()
+}
+
+fn default_build_host_name() -> String {
+    "builder".to_string()
+}
+
+fn default_remote_buildkit_host() -> String {
+    "docker-container://deku-buildkit".to_string()
+}
+
 fn default_angie_conf_dir() -> PathBuf {
     PathBuf::from("/etc/angie/conf.d/deku")
 }
@@ -165,6 +364,46 @@ impl Default for DekuConfig {
             object_store: None,
             buildkit: None,
             dashboard_auth: None,
+            registry: None,
+            build_host: None,
+            hooks: Vec::new(),
+            backup_encryption: None,
+            alerts: AlertsConfig::default(),
+        }
+    }
+}
+
+impl DekuConfig {
+    /// Resolve the backup encryption key, if one is configured.
+    ///
+    /// Precedence is `DEKU_BACKUP_KEY`, then `[backup_encryption] key`, then
+    /// `key_file`. `Ok(None)` means backups are uploaded unencrypted.
+    pub fn backup_cipher(&self) -> Result<Option<crate::backup_crypto::BackupCipher>> {
+        let raw = match std::env::var("DEKU_BACKUP_KEY") {
+            Ok(value) if !value.trim().is_empty() => Some(value),
+            _ => match self.backup_encryption.as_ref() {
+                Some(cfg) => match (cfg.key.as_ref(), cfg.key_file.as_ref()) {
+                    (Some(key), _) => Some(key.clone()),
+                    (None, Some(path)) => Some(std::fs::read_to_string(path).map_err(|error| {
+                        anyhow::anyhow!(
+                            "failed to read backup encryption key file {}: {error}",
+                            path.display()
+                        )
+                    })?),
+                    (None, None) => None,
+                },
+                None => None,
+            },
+        };
+
+        match raw {
+            Some(value) => {
+                let key = crate::backup_crypto::parse_key(&value)?;
+                Ok(Some(crate::backup_crypto::BackupCipher::from_key_bytes(
+                    &key,
+                )?))
+            }
+            None => Ok(None),
         }
     }
 }
@@ -245,6 +484,11 @@ pub fn load() -> Result<DekuConfig> {
         object_store: raw.object_store,
         buildkit: raw.buildkit,
         dashboard_auth: raw.dashboard_auth,
+        registry: raw.registry,
+        build_host: raw.build_host,
+        hooks: raw.hooks.unwrap_or_default(),
+        backup_encryption: raw.backup_encryption,
+        alerts: raw.alerts.unwrap_or_default(),
     };
 
     Ok(cfg)
@@ -274,7 +518,71 @@ pub fn dashboard_assets_available(cfg: &DekuConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{secure_dir, write_private_file};
+
+    #[test]
+    fn backup_cipher_is_absent_without_configuration() {
+        let cfg = DekuConfig {
+            backup_encryption: None,
+            ..DekuConfig::default()
+        };
+        assert!(cfg.backup_cipher().expect("resolves").is_none());
+    }
+
+    #[test]
+    fn backup_cipher_accepts_an_inline_hex_key() {
+        let cfg = DekuConfig {
+            backup_encryption: Some(BackupEncryptionConfig {
+                key: Some("0123456789abcdef".repeat(4)),
+                key_file: None,
+            }),
+            ..DekuConfig::default()
+        };
+        assert!(cfg.backup_cipher().expect("resolves").is_some());
+    }
+
+    #[test]
+    fn backup_cipher_reads_a_key_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("backup.key");
+        std::fs::write(&path, "ab".repeat(32)).expect("write key");
+        let cfg = DekuConfig {
+            backup_encryption: Some(BackupEncryptionConfig {
+                key: None,
+                key_file: Some(path),
+            }),
+            ..DekuConfig::default()
+        };
+        assert!(cfg.backup_cipher().expect("resolves").is_some());
+    }
+
+    #[test]
+    fn backup_cipher_rejects_a_bad_key() {
+        let cfg = DekuConfig {
+            backup_encryption: Some(BackupEncryptionConfig {
+                key: Some("too-short".to_string()),
+                key_file: None,
+            }),
+            ..DekuConfig::default()
+        };
+        assert!(cfg.backup_cipher().is_err());
+    }
+
+    #[test]
+    fn backup_cipher_reports_a_missing_key_file() {
+        let cfg = DekuConfig {
+            backup_encryption: Some(BackupEncryptionConfig {
+                key: None,
+                key_file: Some(PathBuf::from("/nonexistent/deku/backup.key")),
+            }),
+            ..DekuConfig::default()
+        };
+        let error = cfg.backup_cipher().expect_err("missing file should fail");
+        assert!(error
+            .to_string()
+            .contains("failed to read backup encryption key file"));
+    }
+    use super::{secure_dir, write_private_file, BackupEncryptionConfig, DekuConfig};
+    use std::path::PathBuf;
 
     #[cfg(unix)]
     #[test]
@@ -309,5 +617,67 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(file_mode, 0o600);
+    }
+
+    #[test]
+    fn registry_reference_uses_namespace_and_deploy_id() {
+        let registry = super::RegistryConfig {
+            server: "ghcr.io/acme/".to_string(),
+            username: Some("acme".to_string()),
+            password: Some("hunter2".to_string()),
+            namespace: "deku".to_string(),
+        };
+
+        assert_eq!(registry.repository("demo"), "ghcr.io/acme/deku/demo");
+        assert_eq!(
+            registry.image_reference("demo", "3f2504e0-4f89-11d3-9a0c-0305e82c3301"),
+            "ghcr.io/acme/deku/demo:3f2504e04f89"
+        );
+        assert!(registry.has_credentials());
+
+        let redacted = registry.redacted();
+        assert_eq!(redacted.password.as_deref(), Some("********"));
+        assert_eq!(redacted.server, "ghcr.io/acme/");
+    }
+
+    #[test]
+    fn registry_without_namespace_puts_app_after_server() {
+        let registry = super::RegistryConfig {
+            server: "registry.internal:5000".to_string(),
+            username: None,
+            password: None,
+            namespace: String::new(),
+        };
+
+        assert_eq!(registry.repository("demo"), "registry.internal:5000/demo");
+        assert!(!registry.has_credentials());
+    }
+
+    #[test]
+    fn build_host_parses_ssh_scheme_and_port() {
+        let target = super::BuildHostConfig {
+            name: "builder".to_string(),
+            host: "ssh://deku@builder.internal:2222".to_string(),
+            identity_file: Some(PathBuf::from("/root/.deku/build_key")),
+            buildkit_host: "docker-container://deku-buildkit".to_string(),
+        }
+        .ssh_target();
+
+        assert_eq!(target.destination, "deku@builder.internal");
+        assert_eq!(target.port, Some(2222));
+    }
+
+    #[test]
+    fn build_host_defaults_port_when_absent() {
+        let target = super::BuildHostConfig {
+            name: "builder".to_string(),
+            host: "deku@10.0.0.5".to_string(),
+            identity_file: None,
+            buildkit_host: "docker-container://deku-buildkit".to_string(),
+        }
+        .ssh_target();
+
+        assert_eq!(target.destination, "deku@10.0.0.5");
+        assert_eq!(target.port, None);
     }
 }

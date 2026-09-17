@@ -126,6 +126,69 @@ pub fn mysql_spec() -> DbServiceSpec {
     }
 }
 
+/// MariaDB speaks the MySQL protocol and ships the same `mysqldump`-style
+/// tooling, so it reuses the SQL backup path with a different image and client
+/// binaries. It uses `MARIADB_URL` rather than `DATABASE_URL` so an app can link
+/// a MySQL and a MariaDB service at the same time.
+pub fn mariadb_spec() -> DbServiceSpec {
+    DbServiceSpec {
+        plugin: "mariadb",
+        image: "mariadb:11",
+        container_port: 3306,
+        env_key: "MARIADB_URL",
+        username: Some("deku"),
+        data_dir: "/var/lib/mysql",
+        make_env: |name, password| {
+            vec![
+                format!("MARIADB_ROOT_PASSWORD={password}"),
+                format!("MARIADB_DATABASE={name}"),
+                "MARIADB_USER=deku".into(),
+                format!("MARIADB_PASSWORD={password}"),
+            ]
+        },
+        make_cmd: |_name, _password| None,
+        make_url: |password, host, port, name| {
+            format!("mysql://deku:{password}@{host}:{port}/{name}")
+        },
+    }
+}
+
+/// MongoDB authenticates against the `admin` database, so the URL carries
+/// `authSource=admin` and the app database stays a separate namespace.
+pub fn mongodb_spec() -> DbServiceSpec {
+    DbServiceSpec {
+        plugin: "mongodb",
+        image: "mongo:7",
+        container_port: 27017,
+        env_key: "MONGODB_URL",
+        username: Some("deku"),
+        data_dir: "/data/db",
+        make_env: |name, password| {
+            vec![
+                "MONGO_INITDB_ROOT_USERNAME=deku".into(),
+                format!("MONGO_INITDB_ROOT_PASSWORD={password}"),
+                format!("MONGO_INITDB_DATABASE={name}"),
+            ]
+        },
+        make_cmd: |_name, _password| None,
+        make_url: |password, host, port, name| {
+            format!("mongodb://deku:{password}@{host}:{port}/{name}?authSource=admin")
+        },
+    }
+}
+
+/// Resolve a managed service plugin to its spec.
+pub fn spec_for(plugin: &str) -> Option<DbServiceSpec> {
+    match plugin {
+        "postgres" => Some(postgres_spec()),
+        "redis" => Some(redis_spec()),
+        "mysql" => Some(mysql_spec()),
+        "mariadb" => Some(mariadb_spec()),
+        "mongodb" => Some(mongodb_spec()),
+        _ => None,
+    }
+}
+
 pub fn parse_service_config(config: &str) -> Result<ServiceConfig> {
     serde_json::from_str(config).map_err(|e| anyhow!("invalid service config: {e}"))
 }
@@ -154,6 +217,91 @@ pub fn connection_info(
         ),
         volume: config.volume,
     })
+}
+
+/// Wait until the service accepts client connections.
+///
+/// An open TCP port is not enough: MariaDB and MySQL open the port before they
+/// finish initializing, so a backup or restore issued immediately after
+/// creation can hit a missing socket. Each plugin gets its own cheap probe.
+async fn wait_for_service_ready(
+    docker: &Docker,
+    plugin: &str,
+    container_name: &str,
+    password: &str,
+) -> Result<()> {
+    let (args, env): (Vec<String>, Vec<String>) = match plugin {
+        "postgres" => (
+            vec![
+                "pg_isready".to_string(),
+                "-U".to_string(),
+                "deku".to_string(),
+            ],
+            Vec::new(),
+        ),
+        "redis" => (
+            vec!["redis-cli".to_string(), "ping".to_string()],
+            vec![format!("REDISCLI_AUTH={password}")],
+        ),
+        // `mysqladmin ping` returns success even when authentication fails, and
+        // the entrypoint runs a temporary server before the configured password
+        // takes effect. Running a real query proves the credential works.
+        "mysql" => (
+            vec![
+                "mysql".to_string(),
+                "-u".to_string(),
+                "root".to_string(),
+                "-e".to_string(),
+                "SELECT 1".to_string(),
+            ],
+            vec![format!("MYSQL_PWD={password}")],
+        ),
+        "mariadb" => (
+            vec![
+                "mariadb".to_string(),
+                "-u".to_string(),
+                "root".to_string(),
+                "-e".to_string(),
+                "SELECT 1".to_string(),
+            ],
+            vec![format!("MYSQL_PWD={password}")],
+        ),
+        "mongodb" => (
+            vec![
+                "mongosh".to_string(),
+                format!(
+                    "mongodb://deku:{password}@127.0.0.1:{}/admin?authSource=admin",
+                    mongodb_spec().container_port
+                ),
+                "--quiet".to_string(),
+                "--eval".to_string(),
+                "db.runCommand({ping:1}).ok".to_string(),
+            ],
+            Vec::new(),
+        ),
+        _ => return Ok(()),
+    };
+
+    for _attempt in 0..60 {
+        let probe = exec_in_container(
+            docker,
+            container_name,
+            args.clone(),
+            env.clone(),
+            None,
+            None,
+        )
+        .await;
+
+        if probe.is_ok_and(|result| result.exit_code == 0) {
+            return Ok(());
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(anyhow!(
+        "{plugin} service on {container_name} did not become ready in time"
+    ))
 }
 
 async fn wait_for_tcp_port(host_port: u16) -> Result<()> {
@@ -280,6 +428,24 @@ pub async fn create(
         return Err(error);
     }
 
+    if let Err(error) =
+        wait_for_service_ready(docker, spec.plugin, &container_name, &password).await
+    {
+        let _ = docker
+            .remove_container(
+                &container_name,
+                Some(RemoveContainerOptionsBuilder::default().force(true).build()),
+            )
+            .await;
+        let _ = docker
+            .remove_volume(
+                &volume_name,
+                Some(RemoveVolumeOptionsBuilder::default().force(true).build()),
+            )
+            .await;
+        return Err(error);
+    }
+
     let config = serde_json::to_string(&ServiceConfig {
         password,
         host_port,
@@ -356,6 +522,31 @@ pub async fn link(
     Ok(())
 }
 
+/// Seal a dump for upload and report the label to record in the database.
+fn seal_backup(cfg: &DekuConfig, payload: Vec<u8>) -> Result<(Vec<u8>, &'static str)> {
+    match cfg.backup_cipher()? {
+        Some(cipher) => Ok((
+            cipher.seal(&payload)?,
+            crate::backup_crypto::ENCRYPTION_LABEL_AES256_GCM,
+        )),
+        None => Ok((payload, crate::backup_crypto::ENCRYPTION_LABEL_NONE)),
+    }
+}
+
+/// Decrypt a downloaded backup. Payloads written before encryption was enabled
+/// carry no envelope and pass through untouched.
+fn open_backup(cfg: &DekuConfig, payload: Vec<u8>) -> Result<Vec<u8>> {
+    if !crate::backup_crypto::is_encrypted(&payload) {
+        return Ok(payload);
+    }
+    let cipher = cfg.backup_cipher()?.ok_or_else(|| {
+        anyhow!(
+            "backup is encrypted but no key is configured; set DEKU_BACKUP_KEY or [backup_encryption]"
+        )
+    })?;
+    cipher.open(&payload)
+}
+
 pub async fn backup_postgres(
     pool: &SqlitePool,
     docker: &Docker,
@@ -411,16 +602,18 @@ pub async fn backup_postgres(
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
         Uuid::new_v4().simple()
     );
-    crate::objectstore::put_bytes(object_store, &object_key, exec.stdout.clone()).await?;
+    let (payload, encryption) = seal_backup(cfg, exec.stdout.clone())?;
+    crate::objectstore::put_bytes(object_store, &object_key, payload.clone()).await?;
 
-    let sha256 = hex::encode(Sha256::digest(&exec.stdout));
+    let sha256 = hex::encode(Sha256::digest(&payload));
     queries::create_service_backup(
         pool,
         &service.id,
         &object_key,
         "postgres.sql",
-        exec.stdout.len() as i64,
+        payload.len() as i64,
         &sha256,
+        encryption,
     )
     .await
     .map_err(Into::into)
@@ -462,6 +655,8 @@ pub async fn restore_postgres(
             payload_sha256
         ));
     }
+
+    let payload = open_backup(cfg, payload)?;
 
     let database_name = connection
         .database
@@ -527,6 +722,367 @@ pub async fn restore_postgres(
         .map_err(Into::into)
 }
 
+/// SQL dump/restore shared by MySQL and MariaDB.
+async fn backup_sql(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+    spec: &DbServiceSpec,
+    dump_binary: &str,
+) -> Result<queries::ServiceBackup> {
+    let object_store = cfg
+        .object_store
+        .as_ref()
+        .ok_or_else(|| anyhow!("object store is not configured"))?;
+    let service = queries::get_service_for_plugin(pool, service_name, spec.plugin).await?;
+    let connection = connection_info(spec, &service)?;
+    let container_name = format!("deku-{}-{service_name}", spec.plugin);
+
+    let exec = exec_in_container(
+        docker,
+        &container_name,
+        vec![
+            dump_binary.to_string(),
+            "-u".to_string(),
+            "root".to_string(),
+            "--all-databases".to_string(),
+            "--single-transaction".to_string(),
+            "--routines".to_string(),
+            "--events".to_string(),
+            "--no-tablespaces".to_string(),
+        ],
+        vec![format!("MYSQL_PWD={}", connection.password)],
+        None,
+        None,
+    )
+    .await?;
+
+    if exec.exit_code != 0 {
+        return Err(anyhow!(
+            "{} failed with exit code {}: {}",
+            dump_binary,
+            exec.exit_code,
+            String::from_utf8_lossy(&exec.stderr)
+        ));
+    }
+
+    let object_key = format!(
+        "{}backups/{}/{}/{}-{}.sql",
+        object_store.normalized_prefix().unwrap_or_default(),
+        spec.plugin,
+        service_name,
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        Uuid::new_v4().simple()
+    );
+    let (payload, encryption) = seal_backup(cfg, exec.stdout.clone())?;
+    crate::objectstore::put_bytes(object_store, &object_key, payload.clone()).await?;
+
+    let sha256 = hex::encode(Sha256::digest(&payload));
+    queries::create_service_backup(
+        pool,
+        &service.id,
+        &object_key,
+        &format!("{}.sql", spec.plugin),
+        payload.len() as i64,
+        &sha256,
+        encryption,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+async fn restore_sql(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+    backup_id: &str,
+    spec: &DbServiceSpec,
+    restore_binary: &str,
+) -> Result<queries::ServiceBackup> {
+    let object_store = cfg
+        .object_store
+        .as_ref()
+        .ok_or_else(|| anyhow!("object store is not configured"))?;
+    let service = queries::get_service_for_plugin(pool, service_name, spec.plugin).await?;
+    let backup = queries::get_service_backup_for_service(pool, &service.id, backup_id).await?;
+    let connection = connection_info(spec, &service)?;
+    let container_name = format!("deku-{}-{service_name}", spec.plugin);
+
+    let payload = crate::objectstore::get_bytes(object_store, &backup.object_key).await?;
+    let payload_sha256 = hex::encode(Sha256::digest(&payload));
+    if payload_sha256 != backup.sha256 {
+        return Err(anyhow!(
+            "backup checksum mismatch for '{}': expected {}, got {}",
+            backup.id,
+            backup.sha256,
+            payload_sha256
+        ));
+    }
+
+    let payload = open_backup(cfg, payload)?;
+
+    let restore_exec = exec_in_container(
+        docker,
+        &container_name,
+        vec![
+            restore_binary.to_string(),
+            "-u".to_string(),
+            "root".to_string(),
+        ],
+        vec![format!("MYSQL_PWD={}", connection.password)],
+        Some(payload),
+        None,
+    )
+    .await?;
+    if restore_exec.exit_code != 0 {
+        return Err(anyhow!(
+            "{} restore failed with exit code {}: {}",
+            restore_binary,
+            restore_exec.exit_code,
+            String::from_utf8_lossy(&restore_exec.stderr)
+        ));
+    }
+
+    queries::mark_service_backup_restored(pool, &backup.id).await?;
+    queries::get_service_backup_for_service(pool, &service.id, backup_id)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn backup_mysql(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+) -> Result<queries::ServiceBackup> {
+    backup_sql(pool, docker, cfg, service_name, &mysql_spec(), "mysqldump").await
+}
+
+pub async fn restore_mysql(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+    backup_id: &str,
+) -> Result<queries::ServiceBackup> {
+    restore_sql(
+        pool,
+        docker,
+        cfg,
+        service_name,
+        backup_id,
+        &mysql_spec(),
+        "mysql",
+    )
+    .await
+}
+
+pub async fn backup_mariadb(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+) -> Result<queries::ServiceBackup> {
+    backup_sql(
+        pool,
+        docker,
+        cfg,
+        service_name,
+        &mariadb_spec(),
+        "mariadb-dump",
+    )
+    .await
+}
+
+pub async fn restore_mariadb(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+    backup_id: &str,
+) -> Result<queries::ServiceBackup> {
+    restore_sql(
+        pool,
+        docker,
+        cfg,
+        service_name,
+        backup_id,
+        &mariadb_spec(),
+        "mariadb",
+    )
+    .await
+}
+
+/// Connection URI usable from inside the service container, where the database
+/// listens on its container port rather than the host-mapped one.
+fn internal_mongo_uri(connection: &ServiceConnectionInfo, spec: &DbServiceSpec) -> String {
+    let database = connection.database.as_deref().unwrap_or("admin");
+    format!(
+        "mongodb://deku:{}@127.0.0.1:{}/{}?authSource=admin",
+        connection.password, spec.container_port, database
+    )
+}
+
+pub async fn backup_mongodb(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+) -> Result<queries::ServiceBackup> {
+    let object_store = cfg
+        .object_store
+        .as_ref()
+        .ok_or_else(|| anyhow!("object store is not configured"))?;
+    let spec = mongodb_spec();
+    let service = queries::get_service_for_plugin(pool, service_name, spec.plugin).await?;
+    let connection = connection_info(&spec, &service)?;
+    let container_name = format!("deku-mongodb-{service_name}");
+
+    let exec = exec_in_container(
+        docker,
+        &container_name,
+        vec![
+            "mongodump".to_string(),
+            format!("--uri={}", internal_mongo_uri(&connection, &spec)),
+            "--archive".to_string(),
+            "--gzip".to_string(),
+        ],
+        Vec::new(),
+        None,
+        None,
+    )
+    .await?;
+
+    if exec.exit_code != 0 {
+        return Err(anyhow!(
+            "mongodump failed with exit code {}: {}",
+            exec.exit_code,
+            String::from_utf8_lossy(&exec.stderr)
+        ));
+    }
+
+    let object_key = format!(
+        "{}backups/mongodb/{}/{}-{}.archive.gz",
+        object_store.normalized_prefix().unwrap_or_default(),
+        service_name,
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        Uuid::new_v4().simple()
+    );
+    let (payload, encryption) = seal_backup(cfg, exec.stdout.clone())?;
+    crate::objectstore::put_bytes(object_store, &object_key, payload.clone()).await?;
+
+    let sha256 = hex::encode(Sha256::digest(&payload));
+    queries::create_service_backup(
+        pool,
+        &service.id,
+        &object_key,
+        "mongodb.archive.gz",
+        payload.len() as i64,
+        &sha256,
+        encryption,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+pub async fn restore_mongodb(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    service_name: &str,
+    backup_id: &str,
+) -> Result<queries::ServiceBackup> {
+    let object_store = cfg
+        .object_store
+        .as_ref()
+        .ok_or_else(|| anyhow!("object store is not configured"))?;
+    let spec = mongodb_spec();
+    let service = queries::get_service_for_plugin(pool, service_name, spec.plugin).await?;
+    let backup = queries::get_service_backup_for_service(pool, &service.id, backup_id).await?;
+    let connection = connection_info(&spec, &service)?;
+    let container_name = format!("deku-mongodb-{service_name}");
+
+    let payload = crate::objectstore::get_bytes(object_store, &backup.object_key).await?;
+    let payload_sha256 = hex::encode(Sha256::digest(&payload));
+    if payload_sha256 != backup.sha256 {
+        return Err(anyhow!(
+            "backup checksum mismatch for '{}': expected {}, got {}",
+            backup.id,
+            backup.sha256,
+            payload_sha256
+        ));
+    }
+
+    let payload = open_backup(cfg, payload)?;
+
+    let restore_exec = exec_in_container(
+        docker,
+        &container_name,
+        vec![
+            "mongorestore".to_string(),
+            format!("--uri={}", internal_mongo_uri(&connection, &spec)),
+            "--archive".to_string(),
+            "--gzip".to_string(),
+            "--drop".to_string(),
+        ],
+        Vec::new(),
+        Some(payload),
+        None,
+    )
+    .await?;
+    if restore_exec.exit_code != 0 {
+        return Err(anyhow!(
+            "mongorestore failed with exit code {}: {}",
+            restore_exec.exit_code,
+            String::from_utf8_lossy(&restore_exec.stderr)
+        ));
+    }
+
+    queries::mark_service_backup_restored(pool, &backup.id).await?;
+    queries::get_service_backup_for_service(pool, &service.id, backup_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// Run a backup using the implementation for `plugin`.
+pub async fn backup_for_plugin(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    plugin: &str,
+    service_name: &str,
+) -> Result<queries::ServiceBackup> {
+    match plugin {
+        "postgres" => backup_postgres(pool, docker, cfg, service_name).await,
+        "redis" => backup_redis(pool, docker, cfg, service_name).await,
+        "mysql" => backup_mysql(pool, docker, cfg, service_name).await,
+        "mariadb" => backup_mariadb(pool, docker, cfg, service_name).await,
+        "mongodb" => backup_mongodb(pool, docker, cfg, service_name).await,
+        other => Err(anyhow!("backups are not supported for '{other}' services")),
+    }
+}
+
+/// Restore a backup using the implementation for `plugin`.
+pub async fn restore_for_plugin(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+    plugin: &str,
+    service_name: &str,
+    backup_id: &str,
+) -> Result<queries::ServiceBackup> {
+    match plugin {
+        "postgres" => restore_postgres(pool, docker, cfg, service_name, backup_id).await,
+        "redis" => restore_redis(pool, docker, cfg, service_name, backup_id).await,
+        "mysql" => restore_mysql(pool, docker, cfg, service_name, backup_id).await,
+        "mariadb" => restore_mariadb(pool, docker, cfg, service_name, backup_id).await,
+        "mongodb" => restore_mongodb(pool, docker, cfg, service_name, backup_id).await,
+        other => Err(anyhow!("backups are not supported for '{other}' services")),
+    }
+}
+
 pub async fn backup_redis(
     pool: &SqlitePool,
     docker: &Docker,
@@ -582,16 +1138,18 @@ pub async fn backup_redis(
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
         Uuid::new_v4().simple()
     );
-    crate::objectstore::put_bytes(object_store, &object_key, dump_exec.stdout.clone()).await?;
+    let (payload, encryption) = seal_backup(cfg, dump_exec.stdout.clone())?;
+    crate::objectstore::put_bytes(object_store, &object_key, payload.clone()).await?;
 
-    let sha256 = hex::encode(Sha256::digest(&dump_exec.stdout));
+    let sha256 = hex::encode(Sha256::digest(&payload));
     queries::create_service_backup(
         pool,
         &service.id,
         &object_key,
         "redis.rdb",
-        dump_exec.stdout.len() as i64,
+        payload.len() as i64,
         &sha256,
+        encryption,
     )
     .await
     .map_err(Into::into)
@@ -621,6 +1179,8 @@ pub async fn restore_redis(
             payload_sha256
         ));
     }
+
+    let payload = open_backup(cfg, payload)?;
 
     let container_name = format!("deku-redis-{service_name}");
     let _ = docker
@@ -727,6 +1287,28 @@ pub async fn verify_linked_services_post_deploy(
             "mysql" => {
                 lines.push(
                     verify_mysql_binding(
+                        docker,
+                        &service,
+                        &link.env_key,
+                        config_by_key.get(&link.env_key),
+                    )
+                    .await?,
+                );
+            }
+            "mariadb" => {
+                lines.push(
+                    verify_mariadb_binding(
+                        docker,
+                        &service,
+                        &link.env_key,
+                        config_by_key.get(&link.env_key),
+                    )
+                    .await?,
+                );
+            }
+            "mongodb" => {
+                lines.push(
+                    verify_mongodb_binding(
                         docker,
                         &service,
                         &link.env_key,
@@ -983,13 +1565,16 @@ async fn verify_redis_binding(
     ))
 }
 
-async fn verify_mysql_binding(
+/// SQL service connectivity check shared by MySQL and MariaDB.
+async fn verify_sql_binding(
     docker: &Docker,
     service: &queries::Service,
     env_key: &str,
     actual_config: Option<&String>,
+    spec: &DbServiceSpec,
+    admin_binary: &str,
 ) -> Result<String> {
-    let connection = connection_info(&mysql_spec(), service)?;
+    let connection = connection_info(spec, service)?;
     let expected_url = connection.url.clone();
     let config_state = match actual_config {
         Some(value) if value == &expected_url => "config ok",
@@ -997,12 +1582,12 @@ async fn verify_mysql_binding(
         None => "config missing",
     };
 
-    let container_name = format!("deku-mysql-{}", service.name);
+    let container_name = format!("deku-{}-{}", spec.plugin, service.name);
     let check = exec_in_container(
         docker,
         &container_name,
         vec![
-            "mysqladmin".to_string(),
+            admin_binary.to_string(),
             "ping".to_string(),
             "-u".to_string(),
             connection
@@ -1023,7 +1608,84 @@ async fn verify_mysql_binding(
     };
 
     Ok(format!(
-        "linked mysql '{}' verified: {} via {}, {}",
+        "linked {} '{}' verified: {} via {}, {}",
+        spec.plugin, service.name, env_key, config_state, connectivity
+    ))
+}
+
+async fn verify_mysql_binding(
+    docker: &Docker,
+    service: &queries::Service,
+    env_key: &str,
+    actual_config: Option<&String>,
+) -> Result<String> {
+    verify_sql_binding(
+        docker,
+        service,
+        env_key,
+        actual_config,
+        &mysql_spec(),
+        "mysqladmin",
+    )
+    .await
+}
+
+async fn verify_mariadb_binding(
+    docker: &Docker,
+    service: &queries::Service,
+    env_key: &str,
+    actual_config: Option<&String>,
+) -> Result<String> {
+    verify_sql_binding(
+        docker,
+        service,
+        env_key,
+        actual_config,
+        &mariadb_spec(),
+        "mariadb-admin",
+    )
+    .await
+}
+
+async fn verify_mongodb_binding(
+    docker: &Docker,
+    service: &queries::Service,
+    env_key: &str,
+    actual_config: Option<&String>,
+) -> Result<String> {
+    let spec = mongodb_spec();
+    let connection = connection_info(&spec, service)?;
+    let expected_url = connection.url.clone();
+    let config_state = match actual_config {
+        Some(value) if value == &expected_url => "config ok",
+        Some(_) => "config mismatch",
+        None => "config missing",
+    };
+
+    let container_name = format!("deku-mongodb-{}", service.name);
+    let check = exec_in_container(
+        docker,
+        &container_name,
+        vec![
+            "mongosh".to_string(),
+            internal_mongo_uri(&connection, &spec),
+            "--quiet".to_string(),
+            "--eval".to_string(),
+            "db.runCommand({ping:1}).ok".to_string(),
+        ],
+        Vec::new(),
+        None,
+        None,
+    )
+    .await?;
+    let connectivity = if check.exit_code == 0 {
+        "reachable"
+    } else {
+        "unreachable"
+    };
+
+    Ok(format!(
+        "linked mongodb '{}' verified: {} via {}, {}",
         service.name, env_key, config_state, connectivity
     ))
 }

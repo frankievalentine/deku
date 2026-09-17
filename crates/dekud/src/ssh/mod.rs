@@ -452,6 +452,7 @@ async fn run_git_deploy(
             path: tmp.path().to_path_buf(),
         },
         force_builder: None,
+        build_host: None,
     };
 
     let deploy_lock = state.deploy_locks.for_app(&app.id);

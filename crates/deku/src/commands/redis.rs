@@ -107,7 +107,7 @@ pub async fn run(args: RedisArgs, client: &DekuClient) -> Result<()> {
             let data = client
                 .get(&format!("/api/redis/services/{name}/backups"))
                 .await?;
-            print_backup_table(&data);
+            super::render::print_backup_table(&data);
         }
         RedisCommands::Restore { name, backup } => {
             client
@@ -181,24 +181,4 @@ fn print_connect_details(data: &serde_json::Value) {
         "docker exec -it deku-redis-{name} redis-cli -a {}",
         connection["password"].as_str().unwrap_or("-"),
     );
-}
-
-fn print_backup_table(data: &serde_json::Value) {
-    if let Some(backups) = data.as_array() {
-        if backups.is_empty() {
-            println!("No backups.");
-            return;
-        }
-        println!("{:<36} {:<12} {:<20} RESTORED", "ID", "SIZE", "CREATED");
-        println!("{}", "-".repeat(96));
-        for backup in backups {
-            println!(
-                "{:<36} {:<12} {:<20} {}",
-                backup["id"].as_str().unwrap_or("-"),
-                backup["size_bytes"].as_i64().unwrap_or_default(),
-                backup["created_at"].as_str().unwrap_or("-"),
-                backup["restored_at"].as_str().unwrap_or("-"),
-            );
-        }
-    }
 }

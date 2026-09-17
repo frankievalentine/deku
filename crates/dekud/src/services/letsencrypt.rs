@@ -10,15 +10,20 @@ use deku_core::types::Upstream;
 pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Result<()> {
     let app = queries::get_app(pool, app_name).await?;
     let domains = queries::list_domain_names(pool, &app.id).await?;
-    let ports = queries::list_port_mappings(pool, &app.id).await?;
-    ensure_tls_enable_ready(app_name, &domains, &ports)?;
-    let upstreams: Vec<Upstream> = ports
+    // Derive upstreams from the running web containers so toggling TLS keeps
+    // every replica in the pool, matching the deploy and reconcile paths.
+    let upstream_ports = queries::list_web_upstream_ports(pool, &app.id).await?;
+    ensure_tls_enable_ready(app_name, &domains, &upstream_ports)?;
+    let upstreams: Vec<Upstream> = upstream_ports
         .iter()
-        .map(|p| Upstream {
+        .map(|port| Upstream {
             host: "127.0.0.1".into(),
-            port: p.host_port as u16,
+            port: *port,
         })
         .collect();
+    let extras = crate::proxy::load_extras(pool, &app.id)
+        .await
+        .unwrap_or_default();
     crate::proxy::apply_app_config(
         &cfg.angie_conf_dir,
         app_name,
@@ -26,6 +31,10 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
             domains: &domains,
             upstreams: &upstreams,
             tls: true,
+            auth: extras.auth.as_ref(),
+            maintenance: extras.maintenance,
+            maintenance_message: extras.maintenance_message.as_deref(),
+            redirects: &extras.redirects,
         }),
     )
     .await?;
@@ -36,15 +45,18 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
 pub async fn disable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Result<()> {
     let app = queries::get_app(pool, app_name).await?;
     let domains = queries::list_domain_names(pool, &app.id).await?;
-    let ports = queries::list_port_mappings(pool, &app.id).await?;
-    if !domains.is_empty() && !ports.is_empty() {
-        let upstreams: Vec<Upstream> = ports
+    let upstream_ports = queries::list_web_upstream_ports(pool, &app.id).await?;
+    if !domains.is_empty() && !upstream_ports.is_empty() {
+        let upstreams: Vec<Upstream> = upstream_ports
             .iter()
-            .map(|p| Upstream {
+            .map(|port| Upstream {
                 host: "127.0.0.1".into(),
-                port: p.host_port as u16,
+                port: *port,
             })
             .collect();
+        let extras = crate::proxy::load_extras(pool, &app.id)
+            .await
+            .unwrap_or_default();
         crate::proxy::apply_app_config(
             &cfg.angie_conf_dir,
             app_name,
@@ -52,6 +64,10 @@ pub async fn disable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Res
                 domains: &domains,
                 upstreams: &upstreams,
                 tls: false,
+                auth: extras.auth.as_ref(),
+                maintenance: extras.maintenance,
+                maintenance_message: extras.maintenance_message.as_deref(),
+                redirects: &extras.redirects,
             }),
         )
         .await?;
@@ -83,6 +99,62 @@ pub async fn get_global_email(cfg: &DekuConfig) -> Result<Option<String>> {
     }
 }
 
+/// How close a certificate is to expiry, or why it cannot be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CertLifecycle {
+    /// Valid with more than [`CERT_EXPIRY_WARNING_DAYS`] left.
+    Ok,
+    /// Valid but inside the renewal window.
+    Expiring,
+    /// Past its `notAfter` time.
+    Expired,
+    /// Certificate or key file is absent.
+    Missing,
+    /// Present but could not be inspected or parsed.
+    Unknown,
+}
+
+/// Warn once a certificate is this close to expiry. Renewal is an operator
+/// concern, so the window is deliberately generous.
+pub const CERT_EXPIRY_WARNING_DAYS: i64 = 14;
+
+/// Classify a certificate from its `notAfter` value.
+///
+/// Returns `(expiry, days_remaining, lifecycle)`. Pure, so the boundary cases
+/// are testable without a certificate on disk or an `openssl` process.
+pub fn classify_expiry(
+    not_after: Option<&str>,
+    now: DateTime<Utc>,
+) -> (Option<DateTime<Utc>>, Option<i64>, CertLifecycle) {
+    let Some(expiry) = not_after.and_then(parse_openssl_timestamp) else {
+        return (None, None, CertLifecycle::Unknown);
+    };
+
+    let remaining = expiry - now;
+    let lifecycle = if remaining <= chrono::Duration::zero() {
+        CertLifecycle::Expired
+    } else if remaining <= chrono::Duration::days(CERT_EXPIRY_WARNING_DAYS) {
+        CertLifecycle::Expiring
+    } else {
+        CertLifecycle::Ok
+    };
+
+    (Some(expiry), Some(remaining.num_days()), lifecycle)
+}
+
+/// Parse the `notAfter=Sep 17 12:00:00 2026 GMT` format openssl prints.
+fn parse_openssl_timestamp(raw: &str) -> Option<DateTime<Utc>> {
+    let trimmed = raw.trim();
+    let without_zone = trimmed
+        .strip_suffix(" GMT")
+        .or_else(|| trimmed.strip_suffix(" UTC"))
+        .unwrap_or(trimmed);
+    chrono::NaiveDateTime::parse_from_str(without_zone, "%b %e %H:%M:%S %Y")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
 #[derive(Debug, Serialize)]
 pub struct FileStatus {
     pub path: String,
@@ -104,6 +176,13 @@ pub struct CertificateStatus {
     pub not_after: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// `notAfter` as RFC 3339 UTC, for machine consumers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Whole days until expiry; negative once expired.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days_remaining: Option<i64>,
+    pub lifecycle: CertLifecycle,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inspection_error: Option<String>,
 }
@@ -124,18 +203,28 @@ pub async fn status(pool: &SqlitePool, app_name: &str) -> Result<CertificateStat
         not_before: None,
         not_after: None,
         subject: None,
+        expires_at: None,
+        days_remaining: None,
+        lifecycle: CertLifecycle::Unknown,
         inspection_error: None,
     };
 
     if status.certificate.exists {
         match inspect_certificate(&cert_path).await {
             Ok(info) => {
+                let (expiry, days_remaining, lifecycle) =
+                    classify_expiry(info.not_after.as_deref(), Utc::now());
                 status.not_before = info.not_before;
                 status.not_after = info.not_after;
                 status.subject = info.subject;
+                status.expires_at = expiry.map(|expiry| expiry.to_rfc3339());
+                status.days_remaining = days_remaining;
+                status.lifecycle = lifecycle;
             }
             Err(error) => status.inspection_error = Some(error.to_string()),
         }
+    } else {
+        status.lifecycle = CertLifecycle::Missing;
     }
 
     Ok(status)
@@ -144,13 +233,13 @@ pub async fn status(pool: &SqlitePool, app_name: &str) -> Result<CertificateStat
 fn ensure_tls_enable_ready(
     app_name: &str,
     domains: &[String],
-    ports: &[deku_core::types::PortMapping],
+    upstream_ports: &[u16],
 ) -> Result<()> {
     if domains.is_empty() {
         anyhow::bail!("cannot enable TLS for '{app_name}' without at least one domain");
     }
 
-    if ports.is_empty() {
+    if upstream_ports.is_empty() {
         anyhow::bail!(
             "cannot enable TLS for '{app_name}' without at least one upstream port mapping"
         );
@@ -231,23 +320,19 @@ async fn inspect_certificate(path: &std::path::Path) -> Result<ParsedCertificate
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_tls_enable_ready;
-    use deku_core::types::PortMapping;
+    use super::{
+        classify_expiry, ensure_tls_enable_ready, CertLifecycle, CERT_EXPIRY_WARNING_DAYS,
+    };
+    use chrono::{Duration, TimeZone, Utc};
 
-    fn sample_port() -> PortMapping {
-        PortMapping {
-            id: "port-1".to_string(),
-            app_id: "app-1".to_string(),
-            host_port: 8080,
-            container_port: 3000,
-            protocol: "tcp".to_string(),
-        }
+    fn at(year: i32, month: u32, day: u32) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(year, month, day, 0, 0, 0).unwrap()
     }
 
     #[test]
     fn tls_enable_requires_domain() {
-        let err = ensure_tls_enable_ready("demo", &[], &[sample_port()])
-            .expect_err("missing domain should fail");
+        let err =
+            ensure_tls_enable_ready("demo", &[], &[8080]).expect_err("missing domain should fail");
         assert!(
             err.to_string().contains("without at least one domain"),
             "error should mention missing domains"
@@ -267,11 +352,71 @@ mod tests {
 
     #[test]
     fn tls_enable_requires_certificate_files() {
-        let err = ensure_tls_enable_ready("demo", &[String::from("example.com")], &[sample_port()])
+        let err = ensure_tls_enable_ready("demo", &[String::from("example.com")], &[8080])
             .expect_err("missing certificate files should fail");
         assert!(
             err.to_string().contains("certificate files are missing"),
             "error should mention missing certificate files"
         );
+    }
+
+    #[test]
+    fn parses_the_openssl_not_after_format() {
+        let (expiry, days, lifecycle) =
+            classify_expiry(Some("Sep 17 12:00:00 2026 GMT"), at(2026, 9, 1));
+        assert_eq!(expiry, Some(at(2026, 9, 17) + Duration::hours(12)));
+        assert_eq!(days, Some(16));
+        assert_eq!(lifecycle, CertLifecycle::Ok);
+    }
+
+    #[test]
+    fn space_padded_single_digit_day_parses() {
+        // openssl prints "Sep  7 ..." for single-digit days.
+        let (expiry, _, _) = classify_expiry(Some("Sep  7 00:00:00 2026 GMT"), at(2026, 9, 1));
+        assert_eq!(expiry, Some(at(2026, 9, 7)));
+    }
+
+    #[test]
+    fn expires_inside_the_warning_window_is_expiring() {
+        let now = at(2026, 9, 1);
+        let (_, days, lifecycle) = classify_expiry(Some("Sep 15 00:00:00 2026 GMT"), now);
+        assert_eq!(days, Some(14));
+        assert_eq!(lifecycle, CertLifecycle::Expiring);
+
+        let (_, _, just_outside) = classify_expiry(Some("Sep 16 00:00:01 2026 GMT"), now);
+        assert_eq!(just_outside, CertLifecycle::Ok);
+    }
+
+    #[test]
+    fn past_not_after_is_expired_with_negative_days() {
+        let (_, days, lifecycle) =
+            classify_expiry(Some("Aug 25 00:00:00 2026 GMT"), at(2026, 9, 1));
+        assert_eq!(days, Some(-7));
+        assert_eq!(lifecycle, CertLifecycle::Expired);
+    }
+
+    #[test]
+    fn expiry_exactly_now_is_expired() {
+        let now = at(2026, 9, 1);
+        let (_, days, lifecycle) = classify_expiry(Some("Sep 1 00:00:00 2026 GMT"), now);
+        assert_eq!(days, Some(0));
+        assert_eq!(lifecycle, CertLifecycle::Expired);
+    }
+
+    #[test]
+    fn missing_or_unparseable_expiry_is_unknown() {
+        assert_eq!(
+            classify_expiry(None, at(2026, 9, 1)).2,
+            CertLifecycle::Unknown
+        );
+        assert_eq!(
+            classify_expiry(Some("not a date"), at(2026, 9, 1)).2,
+            CertLifecycle::Unknown
+        );
+    }
+
+    #[test]
+    fn warning_window_is_fourteen_days() {
+        assert_eq!(CERT_EXPIRY_WARNING_DAYS, 14);
     }
 }

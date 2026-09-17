@@ -32,10 +32,11 @@ If your browser is on another machine, either use the printed SSH tunnel command
 - **Deployment detail**: Inspect rollout history, lifecycle events, builder details, and rollback targets
 - **Host overview**: Review platform-wide app status, routing state, TLS configuration, object store status, services, SSH keys, plugins, and recent events
 - **Routing**: Inspect the routing table, validate proxy state, and manage the global Let’s Encrypt email setting
-- **Services**: Create and inspect Postgres, Redis, and MySQL services, link them to apps, and manage Postgres backups and restores
+- **Services**: Create and inspect Postgres, MySQL, MariaDB, Redis, and MongoDB services, link them to apps, and manage backups and restores
 - **Object Store**: Configure and test the S3-compatible object store used for host-level backups, deploy artifact retention, and app credential linking
 - **SSH Keys**: Add and remove trusted public keys for server access workflows
 - **Plugins**: Inspect loaded plugins and load or unload plugin libraries by path
+- **API**: Open the interactive API reference, generated from the daemon's OpenAPI document
 
 ## What You Can Manage Here
 

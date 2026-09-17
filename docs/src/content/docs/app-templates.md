@@ -1,5 +1,5 @@
 ---
-title: App Templates
+title: App templates
 description: Local starter app directories for Deku and how to choose the right one.
 ---
 

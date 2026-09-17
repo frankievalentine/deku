@@ -297,6 +297,7 @@ export default function ShellController() {
         kind: 'page' as const,
         icon: item.icon,
         href: item.href,
+        external: item.external,
         shortcutKey: PAGE_SHORTCUTS[item.id],
         description: item.description,
       })),
@@ -420,7 +421,11 @@ export default function ShellController() {
 
   function handleCommandAction(item: CommandItem) {
     if (item.href) {
-      window.location.assign(item.href);
+      if (item.external) {
+        window.open(item.href, '_blank', 'noopener,noreferrer');
+      } else {
+        window.location.assign(item.href);
+      }
       return;
     }
 

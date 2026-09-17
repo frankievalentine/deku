@@ -255,6 +255,9 @@ pub struct DekuBuildConfig {
     pub dockerfile: Option<String>,
     pub context: Option<String>,
     pub args: Option<std::collections::HashMap<String, String>>,
+    /// Builder image for the `pack` builder, passed as `--builder`. Without it,
+    /// `pack` falls back to its own host-wide default builder.
+    pub pack_builder: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

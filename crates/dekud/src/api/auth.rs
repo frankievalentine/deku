@@ -12,10 +12,13 @@ use axum::{
 };
 use chrono::Utc;
 use deku_core::auth::verify_dashboard_token;
+use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
 use super::SharedState;
+use crate::db::queries;
+use crate::services::deploy_token;
 
 /// Bound the number of concurrent Argon2id verifications so a burst of
 /// unauthenticated requests cannot exhaust CPU or the blocking thread pool.
@@ -100,6 +103,62 @@ fn unauthorized() -> axum::response::Response {
         .into_response()
 }
 
+fn forbidden(message: &str) -> axum::response::Response {
+    (StatusCode::FORBIDDEN, Json(json!({ "error": message }))).into_response()
+}
+
+/// The app a deploy token is allowed to act on, for this method and path.
+///
+/// Deploy tokens are deliberately narrow: they cover the two routes CI needs to
+/// ship a release, and nothing else.
+fn deploy_route_app<'a>(method: &axum::http::Method, path: &'a str) -> Option<&'a str> {
+    if method != axum::http::Method::POST {
+        return None;
+    }
+    let rest = path.strip_prefix("/api/apps/")?;
+    let (app, tail) = rest.split_once('/')?;
+    if app.is_empty() {
+        return None;
+    }
+    match tail {
+        "deploy" | "deploy/archive" => Some(app),
+        _ => None,
+    }
+}
+
+enum DeployTokenOutcome {
+    Allow,
+    Deny,
+}
+
+/// Validate an app-scoped deploy token against the requested route.
+async fn authorize_deploy_token(
+    state: &SharedState,
+    token: &str,
+    method: &axum::http::Method,
+    path: &str,
+) -> Result<DeployTokenOutcome, String> {
+    let Some(app_name) = deploy_route_app(method, path) else {
+        return Err("deploy token is only valid for deploy routes".to_string());
+    };
+
+    // Resolve the target app; an unknown app is reported as a rejected token so
+    // this cannot be used to probe which apps exist.
+    let app_id = match queries::get_app(&state.pool, app_name).await {
+        Ok(app) => app.id,
+        Err(_) => return Ok(DeployTokenOutcome::Deny),
+    };
+
+    match crate::services::deploy_token::authorize(&state.pool, token, &app_id).await {
+        Ok(true) => {
+            info!(app = %app_name, "deploy token accepted");
+            Ok(DeployTokenOutcome::Allow)
+        }
+        Ok(false) => Ok(DeployTokenOutcome::Deny),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// Axum middleware that validates the dashboard bearer token on TCP requests.
 /// Apply only to the TCP router — the Unix socket router is trusted local access.
 pub async fn require_auth(
@@ -136,7 +195,26 @@ pub async fn require_auth(
             .find_map(|part| part.strip_prefix("token=").map(str::to_owned))
     });
 
-    match (auth_header.or(query_token), token_state) {
+    let presented = auth_header.or(query_token);
+
+    // App-scoped deploy tokens for CI and provider webhooks.
+    if let Some(token) = presented.as_deref() {
+        if deploy_token::looks_like_deploy_token(token) {
+            return match authorize_deploy_token(&state, token, &method, &path).await {
+                Ok(DeployTokenOutcome::Allow) => next.run(request).await,
+                Ok(DeployTokenOutcome::Deny) => {
+                    warn!(%method, %path, "deploy token rejected");
+                    unauthorized()
+                }
+                Err(reason) => {
+                    warn!(%method, %path, "deploy token rejected: {reason}");
+                    forbidden(&reason)
+                }
+            };
+        }
+    }
+
+    match (presented, token_state) {
         (Some(token), Some(auth_state)) => {
             if auth_state.is_expired(Utc::now()) {
                 warn!(%method, %path, "dashboard auth rejected expired token");

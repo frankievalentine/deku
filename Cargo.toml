@@ -47,6 +47,8 @@ hex = "0.4"
 percent-encoding = "2"
 argon2 = "0.6"
 rand = "0.10"
+pwhash = "1"
+utoipa = { version = "5", features = ["axum_extras"] }
 
 [workspace.package]
 rust-version = "1.94.0"

@@ -14,6 +14,35 @@ pub struct DesiredAppConfig<'a> {
     pub domains: &'a [String],
     pub upstreams: &'a [Upstream],
     pub tls: bool,
+    /// Per-app auth from `app_auth`, or `None` when the app is public.
+    pub auth: Option<&'a crate::db::queries::AppAuthRecord>,
+    /// When true, the app serves a 503 instead of proxying.
+    pub maintenance: bool,
+    pub maintenance_message: Option<&'a str>,
+    pub redirects: &'a [crate::db::queries::Redirect],
+}
+
+/// Per-app proxy state loaded from the database.
+#[derive(Default)]
+pub struct AppProxyExtras {
+    pub auth: Option<crate::db::queries::AppAuthRecord>,
+    pub maintenance: bool,
+    pub maintenance_message: Option<String>,
+    pub redirects: Vec<crate::db::queries::Redirect>,
+}
+
+/// Load auth, maintenance, and redirects for an app.
+pub async fn load_extras(pool: &sqlx::SqlitePool, app_id: &str) -> Result<AppProxyExtras> {
+    let auth = crate::db::queries::get_app_auth(pool, app_id).await?;
+    let (maintenance, maintenance_message) =
+        crate::db::queries::get_app_maintenance(pool, app_id).await?;
+    let redirects = crate::db::queries::list_redirects(pool, app_id).await?;
+    Ok(AppProxyExtras {
+        auth,
+        maintenance,
+        maintenance_message,
+        redirects,
+    })
 }
 
 pub fn cert_path(app_name: &str) -> PathBuf {
@@ -34,10 +63,16 @@ pub async fn apply_app_config(
     match desired {
         Some(config) => write_app_config(
             conf_dir,
-            app_name,
-            config.domains,
-            config.upstreams,
-            config.tls,
+            writer::VhostConfig {
+                app_name,
+                domains: config.domains,
+                upstreams: config.upstreams,
+                tls: config.tls,
+                auth: config.auth,
+                maintenance: config.maintenance,
+                maintenance_message: config.maintenance_message,
+                redirects: config.redirects,
+            },
         )?,
         None => remove_app_config(conf_dir, app_name)?,
     }
@@ -130,6 +165,10 @@ mod tests {
                 domains: &domains,
                 upstreams: &upstreams,
                 tls: false,
+                auth: None,
+                maintenance: false,
+                maintenance_message: None,
+                redirects: &[],
             }),
         )
         .await;

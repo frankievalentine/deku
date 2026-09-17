@@ -32,6 +32,13 @@ worker = 2
 ## Build
 
 - `builder`: `dockerfile | railpack | pack | image | compose | auto`
+- `pack_builder`: builder image passed to `pack build --builder` (for example
+  `paketobuildpacks/builder-jammy-base`). Optional.
+
+The `pack` builder needs the Buildpacks `pack` CLI on `PATH`. Without `pack_builder`, `pack` uses
+the host-wide default set by `pack config default-builder`, and the deploy fails with pack's own
+instructions when neither is configured. The built image must also define a process and listen on a
+port, or the deploy stops at the health check.
 - `dockerfile`: Override Dockerfile path
 - `context`: Build context directory
 - `build.args`: Build-time environment passed to the builder
@@ -48,6 +55,11 @@ Without `builder = "railpack"`, Deku auto-detects a `Dockerfile`, `dockerfile`, 
 - `retire`: Seconds before old containers are retired
 
 These settings are applied by the live deploy pipeline in `dekud`, not just documented metadata.
+
+Every running web replica is checked before a deploy switches traffic, and all ready replicas are
+added to the proxy upstream pool. A single unhealthy replica fails the deploy and leaves the
+previous version serving, and the failure names the replicas that did not become ready. This is why
+`deku ps scale <app> web=N` spreads load instead of only adding idle containers.
 
 ## Processes
 

@@ -80,6 +80,28 @@ Full local CI pass:
 
 The local CI script mirrors the main CI workflow in `.github/workflows/ci.yml`: Rust formatting, clippy, tests, installer smoke coverage, dashboard checks, and docs checks.
 
+### Testing object-store features
+
+Backups, scheduled backups, and app credential linking need an S3-compatible endpoint. MinIO's
+community edition is archived, so use one of these instead:
+
+- **SeaweedFS** (Apache-2.0, mature) for a real self-hosted store — one command with a pre-created
+  bucket:
+
+  ```bash
+  docker run -d --rm --name deku-seaweed -p 8333:8333 \
+    -e AWS_ACCESS_KEY_ID=admin -e AWS_SECRET_ACCESS_KEY=secret -e S3_BUCKET=deku \
+    chrislusf/seaweedfs
+  ```
+
+  Then point Deku at `http://127.0.0.1:8333` with path-style addressing.
+
+- **adobe/s3mock** (`docker run -p 9090:9090 -e COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS=deku adobe/s3mock`)
+  for a lightweight hermetic test double, or **Moto** in server mode.
+
+For running Deku itself, prefer managed S3/R2/Backblaze/Hetzner, or RustFS/Garage if you want to
+self-host the object store.
+
 ## Pull Requests
 
 - Describe the problem and the behavioral change clearly.
@@ -94,7 +116,7 @@ When behavior changes, update the relevant docs in the same change. Common files
 
 - `README.md`
 - `docs/`
-- `AGENTS.md` when coding-agent workflow guidance changes
+- `AGENTS.md` when coding-agent workflow guidance changes (the `/agents/` docs page renders that file at build time)
 - `CONTRIBUTING.md` when contributor workflow guidance changes
 - `.codex/deku-ops.md` when local run or test instructions change
 

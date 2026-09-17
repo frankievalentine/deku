@@ -9,6 +9,21 @@ pub struct DekuClient {
     global_domain: Option<String>,
 }
 
+/// Decode the `payload` field of a streamed event.
+///
+/// The daemon persists payloads as JSON-encoded strings, so the SSE body carries
+/// a string that must be parsed a second time. Objects are passed through as-is
+/// for forward compatibility.
+pub fn event_payload(event: &serde_json::Value) -> serde_json::Value {
+    match event.get("payload") {
+        Some(serde_json::Value::String(raw)) => {
+            serde_json::from_str(raw).unwrap_or(serde_json::Value::Null)
+        }
+        Some(value) => value.clone(),
+        None => serde_json::Value::Null,
+    }
+}
+
 impl DekuClient {
     pub fn new() -> Result<Self> {
         let config = load_optional()?.unwrap_or_default();
@@ -82,12 +97,7 @@ impl DekuClient {
 
     /// Stream SSE events, calling `on_line` for each `data:` field. Stops when
     /// `on_line` returns false.
-    pub async fn stream_sse(
-        &self,
-        path: &str,
-        mut on_line: impl FnMut(&str) -> bool,
-    ) -> Result<()> {
-        use futures::StreamExt;
+    pub async fn stream_sse(&self, path: &str, on_line: impl FnMut(&str) -> bool) -> Result<()> {
         let url = format!("{}{path}", self.base_url);
         let res = self
             .http
@@ -95,22 +105,43 @@ impl DekuClient {
             .header("Accept", "text/event-stream")
             .send()
             .await?;
-        let mut stream = res.bytes_stream();
-        let mut buf = String::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            buf.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(pos) = buf.find('\n') {
-                let line = buf[..pos].trim().to_string();
-                buf.drain(..=pos);
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if !on_line(data) {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        Ok(())
+        consume_sse(res, None, on_line).await
+    }
+
+    /// Stream SSE events, stopping after `idle` with no data.
+    pub async fn stream_sse_idle(
+        &self,
+        path: &str,
+        idle: std::time::Duration,
+        on_line: impl FnMut(&str) -> bool,
+    ) -> Result<()> {
+        let url = format!("{}{path}", self.base_url);
+        let res = self
+            .http
+            .get(&url)
+            .header("Accept", "text/event-stream")
+            .send()
+            .await?;
+        consume_sse(res, Some(idle), on_line).await
+    }
+
+    /// POST a JSON body and stream the SSE response, calling `on_line` for each
+    /// `data:` field. Stops when `on_line` returns false.
+    pub async fn stream_sse_post(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        on_line: impl FnMut(&str) -> bool,
+    ) -> Result<()> {
+        let url = format!("{}{path}", self.base_url);
+        let res = self
+            .http
+            .post(&url)
+            .header("Accept", "text/event-stream")
+            .json(&body)
+            .send()
+            .await?;
+        consume_sse(res, None, on_line).await
     }
 
     async fn handle_response(&self, res: reqwest::Response) -> Result<serde_json::Value> {
@@ -139,4 +170,54 @@ impl DekuClient {
 
 fn base_url(config: &LocalDekuConfig) -> String {
     format!("http://localhost:{}", config.effective_api_port())
+}
+
+/// Parse an SSE response body, calling `on_line` for each `data:` field.
+/// When `idle` is set, stops after that long with no data.
+async fn consume_sse(
+    res: reqwest::Response,
+    idle: Option<std::time::Duration>,
+    mut on_line: impl FnMut(&str) -> bool,
+) -> Result<()> {
+    use futures::StreamExt;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        let message = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or(body);
+        return Err(anyhow!("HTTP {status}: {message}"));
+    }
+
+    let mut stream = res.bytes_stream();
+    let mut buf = String::new();
+    loop {
+        let next = match idle {
+            Some(idle) => match tokio::time::timeout(idle, stream.next()).await {
+                Ok(next) => next,
+                Err(_) => break,
+            },
+            None => stream.next().await,
+        };
+        let Some(chunk) = next else { break };
+        let chunk = chunk?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buf.find('\n') {
+            let line = buf[..pos].trim().to_string();
+            buf.drain(..=pos);
+            if let Some(data) = line.strip_prefix("data: ") {
+                if !on_line(data) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Ok(())
 }

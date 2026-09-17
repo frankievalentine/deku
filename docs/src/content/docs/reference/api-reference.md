@@ -5,6 +5,16 @@ description: HTTP API families used by the CLI and dashboard.
 
 Current HTTP API surface used by the Deku CLI and dashboard.
 
+:::tip[Live reference]
+The authoritative, complete surface is the OpenAPI 3.1 document served by the daemon:
+
+- Interactive (Scalar): `http://127.0.0.1:2810/api/docs`
+- Machine-readable: `http://127.0.0.1:2810/api/openapi.json`
+
+Every route in the API router is annotated, so the spec is the source of truth for
+parameters, request bodies, and status codes. The lists below are a curated tour.
+:::
+
 ## Apps and Deployments
 
 - `GET /api/apps`

@@ -73,8 +73,22 @@ If you want to use `git push` deploys later, Deku's embedded SSH endpoint defaul
 deku config set my-app NODE_ENV=production PORT=3000
 deku domains add my-app app.example.com
 deku ps scale my-app web=2
+deku ps limits my-app --memory 512m
 deku checks run my-app
 deku checks routing my-app
+deku doctor
 ```
 
-Read [Dashboard Overview](/dashboard-overview/) for the web workflows and [CLI Reference](/reference/cli-reference/) for the full command surface.
+Day-to-day operations:
+
+```bash
+deku run my-app python manage.py migrate      # one-off command in a fresh container
+deku maintenance on my-app                    # serve a 503 while you fix something
+deku redirects add my-app /old /new           # send one path elsewhere
+deku backup schedule my-db --keep 7           # back up a managed service on a schedule
+```
+
+Read [Dashboard Overview](/dashboard-overview/) for the web workflows. The operations guides cover
+[traffic control](/traffic-control/), [runtime access](/runtime-access/),
+[resource limits](/resource-limits/), [backups](/backups/), and
+[diagnostics](/diagnostics/). [CLI Reference](/reference/cli-reference/) has the full command surface.

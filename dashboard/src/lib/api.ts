@@ -85,7 +85,9 @@ export interface Plugin {
   path: string;
 }
 
-export type ManagedServiceKind = 'postgres' | 'redis' | 'mysql';
+export const MANAGED_SERVICE_KINDS = ['postgres', 'redis', 'mysql', 'mariadb', 'mongodb'] as const;
+
+export type ManagedServiceKind = (typeof MANAGED_SERVICE_KINDS)[number];
 
 export interface ManagedServiceSummary {
   id: string;
@@ -123,6 +125,19 @@ export interface ServiceBackup {
   sha256: string | null;
   created_at: string;
   restored_at: string | null;
+  encryption: string;
+}
+
+export interface AlertRecord {
+  id: string;
+  rule: string;
+  severity: 'warning' | 'critical';
+  scope: string;
+  subject: string;
+  message: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  resolved_at: string | null;
 }
 
 export interface EventRecord {
@@ -188,8 +203,13 @@ export interface CertificateStatus {
   not_before: string | null;
   not_after: string | null;
   subject: string | null;
+  expires_at: string | null;
+  days_remaining: number | null;
+  lifecycle: CertificateLifecycle;
   inspection_error?: string | null;
 }
+
+export type CertificateLifecycle = 'ok' | 'expiring' | 'expired' | 'missing' | 'unknown';
 
 export interface LetsEncryptConfig {
   configured: boolean;
@@ -513,6 +533,10 @@ export function deletePlugin(name: string): Promise<void> {
   return apiFetch<void>(`/api/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
+export function fetchAlerts(): Promise<AlertRecord[]> {
+  return apiFetch<AlertRecord[]>('/api/alerts');
+}
+
 export function fetchEvents(appId?: string): Promise<EventRecord[]> {
   const suffix = appId ? `?app=${encodeURIComponent(appId)}` : '';
   return apiFetch<EventRecord[]>(`/api/events${suffix}`);
@@ -707,7 +731,7 @@ export function testObjectStoreConfig(): Promise<{ ok: boolean }> {
 }
 
 function serviceBasePath(kind: ManagedServiceKind): string {
-  return `/api/${kind}/services`;
+  return `/api/services/${kind}`;
 }
 
 export function fetchManagedServices(kind: ManagedServiceKind): Promise<ManagedServiceSummary[]> {
@@ -775,14 +799,14 @@ export async function fetchManagedServiceLogs(
 }
 
 export function fetchServiceBackups(
-  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  kind: ManagedServiceKind,
   name: string
 ): Promise<ServiceBackup[]> {
   return apiFetch<ServiceBackup[]>(`${serviceBasePath(kind)}/${encodeURIComponent(name)}/backups`);
 }
 
 export function triggerServiceBackup(
-  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  kind: ManagedServiceKind,
   name: string
 ): Promise<ServiceBackup> {
   return apiFetch<ServiceBackup>(`${serviceBasePath(kind)}/${encodeURIComponent(name)}/backups`, {
@@ -791,7 +815,7 @@ export function triggerServiceBackup(
 }
 
 export function restoreServiceBackup(
-  kind: Extract<ManagedServiceKind, 'postgres' | 'redis'>,
+  kind: ManagedServiceKind,
   name: string,
   backupId: string
 ): Promise<ServiceBackup> {

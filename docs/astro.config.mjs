@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config';
+import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
 import pagePlugin from '@pelagornis/page';
 
@@ -126,8 +127,23 @@ export default defineConfig({
         {
           label: 'Workflows',
           items: [
-            { label: 'App Templates', link: '/app-templates/' },
+            { label: 'App templates', link: '/app-templates/' },
+            { label: 'App authentication', link: '/app-authentication/' },
+            { label: 'Build server', link: '/build-server/' },
             { label: 'AGENTS.md', link: '/agents/' },
+          ],
+        },
+        {
+          label: 'Operations',
+          items: [
+            { label: 'Traffic control', link: '/traffic-control/' },
+            { label: 'Deploy tokens', link: '/deploy-tokens/' },
+            { label: 'Lifecycle hooks', link: '/hooks/' },
+            { label: 'Runtime access', link: '/runtime-access/' },
+            { label: 'Resource limits', link: '/resource-limits/' },
+            { label: 'Backups', link: '/backups/' },
+            { label: 'Diagnostics', link: '/diagnostics/' },
+            { label: 'Monitoring and alerts', link: '/monitoring/' },
           ],
         },
         {
@@ -138,6 +154,7 @@ export default defineConfig({
         },
       ],
     }),
+    mdx(),
   ],
   vite: {
     css: {

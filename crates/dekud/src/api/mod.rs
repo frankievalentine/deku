@@ -24,7 +24,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-use crate::config::DekuConfig;
+use crate::config::{BuildHostConfig, DekuConfig, RegistryConfig};
 use crate::container::DockerClient;
 use crate::db::queries;
 use crate::deploy::{DeployRequest, DeploySource};
@@ -37,6 +37,8 @@ use deku_core::{
 use deku_plugin_sdk::context::AppContext;
 
 pub mod auth;
+mod console;
+pub mod openapi;
 mod services;
 
 const ARCHIVE_UPLOAD_LIMIT: usize = 512 * 1024 * 1024;
@@ -80,6 +82,36 @@ fn build_api_router(state: SharedState) -> Router {
         // Apps
         .route("/api/apps", get(list_apps).post(create_app))
         .route("/api/apps/{name}", get(get_app).delete(delete_app))
+        .route("/api/apps/{name}/rename", post(rename_app))
+        .route("/api/apps/{name}/clone", post(clone_app))
+        .route(
+            "/api/apps/{name}/auth",
+            get(get_app_auth_handler)
+                .post(set_app_auth_handler)
+                .delete(delete_app_auth_handler),
+        )
+        .route(
+            "/api/apps/{name}/maintenance",
+            get(get_maintenance).post(set_maintenance),
+        )
+        .route(
+            "/api/apps/{name}/redirects",
+            get(list_redirects_handler).post(add_redirect_handler),
+        )
+        .route(
+            "/api/apps/{name}/redirects/{id}",
+            delete(remove_redirect_handler),
+        )
+        .route("/api/doctor", get(doctor))
+        // Deploy tokens
+        .route(
+            "/api/apps/{name}/deploy-tokens",
+            get(list_app_deploy_tokens).post(create_app_deploy_token),
+        )
+        .route(
+            "/api/apps/{name}/deploy-tokens/{id}",
+            delete(revoke_app_deploy_token),
+        )
         // Events
         .route("/api/events", get(list_events))
         .route("/api/events/stream", get(stream_events))
@@ -100,9 +132,13 @@ fn build_api_router(state: SharedState) -> Router {
         // Logs
         .route("/api/apps/{name}/logs", get(get_logs))
         .route("/api/apps/{name}/checks", get(get_app_checks))
+        // One-off commands
+        .route("/api/apps/{name}/run", post(console::run))
+        .route("/api/apps/{name}/exec", post(console::exec))
         // Config vars
         .route("/api/apps/{name}/config", get(list_config).post(set_config))
         .route("/api/apps/{name}/config/{key}", delete(unset_config))
+        .route("/api/apps/{name}/config/import", post(import_app_config))
         .route(
             "/api/apps/{name}/objectstore",
             get(get_app_object_store_link)
@@ -112,6 +148,7 @@ fn build_api_router(state: SharedState) -> Router {
         // Process scale
         .route("/api/apps/{name}/ps", get(list_processes))
         .route("/api/apps/{name}/scale", get(get_scale).post(set_scale))
+        .route("/api/apps/{name}/limits", get(get_limits).post(set_limits))
         // Routing table
         .route("/api/routing", get(list_routing))
         .route("/api/routing/status", get(get_routing_status))
@@ -125,6 +162,7 @@ fn build_api_router(state: SharedState) -> Router {
         .route("/api/ssh-keys/{name}", delete(remove_ssh_key))
         // Plugins
         .route("/api/plugins", get(list_plugins).post(install_plugin))
+        .route("/api/plugins/runtime", get(get_plugins_runtime))
         .route("/api/plugins/{name}", delete(uninstall_plugin))
         // Object store
         .route(
@@ -134,6 +172,19 @@ fn build_api_router(state: SharedState) -> Router {
                 .delete(unset_object_store_config),
         )
         .route("/api/objectstore/test", post(test_object_store_config))
+        // Build host and registry
+        .route(
+            "/api/build-host",
+            get(get_build_host)
+                .post(set_build_host)
+                .delete(unset_build_host),
+        )
+        .route("/api/build-host/check", post(check_build_host))
+        .route("/api/build-host/init", post(init_build_host))
+        .route(
+            "/api/registry",
+            get(get_registry).post(set_registry).delete(unset_registry),
+        )
         // Dashboard auth
         .route("/api/dashboard/session", post(verify_dashboard_session))
         .route("/api/dashboard/token", post(rotate_dashboard_token))
@@ -201,6 +252,50 @@ fn build_api_router(state: SharedState) -> Router {
             post(services::my_link).delete(services::my_unlink),
         )
         .route("/api/mysql/services/{name}/logs", get(services::my_logs))
+        .route(
+            "/api/mysql/services/{name}/backups",
+            get(services::my_backups).post(services::my_backup),
+        )
+        .route(
+            "/api/mysql/services/{name}/restore/{backup_id}",
+            post(services::my_restore),
+        )
+        // Generic managed-service routes (per-type routes above are aliases)
+        .route(
+            "/api/services/{type}",
+            get(services::svc_list).post(services::svc_create),
+        )
+        .route(
+            "/api/services/{type}/{name}",
+            get(services::svc_info).delete(services::svc_destroy),
+        )
+        .route(
+            "/api/services/{type}/{name}/link/{app}",
+            post(services::svc_link).delete(services::svc_unlink),
+        )
+        .route("/api/services/{type}/{name}/logs", get(services::svc_logs))
+        .route(
+            "/api/services/{type}/{name}/backups",
+            get(services::svc_backups).post(services::svc_backup),
+        )
+        .route(
+            "/api/services/{type}/{name}/restore/{backup_id}",
+            post(services::svc_restore),
+        )
+        // Backup schedules (any managed service)
+        .route(
+            "/api/backup-schedules",
+            get(services::list_backup_schedules),
+        )
+        .route(
+            "/api/services/{name}/backup-schedule",
+            get(services::get_backup_schedule)
+                .post(services::set_backup_schedule)
+                .delete(services::delete_backup_schedule),
+        )
+        // Alerts and metrics
+        .route("/api/alerts", get(list_alerts_handler))
+        .route("/api/metrics", get(metrics_handler))
         // Letsencrypt
         .route("/api/letsencrypt/enable/{app}", post(services::le_enable))
         .route("/api/letsencrypt/disable/{app}", post(services::le_disable))
@@ -244,7 +339,10 @@ fn build_api_router(state: SharedState) -> Router {
 
 fn build_public_router(state: SharedState) -> Router {
     let dashboard_dir = state.config.dashboard_dir.clone();
-    let router = Router::new().route("/healthz", get(health_check));
+    let router = Router::new()
+        .route("/healthz", get(health_check))
+        .route("/api/openapi.json", get(openapi::spec))
+        .route("/api/docs", get(openapi::docs));
 
     if crate::config::dashboard_assets_available(&state.config) {
         router
@@ -449,10 +547,22 @@ fn not_found(msg: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/healthz",
+    tag = "system",
+    responses((status = 200, description = "Daemon health", body = openapi::HealthSchema))
+)]
 async fn health_check() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok", "service": "dekud" }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/dashboard/token",
+    tag = "dashboard",
+    responses((status = 200, description = "Rotate the dashboard token"))
+)]
 async fn rotate_dashboard_token(State(state): State<SharedState>) -> impl IntoResponse {
     match rotate_dashboard_token_inner(&state).await {
         Ok(token) => (StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response(),
@@ -460,11 +570,23 @@ async fn rotate_dashboard_token(State(state): State<SharedState>) -> impl IntoRe
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/dashboard/session",
+    tag = "dashboard",
+    responses((status = 204, description = "No content"))
+)]
 async fn verify_dashboard_session() -> impl IntoResponse {
     auth::log_dashboard_session_verified();
     StatusCode::NO_CONTENT
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/version",
+    tag = "system",
+    responses((status = 200, description = "Version and update status"))
+)]
 async fn get_version_status(State(state): State<SharedState>) -> impl IntoResponse {
     match version::resolve_version_status(&state.version_status).await {
         Ok(status) => (StatusCode::OK, Json(status)).into_response(),
@@ -490,6 +612,12 @@ async fn rotate_dashboard_token_inner(state: &SharedState) -> anyhow::Result<Str
 
 // ── Object Store ──────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/objectstore",
+    tag = "object-store",
+    responses((status = 200, description = "Show object-store configuration"))
+)]
 async fn get_object_store_config() -> impl IntoResponse {
     match crate::config::load() {
         Ok(cfg) => {
@@ -507,6 +635,13 @@ async fn get_object_store_config() -> impl IntoResponse {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/objectstore",
+    tag = "object-store",
+    request_body = openapi::ObjectStoreConfigSchema,
+    responses((status = 200, description = "Configure the object store"))
+)]
 async fn set_object_store_config(Json(body): Json<ObjectStoreConfig>) -> impl IntoResponse {
     let response_body = body.redacted();
     match crate::config::load().and_then(|mut cfg| {
@@ -526,6 +661,12 @@ async fn set_object_store_config(Json(body): Json<ObjectStoreConfig>) -> impl In
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/objectstore",
+    tag = "object-store",
+    responses((status = 204, description = "No content"))
+)]
 async fn unset_object_store_config() -> impl IntoResponse {
     match crate::config::load().and_then(|mut cfg| {
         cfg.object_store = None;
@@ -537,6 +678,12 @@ async fn unset_object_store_config() -> impl IntoResponse {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/objectstore/test",
+    tag = "object-store",
+    responses((status = 200, description = "Test object-store connectivity"))
+)]
 async fn test_object_store_config() -> impl IntoResponse {
     match crate::config::load() {
         Ok(cfg) => match cfg.object_store {
@@ -554,6 +701,581 @@ async fn test_object_store_config() -> impl IntoResponse {
             )
                 .into_response(),
         },
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/config/import",
+    tag = "config",
+    params(("name" = String, Path, description = "App name")),
+    request_body = ImportConfigBody,
+    responses(
+        (status = 200, description = "Import summary", body = openapi::ConfigImportSummarySchema),
+        (status = 400, description = "Invalid key")
+    )
+)]
+async fn import_app_config(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<ImportConfigBody>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let existing: std::collections::HashSet<String> =
+        match queries::get_config_vars(&state.pool, &app.id).await {
+            Ok(vars) => vars.into_iter().map(|var| var.key).collect(),
+            Err(e) => return internal_error(e).into_response(),
+        };
+
+    let mut created = 0u64;
+    let mut overwritten = 0u64;
+    let mut skipped: Vec<String> = Vec::new();
+
+    for (key, value) in &body.vars {
+        if key.trim().is_empty() || key.len() > 256 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid key '{key}'") })),
+            )
+                .into_response();
+        }
+
+        if existing.contains(key) {
+            if !body.overwrite {
+                skipped.push(key.clone());
+                continue;
+            }
+            overwritten += 1;
+        } else {
+            created += 1;
+        }
+
+        if let Err(e) = queries::set_config_var(&state.pool, &app.id, key, value, false).await {
+            return internal_error(e).into_response();
+        }
+    }
+
+    state.events.emit(
+        Some(app.id.clone()),
+        "app.config.imported",
+        Some(serde_json::json!({
+            "created": created,
+            "overwritten": overwritten,
+            "skipped": skipped,
+        })),
+    );
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "created": created,
+            "overwritten": overwritten,
+            "skipped": skipped,
+        })),
+    )
+        .into_response()
+}
+
+// ── Rename and clone ──────────────────────────────────────────────────────────
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/rename",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name")),
+    request_body = RenameAppBody,
+    responses(
+        (status = 200, description = "App renamed", body = openapi::AppSchema),
+        (status = 400, description = "Invalid name"),
+        (status = 409, description = "Name already taken")
+    )
+)]
+async fn rename_app(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<RenameAppBody>,
+) -> Response {
+    let new_name = body.name.trim().to_string();
+    if let Err(message) = crate::app_name::validate(&new_name) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": message })),
+        )
+            .into_response();
+    }
+
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    if new_name == app.name {
+        return (StatusCode::OK, Json(serde_json::json!(app))).into_response();
+    }
+
+    if let Err(e) = queries::rename_app(&state.pool, &app.id, &new_name).await {
+        return match e {
+            deku_core::error::DekuError::AppAlreadyExists(taken) => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("app '{taken}' already exists"),
+                })),
+            )
+                .into_response(),
+            other => internal_error(other).into_response(),
+        };
+    }
+
+    // The vhost file is named after the app; container routing is by published
+    // port, so the running containers keep serving across the rename.
+    if let Err(error) = crate::proxy::remove_app_config(&state.config.angie_conf_dir, &name) {
+        tracing::warn!("failed to remove angie config for {name}: {error}");
+    }
+    if let Err(error) = reconcile_proxy_for_app(&state, &app.id, &new_name).await {
+        tracing::warn!("failed to write angie config for {new_name}: {error}");
+    }
+    if let Err(error) = crate::proxy::reload().await {
+        tracing::warn!("angie reload failed after rename: {error}");
+    }
+
+    state.events.emit(
+        Some(app.id.clone()),
+        "app.renamed",
+        Some(serde_json::json!({ "from": name, "to": new_name })),
+    );
+
+    match queries::get_app(&state.pool, &new_name).await {
+        Ok(renamed) => (StatusCode::OK, Json(serde_json::json!(renamed))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/clone",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name")),
+    request_body = RenameAppBody,
+    responses(
+        (status = 201, description = "App cloned; the response lists copied and skipped settings"),
+        (status = 400, description = "Invalid name"),
+        (status = 409, description = "Name already taken")
+    )
+)]
+async fn clone_app(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<RenameAppBody>,
+) -> Response {
+    let new_name = body.name.trim().to_string();
+    if let Err(message) = crate::app_name::validate(&new_name) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": message })),
+        )
+            .into_response();
+    }
+
+    let source = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let created = match queries::create_app(
+        &state.pool,
+        &deku_core::types::NewApp {
+            name: new_name.clone(),
+        },
+    )
+    .await
+    {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppAlreadyExists(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("app '{new_name}' already exists"),
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let summary = match queries::clone_app_settings(&state.pool, &source.id, &created.id).await {
+        Ok(summary) => summary,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    state.events.emit(
+        Some(created.id.clone()),
+        "app.created",
+        Some(serde_json::json!({ "name": created.name, "cloned_from": source.name })),
+    );
+    if let Err(error) = crate::hooks::fire(
+        &current_config(&state),
+        crate::hooks::HookEvent::AppCreated,
+        crate::hooks::HookEventData {
+            app: &created,
+            deployment: None,
+            detail: serde_json::json!({ "cloned_from": source.name }),
+        },
+    )
+    .await
+    {
+        tracing::warn!("app.created hook reported an error: {error}");
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "app": created, "copied": summary })),
+    )
+        .into_response()
+}
+
+// ── Deploy tokens ─────────────────────────────────────────────────────────────
+
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/deploy-tokens",
+    tag = "deploy",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Deploy tokens", body = [openapi::DeployTokenSchema]))
+)]
+async fn list_app_deploy_tokens(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    match queries::list_deploy_tokens(&state.pool, &app.id).await {
+        Ok(tokens) => (
+            StatusCode::OK,
+            Json(serde_json::json!(tokens
+                .iter()
+                .map(deploy_token_json)
+                .collect::<Vec<_>>())),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/deploy-tokens",
+    tag = "deploy",
+    params(("name" = String, Path, description = "App name")),
+    request_body = CreateDeployTokenBody,
+    responses(
+        (status = 201, description = "Deploy token created; the token is shown once", body = openapi::NewDeployTokenSchema),
+        (status = 400, description = "Invalid name")
+    )
+)]
+async fn create_app_deploy_token(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<CreateDeployTokenBody>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let label = body.name.trim();
+    if label.is_empty() || label.len() > 64 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "token name must be 1-64 characters" })),
+        )
+            .into_response();
+    }
+
+    match crate::services::deploy_token::create(&state.pool, &app.id, label).await {
+        Ok((token, plaintext)) => {
+            let mut payload = deploy_token_json(&token);
+            payload["token"] = serde_json::Value::String(plaintext);
+            (StatusCode::CREATED, Json(payload)).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/deploy-tokens/{id}",
+    tag = "deploy",
+    params(
+        ("name" = String, Path, description = "App name"),
+        ("id" = String, Path, description = "Deploy token id")
+    ),
+    responses(
+        (status = 204, description = "Deploy token revoked"),
+        (status = 404, description = "App or token not found")
+    )
+)]
+async fn revoke_app_deploy_token(
+    State(state): State<SharedState>,
+    axum::extract::Path((name, id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    match queries::delete_deploy_token(&state.pool, &app.id, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found(format!("deploy token '{id}' not found")).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+// ── Build host and registry ───────────────────────────────────────────────────
+
+/// Reload the fields managed through the config API (object store, registry,
+/// build host) so changes take effect without restarting `dekud`. Paths, ports,
+/// and other startup settings stay frozen at their running values.
+fn current_config(state: &SharedState) -> DekuConfig {
+    match crate::config::load() {
+        Ok(fresh) => {
+            let mut cfg = state.config.clone();
+            cfg.object_store = fresh.object_store;
+            cfg.registry = fresh.registry;
+            cfg.build_host = fresh.build_host;
+            cfg.hooks = fresh.hooks;
+            cfg
+        }
+        Err(_) => state.config.clone(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/build-host",
+    tag = "build-host",
+    responses((status = 200, description = "Build host and registry status", body = openapi::BuildHostStatusSchema))
+)]
+async fn get_build_host() -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "configured": cfg.build_host.is_some(),
+                "build_host": cfg.build_host,
+                "registry": cfg.registry.map(|registry| registry.redacted()),
+            })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/build-host",
+    tag = "build-host",
+request_body = openapi::BuildHostSchema,
+    responses((status = 200, description = "Build host saved"), (status = 400, description = "Invalid build host"))
+)]
+async fn set_build_host(Json(body): Json<BuildHostConfig>) -> impl IntoResponse {
+    if body.host.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "build host 'host' cannot be empty" })),
+        )
+            .into_response();
+    }
+
+    match crate::config::load().and_then(|mut cfg| {
+        cfg.build_host = Some(body.clone());
+        crate::config::save(&cfg)?;
+        Ok(())
+    }) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "configured": true, "build_host": body })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/build-host",
+    tag = "build-host",
+    responses((status = 204, description = "Build host removed"))
+)]
+async fn unset_build_host() -> impl IntoResponse {
+    match crate::config::load().and_then(|mut cfg| {
+        cfg.build_host = None;
+        crate::config::save(&cfg)?;
+        Ok(())
+    }) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/build-host/check",
+    tag = "build-host",
+    responses((status = 200, description = "Build host checks", body = openapi::BuildHostCheckSchema))
+)]
+async fn check_build_host() -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => match crate::build_remote::check_build_host(&cfg).await {
+            Ok(checks) => {
+                let ok = checks.iter().all(|check| check.status == "ok");
+                let payload: Vec<serde_json::Value> = checks
+                    .iter()
+                    .map(|check| {
+                        serde_json::json!({
+                            "name": check.name,
+                            "status": check.status,
+                            "detail": check.detail,
+                        })
+                    })
+                    .collect();
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({ "ok": ok, "checks": payload })),
+                )
+                    .into_response()
+            }
+            Err(e) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/build-host/init",
+    tag = "build-host",
+    responses((status = 200, description = "BuildKit initialization notes", body = openapi::BuildHostInitSchema))
+)]
+async fn init_build_host() -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => match crate::build_remote::init_build_host(&cfg).await {
+            Ok(notes) => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "notes": notes })),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/registry",
+    tag = "registry",
+    responses((status = 200, description = "Registry status", body = openapi::RegistryStatusSchema))
+)]
+async fn get_registry() -> impl IntoResponse {
+    match crate::config::load() {
+        Ok(cfg) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "configured": cfg.registry.is_some(),
+                "registry": cfg.registry.map(|registry| registry.redacted()),
+            })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/registry",
+    tag = "registry",
+request_body = openapi::RegistrySchema,
+    responses((status = 200, description = "Registry saved"), (status = 400, description = "Invalid registry"))
+)]
+async fn set_registry(Json(mut body): Json<RegistryConfig>) -> impl IntoResponse {
+    if body.server.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "registry 'server' cannot be empty" })),
+        )
+            .into_response();
+    }
+
+    let existing = crate::config::load().ok().and_then(|cfg| cfg.registry);
+    // A redacted password round-tripped from `GET /api/registry` keeps the stored secret.
+    if body.password.as_deref() == Some("********") {
+        body.password = existing
+            .as_ref()
+            .and_then(|registry| registry.password.clone());
+    }
+
+    let response_body = body.redacted();
+    match crate::config::load().and_then(|mut cfg| {
+        cfg.registry = Some(body);
+        crate::config::save(&cfg)?;
+        Ok(())
+    }) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "configured": true, "registry": response_body })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/registry",
+    tag = "registry",
+    responses((status = 204, description = "Registry removed"))
+)]
+async fn unset_registry() -> impl IntoResponse {
+    match crate::config::load().and_then(|mut cfg| {
+        cfg.registry = None;
+        crate::config::save(&cfg)?;
+        Ok(())
+    }) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => internal_error(e).into_response(),
     }
 }
@@ -576,7 +1298,7 @@ const APP_OBJECT_STORE_ENV_KEYS: [&str; 15] = [
     "S3_PATH_STYLE",
 ];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct ObjectStoreAppLinkBody {
     #[serde(default)]
     prefix: Option<String>,
@@ -615,6 +1337,13 @@ fn app_object_store_env_pairs(
     ]
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/objectstore",
+    tag = "object-store",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Show the object-store link for an app"))
+)]
 async fn get_app_object_store_link(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -695,6 +1424,14 @@ async fn get_app_object_store_link(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/objectstore",
+    tag = "object-store",
+    params(("name" = String, Path, description = "App name")),
+    request_body = ObjectStoreAppLinkBody,
+    responses((status = 200, description = "Link object-store credentials into an app"))
+)]
 async fn link_app_object_store(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -744,6 +1481,13 @@ async fn link_app_object_store(
         .into_response()
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/objectstore",
+    tag = "object-store",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 204, description = "No content"))
+)]
 async fn unlink_app_object_store(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -773,6 +1517,12 @@ async fn unlink_app_object_store(
 
 // ── Apps ──────────────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/apps",
+    tag = "apps",
+    responses((status = 200, description = "List apps", body = [openapi::AppSchema]))
+)]
 async fn list_apps(State(state): State<SharedState>) -> impl IntoResponse {
     match queries::list_apps(&state.pool).await {
         Ok(apps) => (StatusCode::OK, Json(serde_json::json!(apps))).into_response(),
@@ -780,10 +1530,27 @@ async fn list_apps(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps",
+    tag = "apps",
+    request_body = openapi::NewAppSchema,
+    responses((status = 201, description = "App created", body = openapi::AppSchema))
+)]
 async fn create_app(
     State(state): State<SharedState>,
     Json(body): Json<NewApp>,
 ) -> impl IntoResponse {
+    // An app name becomes a file name and a git remote path, so reject anything
+    // that could escape a directory or look like a flag.
+    if let Err(message) = crate::app_name::validate(body.name.trim()) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": message })),
+        )
+            .into_response();
+    }
+
     match queries::create_app(&state.pool, &body).await {
         Ok(app) => {
             state.events.emit(
@@ -798,6 +1565,19 @@ async fn create_app(
                     data_dir: state.config.data_dir.clone(),
                 })
                 .await;
+            if let Err(error) = crate::hooks::fire(
+                &current_config(&state),
+                crate::hooks::HookEvent::AppCreated,
+                crate::hooks::HookEventData {
+                    app: &app,
+                    deployment: None,
+                    detail: serde_json::json!({}),
+                },
+            )
+            .await
+            {
+                tracing::warn!("app.created hook reported an error: {error}");
+            }
             (StatusCode::CREATED, Json(serde_json::json!(app))).into_response()
         }
         Err(e) => (
@@ -808,6 +1588,16 @@ async fn create_app(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name")),
+    responses(
+        (status = 200, description = "App detail", body = openapi::AppSchema),
+        (status = 404, description = "App not found")
+    )
+)]
 async fn get_app(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -821,6 +1611,16 @@ async fn get_app(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name")),
+    responses(
+        (status = 204, description = "App deleted"),
+        (status = 404, description = "App not found")
+    )
+)]
 async fn delete_app(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -844,10 +1644,23 @@ async fn delete_app(
             state
                 .plugins
                 .run_app_destroy(&AppContext {
-                    app,
+                    app: app.clone(),
                     data_dir: state.config.data_dir.clone(),
                 })
                 .await;
+            if let Err(error) = crate::hooks::fire(
+                &current_config(&state),
+                crate::hooks::HookEvent::AppDestroyed,
+                crate::hooks::HookEventData {
+                    app: &app,
+                    deployment: None,
+                    detail: serde_json::json!({}),
+                },
+            )
+            .await
+            {
+                tracing::warn!("app.destroyed hook reported an error: {error}");
+            }
             state.events.emit(
                 None,
                 "app.deleted",
@@ -862,14 +1675,538 @@ async fn delete_app(
     }
 }
 
-// ── Events ────────────────────────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+struct SetAppAuthBody {
+    mode: String,
+    username: Option<String>,
+    password: Option<String>,
+    forward_url: Option<String>,
+}
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/auth",
+    tag = "auth",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Auth status", body = openapi::AppAuthStatusSchema))
+)]
+async fn get_app_auth_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Response {
+    match crate::services::app_auth::status(&state.pool, &name).await {
+        Ok(Some(record)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "configured": true,
+                "mode": record.mode,
+                "username": record.username,
+                "forward_url": record.forward_url,
+            })),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "configured": false })),
+        )
+            .into_response(),
+        Err(_) => not_found(format!("app '{name}' not found")).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/auth",
+    tag = "auth",
+    params(("name" = String, Path, description = "App name")),
+request_body = openapi::SetAppAuthSchema,
+    responses((status = 204, description = "Auth updated"), (status = 400, description = "Invalid auth configuration"))
+)]
+async fn set_app_auth_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<SetAppAuthBody>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(error) => return internal_error(error).into_response(),
+    };
+
+    let result = match body.mode.as_str() {
+        "basic" => {
+            crate::services::app_auth::enable_basic(
+                &state.pool,
+                &name,
+                body.username.as_deref().unwrap_or_default(),
+                body.password.as_deref().unwrap_or_default(),
+            )
+            .await
+        }
+        "forward" => {
+            crate::services::app_auth::enable_forward(
+                &state.pool,
+                &name,
+                body.forward_url.as_deref().unwrap_or_default(),
+            )
+            .await
+        }
+        other => Err(anyhow::anyhow!(
+            "unknown auth mode '{other}'; expected 'basic' or 'forward'"
+        )),
+    };
+
+    if let Err(error) = result {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response();
+    }
+
+    if let Err(error) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+        return internal_error(error).into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/auth",
+    tag = "auth",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 204, description = "Auth removed"))
+)]
+async fn delete_app_auth_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(error) => return internal_error(error).into_response(),
+    };
+
+    if let Err(error) = crate::services::app_auth::disable(&state.pool, &name).await {
+        return internal_error(error).into_response();
+    }
+    if let Err(error) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+        return internal_error(error).into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct SetMaintenanceBody {
+    enabled: bool,
+    message: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/maintenance",
+    tag = "maintenance",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Maintenance status", body = openapi::MaintenanceSchema))
+)]
+async fn get_maintenance(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+    match queries::get_app_maintenance(&state.pool, &app.id).await {
+        Ok((enabled, message)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "enabled": enabled, "message": message })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/maintenance",
+    tag = "maintenance",
+    params(("name" = String, Path, description = "App name")),
+request_body = openapi::MaintenanceSchema,
+    responses((status = 204, description = "Maintenance updated"))
+)]
+async fn set_maintenance(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<SetMaintenanceBody>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+    if body
+        .message
+        .as_deref()
+        .is_some_and(|message| message.len() > 500)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "maintenance message must be 500 characters or fewer" })),
+        )
+            .into_response();
+    }
+    let message = body
+        .message
+        .as_deref()
+        .filter(|message| !message.is_empty());
+    if let Err(e) = queries::set_app_maintenance(&state.pool, &app.id, body.enabled, message).await
+    {
+        return internal_error(e).into_response();
+    }
+    if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+        return internal_error(e).into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct AddRedirectBody {
+    source_path: String,
+    target: String,
+    code: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/redirects",
+    tag = "redirects",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Redirects", body = [openapi::RedirectSchema]))
+)]
+async fn list_redirects_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+    match queries::list_redirects(&state.pool, &app.id).await {
+        Ok(redirects) => (StatusCode::OK, Json(serde_json::json!(redirects))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/redirects",
+    tag = "redirects",
+    params(("name" = String, Path, description = "App name")),
+request_body = openapi::AddRedirectSchema,
+    responses((status = 201, description = "Redirect created", body = openapi::RedirectSchema))
+)]
+async fn add_redirect_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<AddRedirectBody>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let source_path = body.source_path.trim();
+    let target = body.target.trim();
+    let code = body.code.unwrap_or(302);
+    if !source_path.starts_with('/') || source_path.contains(char::is_whitespace) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "source_path must start with '/' and contain no spaces" })),
+        )
+            .into_response();
+    }
+    let target_ok =
+        target.starts_with("http://") || target.starts_with("https://") || target.starts_with('/');
+    if !target_ok {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "target must be an absolute http(s) URL or a path starting with '/'" })),
+        )
+            .into_response();
+    }
+    if !matches!(code, 301 | 302 | 307 | 308) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "code must be one of 301, 302, 307, 308" })),
+        )
+            .into_response();
+    }
+
+    let redirect = match queries::add_redirect(&state.pool, &app.id, source_path, target, code)
+        .await
+    {
+        Ok(redirect) => redirect,
+        Err(deku_core::error::DekuError::Database(sqlx::Error::Database(error)))
+            if error.is_unique_violation() =>
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": format!("a redirect for '{source_path}' already exists") })),
+            )
+                .into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+    if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+        return internal_error(e).into_response();
+    }
+    (StatusCode::CREATED, Json(serde_json::json!(redirect))).into_response()
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/redirects/{id}",
+    tag = "redirects",
+    params(("name" = String, Path, description = "App name"), ("id" = String, Path, description = "Redirect id")),
+    responses((status = 204, description = "Redirect removed"))
+)]
+async fn remove_redirect_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path((name, id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+    match queries::remove_redirect(&state.pool, &app.id, &id).await {
+        Ok(()) => {}
+        Err(e) => return internal_error(e).into_response(),
+    }
+    if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &name).await {
+        return internal_error(e).into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct AlertsQuery {
+    /// Include resolved alerts, newest first, instead of only active ones.
+    #[serde(default)]
+    include_resolved: bool,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/alerts",
+    tag = "system",
+    params(("include_resolved" = Option<bool>, Query, description = "Include resolved alerts")),
+    responses((status = 200, description = "Active alerts, or alert history when include_resolved is set"))
+)]
+async fn list_alerts_handler(
+    State(state): State<SharedState>,
+    Query(params): Query<AlertsQuery>,
+) -> impl IntoResponse {
+    let result = if params.include_resolved {
+        queries::list_alerts(&state.pool, 200).await
+    } else {
+        queries::list_active_alerts(&state.pool).await
+    };
+
+    match result {
+        Ok(alerts) => (StatusCode::OK, Json(serde_json::json!(alerts))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/metrics",
+    tag = "system",
+    responses((status = 200, description = "Prometheus metrics in the text exposition format"))
+)]
+async fn metrics_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    match crate::metrics::snapshot(&state.pool).await {
+        Ok(snapshot) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            )],
+            crate::metrics::render(&snapshot),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+/// Inspect every TLS-enabled app's certificate so expiry is visible before it
+/// takes an app down. Returns `None` when no app uses TLS.
+async fn tls_certificate_check(pool: &SqlitePool) -> Option<serde_json::Value> {
+    use crate::services::letsencrypt::{status, CertLifecycle};
+
+    let apps = queries::list_apps(pool).await.ok()?;
+    let tls_apps: Vec<_> = apps.into_iter().filter(|app| app.tls_enabled).collect();
+    if tls_apps.is_empty() {
+        return None;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    for app in &tls_apps {
+        match status(pool, &app.name).await {
+            Ok(cert) => match cert.lifecycle {
+                CertLifecycle::Ok => {}
+                CertLifecycle::Expiring => warnings.push(format!(
+                    "{}: expires in {} day(s)",
+                    app.name,
+                    cert.days_remaining.unwrap_or_default()
+                )),
+                CertLifecycle::Expired => failures.push(format!(
+                    "{}: expired {} day(s) ago",
+                    app.name,
+                    cert.days_remaining.unwrap_or_default().abs()
+                )),
+                CertLifecycle::Missing => {
+                    failures.push(format!("{}: certificate or key file missing", app.name))
+                }
+                CertLifecycle::Unknown => {
+                    failures.push(format!("{}: certificate could not be inspected", app.name))
+                }
+            },
+            Err(error) => failures.push(format!("{}: {error}", app.name)),
+        }
+    }
+
+    let (state, detail) = if !failures.is_empty() {
+        ("fail", failures.join("; "))
+    } else if !warnings.is_empty() {
+        (
+            "warn",
+            format!(
+                "renew within {} days: {}",
+                crate::services::letsencrypt::CERT_EXPIRY_WARNING_DAYS,
+                warnings.join("; ")
+            ),
+        )
+    } else {
+        ("ok", format!("{} TLS certificate(s) valid", tls_apps.len()))
+    };
+
+    Some(serde_json::json!({
+        "name": "tls_certificates",
+        "status": state,
+        "detail": detail,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/doctor",
+    tag = "system",
+    responses((status = 200, description = "Host and daemon checks", body = [openapi::DoctorCheckSchema]))
+)]
+async fn doctor(State(state): State<SharedState>) -> impl IntoResponse {
+    let mut checks: Vec<serde_json::Value> = Vec::new();
+
+    checks.push(serde_json::json!({
+        "name": "daemon",
+        "status": "ok",
+        "detail": format!("dekud {}", deku_core::version::release_version()),
+    }));
+
+    match sqlx::query("SELECT 1").execute(&state.pool).await {
+        Ok(_) => checks.push(serde_json::json!({ "name": "database", "status": "ok", "detail": "query succeeded" })),
+        Err(error) => checks.push(serde_json::json!({ "name": "database", "status": "fail", "detail": error.to_string() })),
+    }
+
+    match state.docker.ping().await {
+        Ok(_) => checks.push(
+            serde_json::json!({ "name": "docker", "status": "ok", "detail": "daemon reachable" }),
+        ),
+        Err(error) => checks.push(
+            serde_json::json!({ "name": "docker", "status": "fail", "detail": error.to_string() }),
+        ),
+    }
+
+    let angie_dir = &state.config.angie_conf_dir;
+    if angie_dir.is_dir() {
+        checks.push(serde_json::json!({ "name": "angie_config_dir", "status": "ok", "detail": angie_dir.display().to_string() }));
+    } else {
+        checks.push(serde_json::json!({ "name": "angie_config_dir", "status": "warn", "detail": format!("{} is not a directory", angie_dir.display()) }));
+    }
+
+    if state.config.object_store.is_some() {
+        checks.push(
+            serde_json::json!({ "name": "object_store", "status": "ok", "detail": "configured" }),
+        );
+    } else {
+        checks.push(serde_json::json!({ "name": "object_store", "status": "warn", "detail": "not configured; backups unavailable" }));
+    }
+
+    let apps = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM apps")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+    let services = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM services")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+    checks.push(serde_json::json!({
+        "name": "inventory",
+        "status": "ok",
+        "detail": format!("{apps} apps, {services} services"),
+    }));
+
+    if let Some(check) = tls_certificate_check(&state.pool).await {
+        checks.push(check);
+    }
+
+    let overall = if checks.iter().any(|check| check["status"] == "fail") {
+        "degraded"
+    } else {
+        "ok"
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": overall, "checks": checks })),
+    )
+        .into_response()
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
 #[derive(Debug, Deserialize)]
 struct EventQuery {
     app: Option<String>,
     since: Option<DateTime<Utc>>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/events",
+    tag = "events",
+    params(("app" = Option<String>, Query, description = "Filter by app name"), ("since" = Option<String>, Query, description = "Only events after this RFC 3339 timestamp")),
+    responses((status = 200, description = "List recent events"))
+)]
 async fn list_events(
     State(state): State<SharedState>,
     Query(params): Query<EventQuery>,
@@ -880,6 +2217,12 @@ async fn list_events(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/events/stream",
+    tag = "events",
+    responses((status = 200, description = "Stream all events as SSE"))
+)]
 async fn stream_events(
     State(state): State<SharedState>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
@@ -898,6 +2241,13 @@ struct StreamQuery {
     since: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/events/stream",
+    tag = "events",
+    params(("name" = String, Path, description = "App name"), ("since" = Option<String>, Query, description = "Replay events after this RFC 3339 timestamp")),
+    responses((status = 200, description = "Stream events for an app as SSE"))
+)]
 async fn stream_app_events(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -950,11 +2300,18 @@ async fn stream_app_events(
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct AddDomainBody {
     domain: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/domains",
+    tag = "domains",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "List app domains"))
+)]
 async fn list_domains(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -972,6 +2329,14 @@ async fn list_domains(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/domains",
+    tag = "domains",
+    params(("name" = String, Path, description = "App name")),
+    request_body = AddDomainBody,
+    responses((status = 201, description = "Add a domain to an app"))
+)]
 async fn add_domain(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1014,6 +2379,13 @@ async fn add_domain(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/domains/{domain}",
+    tag = "domains",
+    params(("name" = String, Path, description = "App name"), ("domain" = String, Path, description = "Domain")),
+    responses((status = 204, description = "No content"))
+)]
 async fn remove_domain(
     State(state): State<SharedState>,
     axum::extract::Path((name, domain)): axum::extract::Path<(String, String)>,
@@ -1060,7 +2432,7 @@ async fn remove_domain(
 
 // ── Ports ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct AddPortBody {
     host_port: i64,
     container_port: i64,
@@ -1072,6 +2444,13 @@ fn default_protocol() -> String {
     "tcp".to_string()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/ports",
+    tag = "ports",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "List published ports"))
+)]
 async fn list_ports(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1089,6 +2468,14 @@ async fn list_ports(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/ports",
+    tag = "ports",
+    params(("name" = String, Path, description = "App name")),
+    request_body = AddPortBody,
+    responses((status = 201, description = "Publish a port"))
+)]
 async fn add_port(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1139,6 +2526,13 @@ async fn add_port(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/ports/{id}",
+    tag = "ports",
+    params(("name" = String, Path, description = "App name"), ("id" = String, Path, description = "Port id")),
+    responses((status = 204, description = "No content"))
+)]
 async fn remove_port(
     State(state): State<SharedState>,
     axum::extract::Path((name, id)): axum::extract::Path<(String, String)>,
@@ -1192,6 +2586,12 @@ async fn remove_port(
 
 // ── Routing table ─────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/routing",
+    tag = "routing",
+    responses((status = 200, description = "List the routing table"))
+)]
 async fn list_routing(State(state): State<SharedState>) -> impl IntoResponse {
     match build_routing_table(&state).await {
         Ok(table) => (StatusCode::OK, Json(serde_json::json!(table))).into_response(),
@@ -1233,6 +2633,12 @@ struct SingleRoutingStatusResponse {
     app: RoutingAppStatus,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/routing/status",
+    tag = "routing",
+    responses((status = 200, description = "Routing status summary"))
+)]
 async fn get_routing_status(State(state): State<SharedState>) -> impl IntoResponse {
     match build_routing_status_response(&state).await {
         Ok(status) => (StatusCode::OK, Json(serde_json::json!(status))).into_response(),
@@ -1240,6 +2646,13 @@ async fn get_routing_status(State(state): State<SharedState>) -> impl IntoRespon
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/routing/status/{name}",
+    tag = "routing",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Routing status for one app"))
+)]
 async fn get_routing_status_for_app(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1272,6 +2685,14 @@ struct UpdateRoutingBody {
 }
 
 /// Update the upstream(s) for an app and rewrite the Angie config.
+#[utoipa::path(
+    post,
+    path = "/api/routing/{name}",
+    tag = "routing",
+    params(("name" = String, Path, description = "App name")),
+    request_body = openapi::RoutingBodySchema,
+    responses((status = 204, description = "No content"))
+)]
 async fn update_routing(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1290,6 +2711,9 @@ async fn update_routing(
         Err(e) => return internal_error(e).into_response(),
     };
 
+    let extras = crate::proxy::load_extras(&state.pool, &app.id)
+        .await
+        .unwrap_or_default();
     let desired = if domains.is_empty() || body.upstreams.is_empty() {
         None
     } else {
@@ -1297,6 +2721,10 @@ async fn update_routing(
             domains: &domains,
             upstreams: &body.upstreams,
             tls: app.tls_enabled,
+            auth: extras.auth.as_ref(),
+            maintenance: extras.maintenance,
+            maintenance_message: extras.maintenance_message.as_deref(),
+            redirects: &extras.redirects,
         })
     };
 
@@ -1329,14 +2757,26 @@ async fn reconcile_proxy_for_app(
     };
 
     let domains = queries::list_domain_names(&state.pool, app_id).await?;
-    let ports = queries::list_port_mappings(&state.pool, app_id).await?;
 
-    if domains.is_empty() || ports.is_empty() {
+    // Upstreams come from the running web containers, so a reconcile after a
+    // deploy keeps every replica in the pool instead of collapsing to one.
+    let upstreams: Vec<deku_core::types::Upstream> =
+        queries::list_web_upstream_ports(&state.pool, app_id)
+            .await?
+            .into_iter()
+            .map(|port| deku_core::types::Upstream {
+                host: "127.0.0.1".to_string(),
+                port,
+            })
+            .collect();
+
+    if domains.is_empty() || upstreams.is_empty() {
         crate::proxy::apply_app_config(&state.config.angie_conf_dir, app_name, None).await?;
         return Ok(());
     }
-
-    let upstreams = upstreams_from_ports(&ports);
+    let extras = crate::proxy::load_extras(&state.pool, app_id)
+        .await
+        .unwrap_or_default();
     crate::proxy::apply_app_config(
         &state.config.angie_conf_dir,
         app_name,
@@ -1344,6 +2784,10 @@ async fn reconcile_proxy_for_app(
             domains: &domains,
             upstreams: &upstreams,
             tls,
+            auth: extras.auth.as_ref(),
+            maintenance: extras.maintenance,
+            maintenance_message: extras.maintenance_message.as_deref(),
+            redirects: &extras.redirects,
         }),
     )
     .await?;
@@ -1419,6 +2863,13 @@ async fn run_live_http_probe(
 
 // ── Deployments ───────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/deployments",
+    tag = "deploy",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "List deployments for an app"))
+)]
 async fn list_deployments(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1436,7 +2887,7 @@ async fn list_deployments(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct DeployBody {
     /// "source" | "image" | "archive"
     source: String,
@@ -1446,8 +2897,19 @@ struct DeployBody {
     archive: Option<String>,
     /// Force a specific builder
     builder: Option<String>,
+    /// Build host selection: omit for the configured default, "local" to build
+    /// on the deploy host, or the configured build host name.
+    build_host: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/deploy",
+    tag = "deploy",
+    params(("name" = String, Path, description = "App name")),
+    request_body = DeployBody,
+    responses((status = 202, description = "Deploy an app"))
+)]
 async fn trigger_deploy(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1510,12 +2972,13 @@ async fn trigger_deploy(
         app_name: name.clone(),
         source: deploy_source,
         force_builder: body.builder,
+        build_host: body.build_host,
     };
 
     let pool = state.pool.clone();
     let docker = state.docker.clone();
     let events = state.events.clone();
-    let cfg = state.config.clone();
+    let cfg = current_config(&state);
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
     let deploy_lock = state.deploy_locks.for_app(&app.id);
@@ -1537,11 +3000,19 @@ async fn trigger_deploy(
         .into_response()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct RollbackBody {
     deployment_id: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/rollback",
+    tag = "deploy",
+    params(("name" = String, Path, description = "App name")),
+    request_body = RollbackBody,
+    responses((status = 202, description = "Roll back to a previous deployment"))
+)]
 async fn trigger_rollback(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1648,6 +3119,13 @@ struct AppChecksResponse {
     issues: Vec<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/logs",
+    tag = "logs",
+    params(("name" = String, Path, description = "App name"), ("n" = usize, Query, description = "Number of log lines")),
+    responses((status = 200, description = "Fetch recent container logs"))
+)]
 async fn get_logs(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1681,6 +3159,13 @@ async fn get_logs(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/checks",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name"), ("path" = Option<String>, Query, description = "Health check path"), ("timeout_secs" = Option<u64>, Query, description = "Health check timeout in seconds")),
+    responses((status = 200, description = "Run health checks for an app"))
+)]
 async fn get_app_checks(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1788,6 +3273,13 @@ async fn get_app_checks(
 
 // ── Config vars ───────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/config",
+    tag = "config",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "List config vars"))
+)]
 async fn list_config(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1805,7 +3297,7 @@ async fn list_config(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct SetConfigBody {
     key: String,
     value: String,
@@ -1813,6 +3305,14 @@ struct SetConfigBody {
     is_global: bool,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/config",
+    tag = "config",
+    params(("name" = String, Path, description = "App name")),
+    request_body = SetConfigBody,
+    responses((status = 204, description = "No content"))
+)]
 async fn set_config(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1840,6 +3340,13 @@ async fn set_config(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/config/{key}",
+    tag = "config",
+    params(("name" = String, Path, description = "App name"), ("key" = String, Path, description = "Config key")),
+    responses((status = 204, description = "No content"))
+)]
 async fn unset_config(
     State(state): State<SharedState>,
     axum::extract::Path((name, key)): axum::extract::Path<(String, String)>,
@@ -1866,6 +3373,13 @@ async fn unset_config(
 
 // ── Process inspection / scale ────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/ps",
+    tag = "ps",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "List running processes for an app"))
+)]
 async fn list_processes(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1907,6 +3421,13 @@ async fn list_processes(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/scale",
+    tag = "ps",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Show process scale"))
+)]
 async fn get_scale(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1924,12 +3445,125 @@ async fn get_scale(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct SetLimitsBody {
+    /// Process type to scope the limit to; defaults to every process.
+    process_type: Option<String>,
+    /// CPU limit: cores (`0.5`) or millicores (`500m`).
+    cpu: Option<String>,
+    /// Memory limit: `512m`, `1g`, `1024k`, or bytes.
+    memory: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/limits",
+    tag = "limits",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "Resource limits", body = [openapi::LimitsSchema]))
+)]
+async fn get_limits(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+    match queries::list_resource_limits(&state.pool, &app.id).await {
+        Ok(limits) => (StatusCode::OK, Json(serde_json::json!(limits))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/limits",
+    tag = "limits",
+    params(("name" = String, Path, description = "App name")),
+request_body = openapi::LimitsSchema,
+    responses((status = 200, description = "Limits set"), (status = 400, description = "Invalid limit"))
+)]
+async fn set_limits(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<SetLimitsBody>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    if body.cpu.is_none() && body.memory.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "provide at least one of cpu or memory" })),
+        )
+            .into_response();
+    }
+    if let Some(cpu) = body.cpu.as_deref() {
+        if crate::deploy::parse_cpu_quota(cpu).is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid cpu limit '{cpu}'") })),
+            )
+                .into_response();
+        }
+    }
+    if let Some(memory) = body.memory.as_deref() {
+        if crate::deploy::parse_memory_bytes(memory).is_none() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid memory limit '{memory}'") })),
+            )
+                .into_response();
+        }
+    }
+
+    let process_type = body.process_type.as_deref().unwrap_or("_all_");
+    match queries::set_resource_limit(
+        &state.pool,
+        &app.id,
+        process_type,
+        body.cpu.as_deref(),
+        body.memory.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "process_type": process_type,
+                "cpu": body.cpu,
+                "memory": body.memory,
+                "note": "applies on the next deploy",
+            })),
+        )
+            .into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct SetScaleBody {
     /// Map of process_type → count
     scales: std::collections::HashMap<String, i64>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/scale",
+    tag = "ps",
+    params(("name" = String, Path, description = "App name")),
+    request_body = SetScaleBody,
+    responses((status = 204, description = "No content"))
+)]
 async fn set_scale(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -2071,12 +3705,18 @@ async fn angie_config_status() -> AngieConfigStatus {
 
 // ── SSH Keys ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct AddSshKeyBody {
     name: String,
     public_key: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/ssh-keys",
+    tag = "ssh-keys",
+    responses((status = 200, description = "List SSH keys"))
+)]
 async fn list_ssh_keys(State(state): State<SharedState>) -> impl IntoResponse {
     match queries::list_ssh_keys(&state.pool).await {
         Ok(keys) => {
@@ -2096,6 +3736,13 @@ async fn list_ssh_keys(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/ssh-keys",
+    tag = "ssh-keys",
+    request_body = AddSshKeyBody,
+    responses((status = 201, description = "Add an SSH key"))
+)]
 async fn add_ssh_key(
     State(state): State<SharedState>,
     Json(body): Json<AddSshKeyBody>,
@@ -2132,6 +3779,13 @@ async fn add_ssh_key(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/ssh-keys/{name}",
+    tag = "ssh-keys",
+    params(("name" = String, Path, description = "Key name")),
+    responses((status = 204, description = "No content"))
+)]
 async fn remove_ssh_key(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -2144,6 +3798,12 @@ async fn remove_ssh_key(
 
 // ── Plugins ───────────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/plugins",
+    tag = "plugins",
+    responses((status = 200, description = "List installed plugins"))
+)]
 async fn list_plugins(State(state): State<SharedState>) -> impl IntoResponse {
     let plugins = state.plugins.list_plugins().await;
     let json: Vec<_> = plugins
@@ -2159,15 +3819,48 @@ async fn list_plugins(State(state): State<SharedState>) -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!(json))).into_response()
 }
 
-#[derive(Debug, Deserialize)]
+#[utoipa::path(
+    get,
+    path = "/api/plugins/runtime",
+    tag = "plugins",
+    responses((status = 200, description = "Dynamic plugin runtime availability", body = openapi::PluginRuntimeSchema))
+)]
+async fn get_plugins_runtime() -> impl IntoResponse {
+    let available = crate::plugins::dynamic_runtime_available();
+    let mut payload = serde_json::json!({ "available": available });
+    if !available {
+        payload["message"] =
+            serde_json::Value::String(crate::plugins::runtime_unavailable_message().to_string());
+    }
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct InstallPluginBody {
     path: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/plugins",
+    tag = "plugins",
+    request_body = InstallPluginBody,
+    responses((status = 201, description = "Install a plugin"))
+)]
 async fn install_plugin(
     State(state): State<SharedState>,
     Json(body): Json<InstallPluginBody>,
 ) -> impl IntoResponse {
+    if !crate::plugins::dynamic_runtime_available() {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": crate::plugins::runtime_unavailable_message(),
+            })),
+        )
+            .into_response();
+    }
+
     let path = std::path::Path::new(&body.path);
     match state.plugins.load_plugin(path).await {
         Ok(name) => (
@@ -2183,6 +3876,13 @@ async fn install_plugin(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/plugins/{name}",
+    tag = "plugins",
+    params(("name" = String, Path, description = "Plugin name")),
+    responses((status = 204, description = "No content"))
+)]
 async fn uninstall_plugin(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -2195,11 +3895,50 @@ async fn uninstall_plugin(
 
 // ── Archive deploy ────────────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct ImportConfigBody {
+    /// Config vars to import, keyed by name.
+    vars: std::collections::BTreeMap<String, String>,
+    /// Replace vars that already exist instead of skipping them.
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct RenameAppBody {
+    /// New name for the app.
+    name: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct CreateDeployTokenBody {
+    /// Label for the token, so several can be told apart.
+    name: String,
+}
+
+fn deploy_token_json(token: &queries::DeployToken) -> serde_json::Value {
+    serde_json::json!({
+        "id": token.id,
+        "name": token.name,
+        "prefix": token.token_prefix,
+        "created_at": token.created_at,
+        "last_used_at": token.last_used_at,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct ArchiveDeployQuery {
     builder: Option<String>,
+    build_host: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/deploy/archive",
+    tag = "deploy",
+    params(("name" = String, Path, description = "App name"), ("builder" = Option<String>, Query, description = "Force a specific builder"), ("build_host" = Option<String>, Query, description = "Build host: configured default, 'local', or the configured name")),
+    responses((status = 202, description = "Deploy an app from an uploaded source archive"))
+)]
 async fn deploy_archive(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -2299,12 +4038,13 @@ async fn deploy_archive(
             path: path_str.clone(),
         },
         force_builder: params.builder,
+        build_host: params.build_host,
     };
 
     let pool = state.pool.clone();
     let docker = state.docker.clone();
     let events = state.events.clone();
-    let cfg = state.config.clone();
+    let cfg = current_config(&state);
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
     let deploy_lock = state.deploy_locks.for_app(&app.id);
