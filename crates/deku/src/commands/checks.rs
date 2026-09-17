@@ -101,24 +101,29 @@ pub async fn run(args: ChecksArgs, client: &DekuClient) -> Result<()> {
                 println!("Domains:        {}", join_strings(domains));
             }
 
-            if data["probe"].is_object() {
-                println!(
-                    "HTTP probe:     {} {}{}",
-                    yes_no(data["probe"]["ok"].as_bool().unwrap_or(false)),
-                    data["probe"]["target"].as_str().unwrap_or("-"),
-                    data["probe"]["path"].as_str().unwrap_or("-")
-                );
-                if let Some(status_code) = data["probe"]["status_code"].as_u64() {
-                    println!("Probe status:   {status_code}");
+            // One line per running web replica, so a single dead replica is
+            // visible even when the others answer.
+            match data["probes"].as_array() {
+                Some(probes) if !probes.is_empty() => {
+                    for (replica, probe) in probes.iter().enumerate() {
+                        println!(
+                            "HTTP probe [{replica}]: {} {}{}",
+                            yes_no(probe["ok"].as_bool().unwrap_or(false)),
+                            probe["target"].as_str().unwrap_or("-"),
+                            probe["path"].as_str().unwrap_or("-")
+                        );
+                        if let Some(status_code) = probe["status_code"].as_u64() {
+                            println!("  status:       {status_code}");
+                        }
+                        if let Some(latency) = probe["latency_ms"].as_u64() {
+                            println!("  latency:      {latency}ms");
+                        }
+                        if let Some(error) = probe["error"].as_str() {
+                            println!("  error:        {error}");
+                        }
+                    }
                 }
-                if let Some(latency) = data["probe"]["latency_ms"].as_u64() {
-                    println!("Probe latency:  {latency}ms");
-                }
-                if let Some(error) = data["probe"]["error"].as_str() {
-                    println!("Probe error:    {error}");
-                }
-            } else {
-                println!("HTTP probe:     no");
+                _ => println!("HTTP probe:     no"),
             }
 
             if let Some(issues) = data["issues"].as_array() {

@@ -21,9 +21,7 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
             port: *port,
         })
         .collect();
-    let extras = crate::proxy::load_extras(pool, &app.id)
-        .await
-        .unwrap_or_default();
+    let extras = crate::proxy::load_extras(pool, &app.id).await?;
     crate::proxy::apply_app_config(
         &cfg.angie_conf_dir,
         app_name,
@@ -54,9 +52,7 @@ pub async fn disable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Res
                 port: *port,
             })
             .collect();
-        let extras = crate::proxy::load_extras(pool, &app.id)
-            .await
-            .unwrap_or_default();
+        let extras = crate::proxy::load_extras(pool, &app.id).await?;
         crate::proxy::apply_app_config(
             &cfg.angie_conf_dir,
             app_name,

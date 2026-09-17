@@ -758,17 +758,31 @@ pub async fn list_containers_for_app(
     Ok(containers)
 }
 
-/// Host ports of the app's running web containers, oldest first.
+/// Host ports of the app's serving web containers, oldest first.
 ///
 /// This is the source of truth for upstreams: a deploy and a later reconcile both
 /// derive the vhost's server list from it, so every web replica receives traffic
 /// and the two paths cannot disagree.
+///
+/// Only the current deployment's containers count. After a rollout the previous
+/// containers stay `running` for the retire window, and pooling them would send
+/// traffic back to the version that was just replaced. When no deployment is
+/// marked live yet (a crash mid-rollout, or the very first deploy) the newest
+/// deployment's containers are used instead of serving nothing.
 pub async fn list_web_upstream_ports(pool: &SqlitePool, app_id: &str) -> Result<Vec<u16>> {
     let rows = sqlx::query_as::<_, (i64,)>(
-        "SELECT host_port FROM containers \
-         WHERE app_id = ?1 AND status = 'running' AND process_type = 'web' \
-           AND host_port IS NOT NULL \
-         ORDER BY created_at ASC",
+        "SELECT c.host_port FROM containers c \
+         WHERE c.app_id = ?1 AND c.status = 'running' AND c.process_type = 'web' \
+           AND c.host_port IS NOT NULL \
+           AND c.deployment_id = COALESCE( \
+                 (SELECT d.id FROM deployments d \
+                  WHERE d.app_id = ?1 AND d.status = 'live' \
+                  ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1), \
+                 (SELECT d.id FROM deployments d \
+                  WHERE d.app_id = ?1 \
+                  ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1) \
+               ) \
+         ORDER BY c.created_at ASC",
     )
     .bind(app_id)
     .fetch_all(pool)
@@ -1297,6 +1311,25 @@ fn service_backup_from_row(row: sqlx::sqlite::SqliteRow) -> Result<ServiceBackup
         restored_at: row.try_get("restored_at")?,
         encryption: row.try_get("encryption")?,
     })
+}
+
+/// Upstreams for the app's running web containers, one per replica.
+///
+/// Every path that writes the proxy config derives its server list from here.
+/// `port_mappings` records a single published port for display and CRUD; it is
+/// not the serving set, and using it silently drops replicas.
+pub async fn list_web_upstreams(
+    pool: &SqlitePool,
+    app_id: &str,
+) -> Result<Vec<deku_core::types::Upstream>> {
+    Ok(list_web_upstream_ports(pool, app_id)
+        .await?
+        .into_iter()
+        .map(|port| deku_core::types::Upstream {
+            host: "127.0.0.1".to_string(),
+            port,
+        })
+        .collect())
 }
 
 /// Apps that have at least one deployment but no running web container.
@@ -2196,7 +2229,7 @@ mod service_backup_tests {
 
 #[cfg(test)]
 mod upstream_port_tests {
-    use super::list_web_upstream_ports;
+    use super::{list_web_upstream_ports, list_web_upstreams};
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::SqlitePool;
 
@@ -2231,6 +2264,26 @@ mod upstream_port_tests {
         .execute(pool)
         .await
         .expect("insert deployment");
+    }
+
+    async fn insert_container_in(
+        pool: &SqlitePool,
+        id: &str,
+        app_id: &str,
+        deployment_id: &str,
+        host_port: Option<i64>,
+    ) {
+        sqlx::query(
+            "INSERT INTO containers (id, app_id, deployment_id, process_type, status, host_port, created_at) \
+             VALUES (?1, ?2, ?3, 'web', 'running', ?4, CURRENT_TIMESTAMP)",
+        )
+        .bind(id)
+        .bind(app_id)
+        .bind(deployment_id)
+        .bind(host_port)
+        .execute(pool)
+        .await
+        .expect("insert container");
     }
 
     async fn insert_container(
@@ -2273,6 +2326,73 @@ mod upstream_port_tests {
             .expect("ports");
         ports.sort_unstable();
         assert_eq!(ports, vec![30001, 30002]);
+    }
+
+    #[tokio::test]
+    async fn containers_from_the_previous_deployment_are_not_pooled() {
+        let pool = test_pool().await;
+        insert_app(&pool, "app-1", "one", "dep-1").await;
+        // A newer deployment is live; dep-1 is the version being retired.
+        sqlx::query(
+            "INSERT INTO deployments (id, app_id, status, builder, image_tag, created_at) \
+             VALUES ('dep-2', 'app-1', 'live', 'dockerfile', 'deku/x:2', ?1)",
+        )
+        .bind((chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339())
+        .execute(&pool)
+        .await
+        .expect("insert newer deployment");
+
+        insert_container_in(&pool, "old", "app-1", "dep-1", Some(32001)).await;
+        insert_container_in(&pool, "new", "app-1", "dep-2", Some(32002)).await;
+
+        assert_eq!(
+            list_web_upstream_ports(&pool, "app-1")
+                .await
+                .expect("ports"),
+            vec![32002],
+            "a retired deployment's containers must not keep serving traffic"
+        );
+    }
+
+    #[tokio::test]
+    async fn upstreams_cover_every_replica_and_point_at_loopback() {
+        let pool = test_pool().await;
+        insert_app(&pool, "app-1", "one", "dep-1").await;
+        insert_container(&pool, "c1", "app-1", "web", "running", Some(31001)).await;
+        insert_container(&pool, "c2", "app-1", "web", "running", Some(31002)).await;
+
+        let upstreams = list_web_upstreams(&pool, "app-1").await.expect("upstreams");
+        assert_eq!(
+            upstreams.len(),
+            2,
+            "every running replica must be an upstream"
+        );
+        assert!(upstreams
+            .iter()
+            .all(|upstream| upstream.host == "127.0.0.1"));
+        let mut ports: Vec<u16> = upstreams.iter().map(|upstream| upstream.port).collect();
+        ports.sort_unstable();
+        assert_eq!(ports, vec![31001, 31002]);
+    }
+
+    #[tokio::test]
+    async fn upstreams_are_empty_for_an_app_that_is_not_serving() {
+        let pool = test_pool().await;
+        insert_app(&pool, "app-1", "one", "dep-1").await;
+        insert_container(&pool, "c1", "app-1", "web", "stopped", Some(31001)).await;
+        // A published port mapping alone must not produce an upstream.
+        sqlx::query(
+            "INSERT INTO port_mappings (id, app_id, host_port, container_port, protocol) \
+             VALUES ('pm-1', 'app-1', 31001, 3000, 'tcp')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert port mapping");
+
+        assert!(list_web_upstreams(&pool, "app-1")
+            .await
+            .expect("upstreams")
+            .is_empty());
     }
 
     #[tokio::test]

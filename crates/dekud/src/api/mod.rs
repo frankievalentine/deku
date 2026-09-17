@@ -2711,9 +2711,10 @@ async fn update_routing(
         Err(e) => return internal_error(e).into_response(),
     };
 
-    let extras = crate::proxy::load_extras(&state.pool, &app.id)
-        .await
-        .unwrap_or_default();
+    let extras = match crate::proxy::load_extras(&state.pool, &app.id).await {
+        Ok(extras) => extras,
+        Err(e) => return internal_error(e).into_response(),
+    };
     let desired = if domains.is_empty() || body.upstreams.is_empty() {
         None
     } else {
@@ -2774,9 +2775,7 @@ async fn reconcile_proxy_for_app(
         crate::proxy::apply_app_config(&state.config.angie_conf_dir, app_name, None).await?;
         return Ok(());
     }
-    let extras = crate::proxy::load_extras(&state.pool, app_id)
-        .await
-        .unwrap_or_default();
+    let extras = crate::proxy::load_extras(&state.pool, app_id).await?;
     crate::proxy::apply_app_config(
         &state.config.angie_conf_dir,
         app_name,
@@ -2792,16 +2791,6 @@ async fn reconcile_proxy_for_app(
     )
     .await?;
     Ok(())
-}
-
-fn upstreams_from_ports(ports: &[deku_core::types::PortMapping]) -> Vec<Upstream> {
-    ports
-        .iter()
-        .map(|p| Upstream {
-            host: "127.0.0.1".to_string(),
-            port: p.host_port as u16,
-        })
-        .collect()
 }
 
 fn normalize_check_path(path: &str) -> String {
@@ -3097,7 +3086,7 @@ struct AppChecksContainerSummary {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct AppChecksProbeResult {
     ok: bool,
     target: String,
@@ -3115,7 +3104,11 @@ struct AppChecksResponse {
     routing: RoutingAppStatus,
     containers: Vec<AppChecksContainerSummary>,
     port_mappings: Vec<deku_core::types::PortMapping>,
+    /// Result for the first running web replica, kept for existing consumers.
     probe: Option<AppChecksProbeResult>,
+    /// One result per running web replica; a failure here is a failure even when
+    /// `probe` succeeded.
+    probes: Vec<AppChecksProbeResult>,
     issues: Vec<String>,
 }
 
@@ -3205,13 +3198,20 @@ async fn get_app_checks(
         Err(e) => return internal_error(e).into_response(),
     };
 
+    // Probe every running web replica. Checking only one would report a healthy
+    // app while another replica is serving errors.
+    let upstream_ports = match queries::list_web_upstream_ports(&state.pool, &app.id).await {
+        Ok(ports) => ports,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
     let path = normalize_check_path(params.path.as_deref().unwrap_or("/"));
     let timeout_secs = params.timeout_secs.unwrap_or(5);
-    let probe = if let Some(port) = port_mappings.first() {
-        Some(run_live_http_probe(port.host_port as u16, &path, timeout_secs).await)
-    } else {
-        None
-    };
+    let mut probes = Vec::with_capacity(upstream_ports.len());
+    for port in &upstream_ports {
+        probes.push(run_live_http_probe(*port, &path, timeout_secs).await);
+    }
+    let probe = probes.first().cloned();
 
     let mut issues = Vec::new();
     if latest_deployment.is_none() {
@@ -3220,14 +3220,21 @@ async fn get_app_checks(
     if containers.is_empty() {
         issues.push("no running containers recorded".to_string());
     }
-    if probe.is_none() {
-        issues.push("no published web port available for an HTTP probe".to_string());
+    if probes.is_empty() {
+        issues.push("no running web replica available for an HTTP probe".to_string());
     }
-    if let Some(probe) = &probe {
-        if !probe.ok {
+    for (replica, result) in probes.iter().enumerate() {
+        if !result.ok {
+            let reason = result
+                .error
+                .clone()
+                .unwrap_or_else(|| match result.status_code {
+                    Some(status) => format!("HTTP {status}"),
+                    None => "no response".to_string(),
+                });
             issues.push(format!(
-                "local HTTP probe failed for {}{}",
-                probe.target, probe.path
+                "local HTTP probe failed for web replica {replica} at {}{}: {reason}",
+                result.target, result.path
             ));
         }
     }
@@ -3235,7 +3242,7 @@ async fn get_app_checks(
 
     let has_fatal_issue = latest_deployment.is_none()
         || containers.is_empty()
-        || probe.as_ref().is_some_and(|probe| !probe.ok);
+        || probes.iter().any(|probe| !probe.ok);
 
     let container_summaries = containers
         .into_iter()
@@ -3265,6 +3272,7 @@ async fn get_app_checks(
             containers: container_summaries,
             port_mappings,
             probe,
+            probes,
             issues,
         })),
     )
@@ -3597,13 +3605,13 @@ async fn build_routing_table(state: &AppState) -> anyhow::Result<Vec<serde_json:
 
     for app in apps {
         let domains = queries::list_domain_names(&state.pool, &app.id).await?;
-        let ports = queries::list_port_mappings(&state.pool, &app.id).await?;
+        let upstreams = queries::list_web_upstreams(&state.pool, &app.id).await?;
         table.push(serde_json::json!({
             "app": app.name,
             "domains": domains,
-            "upstreams": ports.iter().map(|p| serde_json::json!({
-                "host": "127.0.0.1",
-                "port": p.host_port,
+            "upstreams": upstreams.iter().map(|upstream| serde_json::json!({
+                "host": upstream.host,
+                "port": upstream.port,
             })).collect::<Vec<_>>(),
         }));
     }
@@ -3631,8 +3639,7 @@ async fn build_routing_status_for_app(
     app: &deku_core::types::App,
 ) -> anyhow::Result<RoutingAppStatus> {
     let domains = queries::list_domain_names(&state.pool, &app.id).await?;
-    let ports = queries::list_port_mappings(&state.pool, &app.id).await?;
-    let upstreams = upstreams_from_ports(&ports);
+    let upstreams = queries::list_web_upstreams(&state.pool, &app.id).await?;
     let proxy_config_path = crate::proxy::app_config_path(&state.config.angie_conf_dir, &app.name);
     let proxy_config_present = proxy_config_path.exists();
     let tls_status = crate::services::letsencrypt::status(&state.pool, &app.name).await?;

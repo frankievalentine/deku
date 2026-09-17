@@ -899,22 +899,30 @@ async fn do_deploy(
                     port: *replica_port,
                 })
                 .collect();
-            let extras = proxy::load_extras(pool, app_id).await.unwrap_or_default();
-            if let Err(e) = proxy::apply_app_config(
-                &cfg.angie_conf_dir,
-                app_name,
-                Some(proxy::DesiredAppConfig {
-                    domains: &domains,
-                    upstreams: &upstreams,
-                    tls: tls_enabled,
-                    auth: extras.auth.as_ref(),
-                    maintenance: extras.maintenance,
-                    maintenance_message: extras.maintenance_message.as_deref(),
-                    redirects: &extras.redirects,
-                }),
-            )
-            .await
-            {
+            // Reading auth, maintenance, and redirects belongs to the routing
+            // step: a failure here must not fall back to a config that silently
+            // drops app authentication.
+            let routing: anyhow::Result<()> = async {
+                let extras = proxy::load_extras(pool, app_id).await?;
+                proxy::apply_app_config(
+                    &cfg.angie_conf_dir,
+                    app_name,
+                    Some(proxy::DesiredAppConfig {
+                        domains: &domains,
+                        upstreams: &upstreams,
+                        tls: tls_enabled,
+                        auth: extras.auth.as_ref(),
+                        maintenance: extras.maintenance,
+                        maintenance_message: extras.maintenance_message.as_deref(),
+                        redirects: &extras.redirects,
+                    }),
+                )
+                .await?;
+                Ok(())
+            }
+            .await;
+
+            if let Err(e) = routing {
                 events.emit(
                     Some(app_id.clone()),
                     "deploy.routing_failed",

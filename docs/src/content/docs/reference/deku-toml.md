@@ -61,6 +61,11 @@ added to the proxy upstream pool. A single unhealthy replica fails the deploy an
 previous version serving, and the failure names the replicas that did not become ready. This is why
 `deku ps scale <app> web=N` spreads load instead of only adding idle containers.
 
+Only the current deployment's replicas serve traffic. After a switchover the previous containers stay
+alive for `retire` seconds so anything already in flight can finish, but they are removed from the
+upstream pool at the moment the new version goes live, so nothing new is sent to the replaced
+version.
+
 ## Processes
 
 The `[processes]` table controls desired process counts by Procfile type.
