@@ -902,16 +902,15 @@ async fn stream_app_events(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
     Query(params): Query<StreamQuery>,
-) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, Response> {
+) -> Response {
     let _ = params.since;
-    let app = queries::get_app(&state.pool, &name)
-        .await
-        .map_err(|err| match err {
-            deku_core::error::DekuError::AppNotFound(_) => {
-                not_found(format!("app '{name}' not found")).into_response()
-            }
-            other => internal_error(other).into_response(),
-        })?;
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(other) => return internal_error(other).into_response(),
+    };
 
     let app_id = app.id;
 
@@ -944,7 +943,9 @@ async fn stream_app_events(
         }
     });
 
-    Ok(Sse::new(history_stream.chain(live)).keep_alive(KeepAlive::default()))
+    Sse::new(history_stream.chain(live))
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 // ── Domains ───────────────────────────────────────────────────────────────────
