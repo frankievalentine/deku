@@ -54,10 +54,19 @@ pub async fn run(args: ConfigArgs, client: &DekuClient) -> Result<()> {
                     if key.is_empty() {
                         continue;
                     }
-                    let value = var["value"].as_str().unwrap_or("");
+                    // An encrypted value with no usable key must not look empty.
+                    let value = match var["error"].as_str() {
+                        Some(error) => format!("<unreadable: {error}>"),
+                        None => var["value"].as_str().unwrap_or("").to_string(),
+                    };
+                    let locked = if var["encrypted"].as_bool().unwrap_or(false) {
+                        " [encrypted]"
+                    } else {
+                        ""
+                    };
                     match var["is_global"].as_bool().unwrap_or(false) {
-                        true => println!("{key}={value}  (global)"),
-                        false => println!("{key}={value}"),
+                        true => println!("{key}={value}  (global){locked}"),
+                        false => println!("{key}={value}{locked}"),
                     }
                 }
             }

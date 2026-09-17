@@ -1,18 +1,27 @@
-//! Client-side encryption for service backups.
+//! Encryption at rest.
 //!
-//! Backups are sealed on the host before upload, so the object store only ever
-//! holds ciphertext. The envelope is self-describing: restores detect it and
-//! decrypt, which means backups written before encryption was configured still
-//! restore unchanged.
+//! Two kinds of sensitive bytes leave the daemon's trust boundary in the clear
+//! otherwise: service backups uploaded to an object store, and config var values
+//! stored in the state database. Both are sealed with the same AES-256-GCM
+//! envelope, keyed by one operator-supplied key.
+//!
+//! The envelope is self-describing per purpose, so a payload written before a key
+//! was configured still reads back unchanged: storage detects the magic, decrypts
+//! when it is present, and passes plaintext through untouched.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Result};
 use base64::Engine;
 
-/// Leading bytes of an encrypted payload. The trailing digit is the envelope
-/// version; bump it if the layout ever changes.
-pub const ENVELOPE_MAGIC: &[u8] = b"DEKUBK1\n";
+/// Envelope magic for a sealed service backup.
+pub const ENVELOPE_MAGIC_BACKUP: &[u8] = b"DEKUBK1\n";
+
+/// Envelope magic for a sealed config var value.
+///
+/// Distinct from the backup magic so the two cannot be confused or swapped: a
+/// ciphertext written for one purpose will not open as the other.
+pub const ENVELOPE_MAGIC_SECRET: &[u8] = b"DEKUSEC1\n";
 
 /// AES-GCM nonce length in bytes.
 const NONCE_LEN: usize = 12;
@@ -29,12 +38,12 @@ pub const ENCRYPTION_LABEL_AES256_GCM: &str = "aes-256-gcm";
 /// Label recorded on a backup that was uploaded as-is.
 pub const ENCRYPTION_LABEL_NONE: &str = "none";
 
-/// Seals and opens backup payloads with a single AES-256-GCM key.
-pub struct BackupCipher {
+/// Seals and opens payloads with a single AES-256-GCM key.
+pub struct AtRestCipher {
     cipher: Aes256Gcm,
 }
 
-impl BackupCipher {
+impl AtRestCipher {
     /// Build a cipher from raw key bytes.
     pub fn from_key_bytes(key: &[u8]) -> Result<Self> {
         if key.len() != KEY_LEN {
@@ -49,7 +58,7 @@ impl BackupCipher {
     }
 
     /// Wrap `plaintext` as `magic || nonce || ciphertext || tag`.
-    pub fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
+    pub fn seal(&self, magic: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
         use rand::RngExt;
 
         let mut nonce_bytes = [0u8; NONCE_LEN];
@@ -61,22 +70,22 @@ impl BackupCipher {
             .encrypt(&nonce, plaintext)
             .map_err(|_| anyhow!("failed to encrypt the backup payload"))?;
 
-        let mut sealed = Vec::with_capacity(ENVELOPE_MAGIC.len() + NONCE_LEN + ciphertext.len());
-        sealed.extend_from_slice(ENVELOPE_MAGIC);
+        let mut sealed = Vec::with_capacity(magic.len() + NONCE_LEN + ciphertext.len());
+        sealed.extend_from_slice(magic);
         sealed.extend_from_slice(&nonce_bytes);
         sealed.extend_from_slice(&ciphertext);
         Ok(sealed)
     }
 
-    /// Open a payload produced by [`BackupCipher::seal`].
+    /// Open a payload produced by [`AtRestCipher::seal`] for `magic`.
     ///
     /// Fails on tampered or truncated payloads and on the wrong key; GCM
     /// authenticates the ciphertext, so a bad key cannot silently yield garbage.
-    pub fn open(&self, payload: &[u8]) -> Result<Vec<u8>> {
-        if !is_encrypted(payload) {
-            return Err(anyhow!("payload is not an encrypted backup envelope"));
+    pub fn open(&self, magic: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
+        if !is_encrypted(payload, magic) {
+            return Err(anyhow!("payload does not carry the expected envelope"));
         }
-        let body = &payload[ENVELOPE_MAGIC.len()..];
+        let body = &payload[magic.len()..];
         if body.len() < MIN_SEALED_LEN {
             return Err(anyhow!(
                 "encrypted backup envelope is truncated ({} bytes)",
@@ -92,16 +101,16 @@ impl BackupCipher {
     }
 }
 
-impl std::fmt::Debug for BackupCipher {
+impl std::fmt::Debug for AtRestCipher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Never let key material reach logs.
-        f.write_str("BackupCipher(<redacted>)")
+        f.write_str("AtRestCipher(<redacted>)")
     }
 }
 
-/// Whether `payload` carries the backup encryption envelope.
-pub fn is_encrypted(payload: &[u8]) -> bool {
-    payload.starts_with(ENVELOPE_MAGIC)
+/// Whether `payload` carries the envelope identified by `magic`.
+pub fn is_encrypted(payload: &[u8], magic: &[u8]) -> bool {
+    payload.starts_with(magic)
 }
 
 /// Parse a key supplied as 64 hex characters or a base64-encoded 32 bytes.
@@ -143,40 +152,80 @@ pub fn parse_key(raw: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_encrypted, parse_key, BackupCipher, ENCRYPTION_LABEL_AES256_GCM, ENCRYPTION_LABEL_NONE,
-        ENVELOPE_MAGIC,
+        is_encrypted, parse_key, AtRestCipher, ENCRYPTION_LABEL_AES256_GCM, ENCRYPTION_LABEL_NONE,
+        ENVELOPE_MAGIC_BACKUP, ENVELOPE_MAGIC_SECRET,
     };
     use base64::Engine;
 
-    fn cipher(byte: u8) -> BackupCipher {
-        BackupCipher::from_key_bytes(&[byte; 32]).expect("key should be accepted")
+    fn cipher(byte: u8) -> AtRestCipher {
+        AtRestCipher::from_key_bytes(&[byte; 32]).expect("key should be accepted")
     }
 
     #[test]
     fn seal_then_open_round_trips() {
         let cipher = cipher(7);
-        let sealed = cipher.seal(b"pg_dump output").expect("seal");
-        assert!(is_encrypted(&sealed));
-        assert!(sealed.starts_with(ENVELOPE_MAGIC));
-        assert_ne!(&sealed[ENVELOPE_MAGIC.len()..], b"pg_dump output");
-        assert_eq!(cipher.open(&sealed).expect("open"), b"pg_dump output");
+        let sealed = cipher
+            .seal(ENVELOPE_MAGIC_BACKUP, b"pg_dump output")
+            .expect("seal");
+        assert!(is_encrypted(&sealed, ENVELOPE_MAGIC_BACKUP));
+        assert!(sealed.starts_with(ENVELOPE_MAGIC_BACKUP));
+        assert_ne!(&sealed[ENVELOPE_MAGIC_BACKUP.len()..], b"pg_dump output");
+        assert_eq!(
+            cipher.open(ENVELOPE_MAGIC_BACKUP, &sealed).expect("open"),
+            b"pg_dump output"
+        );
+    }
+
+    #[test]
+    fn secret_envelope_round_trips() {
+        let cipher = cipher(3);
+        let sealed = cipher
+            .seal(ENVELOPE_MAGIC_SECRET, b"postgres://user:pw@host/db")
+            .expect("seal");
+        assert!(is_encrypted(&sealed, ENVELOPE_MAGIC_SECRET));
+        assert!(!is_encrypted(&sealed, ENVELOPE_MAGIC_BACKUP));
+        assert_eq!(
+            cipher.open(ENVELOPE_MAGIC_SECRET, &sealed).expect("open"),
+            b"postgres://user:pw@host/db"
+        );
+    }
+
+    #[test]
+    fn envelopes_are_not_interchangeable() {
+        let cipher = cipher(3);
+        let sealed = cipher.seal(ENVELOPE_MAGIC_BACKUP, b"value").expect("seal");
+        // Opening a backup envelope as a secret (or the reverse) must fail rather
+        // than misinterpret the bytes.
+        assert!(cipher.open(ENVELOPE_MAGIC_SECRET, &sealed).is_err());
     }
 
     #[test]
     fn seal_uses_a_fresh_nonce_per_call() {
         let cipher = cipher(7);
-        let first = cipher.seal(b"same input").expect("seal");
-        let second = cipher.seal(b"same input").expect("seal");
+        let first = cipher
+            .seal(ENVELOPE_MAGIC_BACKUP, b"same input")
+            .expect("seal");
+        let second = cipher
+            .seal(ENVELOPE_MAGIC_BACKUP, b"same input")
+            .expect("seal");
         assert_ne!(first, second, "nonces must not repeat");
-        assert_eq!(cipher.open(&first).expect("open"), b"same input");
-        assert_eq!(cipher.open(&second).expect("open"), b"same input");
+        assert_eq!(
+            cipher.open(ENVELOPE_MAGIC_BACKUP, &first).expect("open"),
+            b"same input"
+        );
+        assert_eq!(
+            cipher.open(ENVELOPE_MAGIC_BACKUP, &second).expect("open"),
+            b"same input"
+        );
     }
 
     #[test]
     fn wrong_key_fails_closed() {
-        let sealed = cipher(7).seal(b"payload").expect("seal");
+        let sealed = cipher(7)
+            .seal(ENVELOPE_MAGIC_BACKUP, b"payload")
+            .expect("seal");
         let err = cipher(8)
-            .open(&sealed)
+            .open(ENVELOPE_MAGIC_BACKUP, &sealed)
             .expect_err("wrong key must not decrypt");
         assert!(err.to_string().contains("wrong key or corrupted payload"));
     }
@@ -184,26 +233,41 @@ mod tests {
     #[test]
     fn tampered_ciphertext_is_rejected() {
         let cipher = cipher(7);
-        let mut sealed = cipher.seal(b"payload").expect("seal");
+        let mut sealed = cipher
+            .seal(ENVELOPE_MAGIC_BACKUP, b"payload")
+            .expect("seal");
         let last = sealed.len() - 1;
         sealed[last] ^= 0x01;
-        assert!(cipher.open(&sealed).is_err(), "tampering must be detected");
+        assert!(
+            cipher.open(ENVELOPE_MAGIC_BACKUP, &sealed).is_err(),
+            "tampering must be detected"
+        );
     }
 
     #[test]
     fn truncated_envelope_is_rejected() {
         let cipher = cipher(7);
-        let sealed = cipher.seal(b"payload").expect("seal");
-        let truncated = &sealed[..ENVELOPE_MAGIC.len() + 4];
-        let err = cipher.open(truncated).expect_err("truncation must fail");
+        let sealed = cipher
+            .seal(ENVELOPE_MAGIC_BACKUP, b"payload")
+            .expect("seal");
+        let truncated = &sealed[..ENVELOPE_MAGIC_BACKUP.len() + 4];
+        let err = cipher
+            .open(ENVELOPE_MAGIC_BACKUP, truncated)
+            .expect_err("truncation must fail");
         assert!(err.to_string().contains("truncated"));
     }
 
     #[test]
     fn plaintext_payload_is_not_an_envelope() {
         let cipher = cipher(7);
-        assert!(!is_encrypted(b"CREATE TABLE t (id int);"));
-        assert!(cipher.open(b"CREATE TABLE t (id int);").is_err());
+        assert!(!is_encrypted(
+            b"CREATE TABLE t (id int);",
+            ENVELOPE_MAGIC_BACKUP
+        ));
+        assert!(!is_encrypted(b"LOG_LEVEL=info", ENVELOPE_MAGIC_SECRET));
+        assert!(cipher
+            .open(ENVELOPE_MAGIC_BACKUP, b"CREATE TABLE t (id int);")
+            .is_err());
     }
 
     #[test]
@@ -230,14 +294,14 @@ mod tests {
 
     #[test]
     fn from_key_bytes_enforces_length() {
-        assert!(BackupCipher::from_key_bytes(&[0u8; 16]).is_err());
-        assert!(BackupCipher::from_key_bytes(&[0u8; 32]).is_ok());
+        assert!(AtRestCipher::from_key_bytes(&[0u8; 16]).is_err());
+        assert!(AtRestCipher::from_key_bytes(&[0u8; 32]).is_ok());
     }
 
     #[test]
     fn debug_does_not_leak_key_material() {
         let rendered = format!("{:?}", cipher(0xAB));
-        assert_eq!(rendered, "BackupCipher(<redacted>)");
+        assert_eq!(rendered, "AtRestCipher(<redacted>)");
     }
 
     #[test]

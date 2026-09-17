@@ -214,7 +214,7 @@ pub async fn svc_link(
         Ok(spec) => spec,
         Err(response) => return response,
     };
-    match database::link(&state.pool, &name, &app, &spec).await {
+    match database::link(&state.pool, &state.config, &name, &app, &spec).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -449,7 +449,15 @@ pub async fn pg_link(
     State(state): State<SharedState>,
     Path((name, app)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match database::link(&state.pool, &name, &app, &database::postgres_spec()).await {
+    match database::link(
+        &state.pool,
+        &state.config,
+        &name,
+        &app,
+        &database::postgres_spec(),
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -644,7 +652,15 @@ pub async fn rd_link(
     State(state): State<SharedState>,
     Path((name, app)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match database::link(&state.pool, &name, &app, &database::redis_spec()).await {
+    match database::link(
+        &state.pool,
+        &state.config,
+        &name,
+        &app,
+        &database::redis_spec(),
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -838,7 +854,15 @@ pub async fn my_link(
     State(state): State<SharedState>,
     Path((name, app)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match database::link(&state.pool, &name, &app, &database::mysql_spec()).await {
+    match database::link(
+        &state.pool,
+        &state.config,
+        &name,
+        &app,
+        &database::mysql_spec(),
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => internal_error(e).into_response(),
     }

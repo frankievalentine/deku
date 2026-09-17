@@ -131,8 +131,8 @@ pub async fn clone_app_settings(
 ) -> Result<CloneSummary> {
     let mut summary = CloneSummary::default();
 
-    for var in get_config_vars(pool, source_app_id).await? {
-        set_config_var(pool, target_app_id, &var.key, &var.value, var.is_global).await?;
+    for var in get_config_vars_raw(pool, source_app_id).await? {
+        set_config_var_raw(pool, target_app_id, &var.key, &var.value, var.is_global).await?;
         summary.config_vars += 1;
     }
 
@@ -424,7 +424,7 @@ pub async fn list_deployments(pool: &SqlitePool, app_id: &str) -> Result<Vec<Dep
 
 // ── Config vars ───────────────────────────────────────────────────────────────
 
-pub async fn get_config_vars(pool: &SqlitePool, app_id: &str) -> Result<Vec<ConfigVar>> {
+pub async fn get_config_vars_raw(pool: &SqlitePool, app_id: &str) -> Result<Vec<ConfigVar>> {
     let vars = sqlx::query_as!(
         ConfigVar,
         r#"SELECT
@@ -442,7 +442,7 @@ pub async fn get_config_vars(pool: &SqlitePool, app_id: &str) -> Result<Vec<Conf
     Ok(vars)
 }
 
-pub async fn set_config_var(
+pub async fn set_config_var_raw(
     pool: &SqlitePool,
     app_id: &str,
     key: &str,
@@ -1330,6 +1330,16 @@ pub async fn list_web_upstreams(
             port,
         })
         .collect())
+}
+
+/// Total config var values, and how many of them are stored as ciphertext.
+pub async fn count_config_var_encryption(pool: &SqlitePool) -> Result<(i64, i64)> {
+    let row = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT COUNT(*), SUM(CASE WHEN value LIKE 'enc:v1:%' THEN 1 ELSE 0 END) FROM config_vars",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok((row.0, row.1))
 }
 
 /// Apps that have at least one deployment but no running web container.

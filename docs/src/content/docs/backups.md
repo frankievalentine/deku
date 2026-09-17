@@ -44,35 +44,54 @@ The scheduler checks every minute, so a run that comes due while the daemon is s
 
 `deku backup schedules` lists every service with a schedule, including the last run status and the next run time.
 
-## Encrypting backups
+## Encryption at rest
 
-Backups are uploaded in plaintext unless a key is configured. With a key set, each dump is sealed
-with AES-256-GCM before it leaves the host, so the object store only ever holds ciphertext. The
-stored object is a self-describing envelope (`magic || nonce || ciphertext || tag`), and the
-checksum recorded in the database covers the stored bytes.
-
-Set the key in the daemon config:
+One key protects two kinds of sensitive value the daemon writes: service backups uploaded to an
+object store, and config var values stored in the state database. Both are sealed with AES-256-GCM
+before they are written, so the object store only ever holds ciphertext and a copy of the database
+does not leak your API keys.
 
 ```toml
-[backup_encryption]
+[encryption]
 # 64 hex characters or base64-encoded 32 bytes
-key_file = "/etc/deku/backup.key"
+key_file = "/etc/deku/encryption.key"
 ```
 
 ```bash
-openssl rand -hex 32 > /etc/deku/backup.key
-chmod 600 /etc/deku/backup.key
+openssl rand -hex 32 > /etc/deku/encryption.key
+chmod 600 /etc/deku/encryption.key
 ```
 
-`key` accepts the value inline instead of `key_file`, and `DEKU_BACKUP_KEY` overrides both. Prefer
-`key_file` or the environment variable so the key stays out of the config file.
+`key` accepts the value inline instead of `key_file`, and `DEKU_ENCRYPTION_KEY` overrides both.
+Prefer `key_file` or the environment variable so the key stays out of the config file.
 
-Restores detect the envelope automatically, so:
+### Backups
+
+Each dump is sealed before upload and the envelope is self-describing, so:
 
 - Backups written before encryption was enabled still restore.
-- An encrypted backup cannot be restored without the key. Restore fails with a clear error rather
+- An encrypted backup cannot be restored without the key; restore fails with a clear error rather
   than writing garbage.
-- The wrong key fails closed; GCM authenticates the payload.
+- The wrong key fails closed, because GCM authenticates the payload.
 
-`deku postgres backups <service>` shows the `ENCRYPTION` column, and the dashboard shows the same
-per backup.
+The checksum recorded in the database covers the stored (sealed) bytes. `deku <engine> backups
+<service>` shows the `ENCRYPTION` column, and the dashboard shows the same per backup.
+
+### Config vars
+
+Config var values are encrypted on write and decrypted on read, and the decryption is transparent:
+
+- `deku config list` prints plaintext, matching what gets injected into your container.
+- Values written before encryption was enabled keep working.
+- Values are re-read on every deploy, so rotating the key is: stop the daemon, re-encrypt with the
+  new key, start it. Backups written under the old key are only readable with that key.
+
+If the key is missing or wrong, Deku does not silently degrade:
+
+- `deku config list` marks the value `unreadable` and shows why, instead of printing an empty value.
+- A deploy fails with `config var '<key>' could not be decrypted`, so a broken secret never reaches
+  a running app.
+- `deku doctor` reports `encryption_at_rest`: `ok` with the count of encrypted values, `warn` when no
+  key is set and nothing is encrypted, and `fail` when ciphertext exists that cannot be read.
+
+With no key configured, values and backups are stored in the clear and `deku doctor` warns about it.

@@ -44,9 +44,9 @@ pub struct DekuConfig {
     /// Out-of-process lifecycle hooks, delivered over HTTP.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookConfig>,
-    /// Key material used to encrypt service backups before upload.
+    /// Key material for encryption at rest: backups and secret config values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backup_encryption: Option<BackupEncryptionConfig>,
+    pub encryption: Option<EncryptionConfig>,
     /// Background alert evaluation.
     #[serde(default)]
     pub alerts: AlertsConfig,
@@ -96,9 +96,12 @@ fn default_disk_critical_percent() -> u8 {
     95
 }
 
-/// Key material for encrypting service backups at rest.
+/// Key material for encryption at rest.
+///
+/// One key covers every encrypted payload the daemon writes: service backups
+/// uploaded to an object store, and config var values stored in the database.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct BackupEncryptionConfig {
+pub struct EncryptionConfig {
     /// Inline key: 64 hex characters or base64-encoded 32 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -264,7 +267,7 @@ struct RawDekuConfig {
     registry: Option<RegistryConfig>,
     build_host: Option<BuildHostConfig>,
     hooks: Option<Vec<HookConfig>>,
-    backup_encryption: Option<BackupEncryptionConfig>,
+    encryption: Option<EncryptionConfig>,
     alerts: Option<AlertsConfig>,
 }
 
@@ -367,26 +370,26 @@ impl Default for DekuConfig {
             registry: None,
             build_host: None,
             hooks: Vec::new(),
-            backup_encryption: None,
+            encryption: None,
             alerts: AlertsConfig::default(),
         }
     }
 }
 
 impl DekuConfig {
-    /// Resolve the backup encryption key, if one is configured.
+    /// Resolve the encryption-at-rest key, if one is configured.
     ///
-    /// Precedence is `DEKU_BACKUP_KEY`, then `[backup_encryption] key`, then
-    /// `key_file`. `Ok(None)` means backups are uploaded unencrypted.
-    pub fn backup_cipher(&self) -> Result<Option<crate::backup_crypto::BackupCipher>> {
-        let raw = match std::env::var("DEKU_BACKUP_KEY") {
+    /// Precedence is `DEKU_ENCRYPTION_KEY`, then `[encryption] key`, then
+    /// `key_file`. `Ok(None)` means payloads are stored in the clear.
+    pub fn at_rest_cipher(&self) -> Result<Option<crate::crypto::AtRestCipher>> {
+        let raw = match std::env::var("DEKU_ENCRYPTION_KEY") {
             Ok(value) if !value.trim().is_empty() => Some(value),
-            _ => match self.backup_encryption.as_ref() {
+            _ => match self.encryption.as_ref() {
                 Some(cfg) => match (cfg.key.as_ref(), cfg.key_file.as_ref()) {
                     (Some(key), _) => Some(key.clone()),
                     (None, Some(path)) => Some(std::fs::read_to_string(path).map_err(|error| {
                         anyhow::anyhow!(
-                            "failed to read backup encryption key file {}: {error}",
+                            "failed to read encryption key file {}: {error}",
                             path.display()
                         )
                     })?),
@@ -398,10 +401,8 @@ impl DekuConfig {
 
         match raw {
             Some(value) => {
-                let key = crate::backup_crypto::parse_key(&value)?;
-                Ok(Some(crate::backup_crypto::BackupCipher::from_key_bytes(
-                    &key,
-                )?))
+                let key = crate::crypto::parse_key(&value)?;
+                Ok(Some(crate::crypto::AtRestCipher::from_key_bytes(&key)?))
             }
             None => Ok(None),
         }
@@ -487,7 +488,7 @@ pub fn load() -> Result<DekuConfig> {
         registry: raw.registry,
         build_host: raw.build_host,
         hooks: raw.hooks.unwrap_or_default(),
-        backup_encryption: raw.backup_encryption,
+        encryption: raw.encryption,
         alerts: raw.alerts.unwrap_or_default(),
     };
 
@@ -520,68 +521,68 @@ pub fn dashboard_assets_available(cfg: &DekuConfig) -> bool {
 mod tests {
 
     #[test]
-    fn backup_cipher_is_absent_without_configuration() {
+    fn at_rest_cipher_is_absent_without_configuration() {
         let cfg = DekuConfig {
-            backup_encryption: None,
+            encryption: None,
             ..DekuConfig::default()
         };
-        assert!(cfg.backup_cipher().expect("resolves").is_none());
+        assert!(cfg.at_rest_cipher().expect("resolves").is_none());
     }
 
     #[test]
-    fn backup_cipher_accepts_an_inline_hex_key() {
+    fn at_rest_cipher_accepts_an_inline_hex_key() {
         let cfg = DekuConfig {
-            backup_encryption: Some(BackupEncryptionConfig {
+            encryption: Some(EncryptionConfig {
                 key: Some("0123456789abcdef".repeat(4)),
                 key_file: None,
             }),
             ..DekuConfig::default()
         };
-        assert!(cfg.backup_cipher().expect("resolves").is_some());
+        assert!(cfg.at_rest_cipher().expect("resolves").is_some());
     }
 
     #[test]
-    fn backup_cipher_reads_a_key_file() {
+    fn at_rest_cipher_reads_a_key_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("backup.key");
         std::fs::write(&path, "ab".repeat(32)).expect("write key");
         let cfg = DekuConfig {
-            backup_encryption: Some(BackupEncryptionConfig {
+            encryption: Some(EncryptionConfig {
                 key: None,
                 key_file: Some(path),
             }),
             ..DekuConfig::default()
         };
-        assert!(cfg.backup_cipher().expect("resolves").is_some());
+        assert!(cfg.at_rest_cipher().expect("resolves").is_some());
     }
 
     #[test]
-    fn backup_cipher_rejects_a_bad_key() {
+    fn at_rest_cipher_rejects_a_bad_key() {
         let cfg = DekuConfig {
-            backup_encryption: Some(BackupEncryptionConfig {
+            encryption: Some(EncryptionConfig {
                 key: Some("too-short".to_string()),
                 key_file: None,
             }),
             ..DekuConfig::default()
         };
-        assert!(cfg.backup_cipher().is_err());
+        assert!(cfg.at_rest_cipher().is_err());
     }
 
     #[test]
-    fn backup_cipher_reports_a_missing_key_file() {
+    fn at_rest_cipher_reports_a_missing_key_file() {
         let cfg = DekuConfig {
-            backup_encryption: Some(BackupEncryptionConfig {
+            encryption: Some(EncryptionConfig {
                 key: None,
                 key_file: Some(PathBuf::from("/nonexistent/deku/backup.key")),
             }),
             ..DekuConfig::default()
         };
-        let error = cfg.backup_cipher().expect_err("missing file should fail");
+        let error = cfg.at_rest_cipher().expect_err("missing file should fail");
         assert!(error
             .to_string()
-            .contains("failed to read backup encryption key file"));
+            .contains("failed to read encryption key file"));
     }
-    use super::{secure_dir, write_private_file, BackupEncryptionConfig, DekuConfig};
+    use super::{secure_dir, write_private_file, DekuConfig, EncryptionConfig};
     use std::path::PathBuf;
 
     #[cfg(unix)]

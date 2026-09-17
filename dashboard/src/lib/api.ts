@@ -38,6 +38,10 @@ export interface ConfigVar {
   key: string;
   value: string;
   is_global: boolean;
+  /** The stored value is ciphertext. */
+  encrypted?: boolean;
+  /** The value could not be decrypted, e.g. the key is not configured. */
+  error?: string | null;
 }
 
 export interface Domain {

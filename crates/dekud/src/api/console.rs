@@ -107,13 +107,14 @@ pub async fn run(
         Err(error) => return super::internal_error(error).into_response(),
     };
 
-    let env: Vec<String> = match queries::get_config_vars(&state.pool, &app.id).await {
-        Ok(vars) => vars
-            .iter()
-            .map(|var| format!("{}={}", var.key, var.value))
-            .collect(),
-        Err(error) => return super::internal_error(error).into_response(),
-    };
+    let env: Vec<String> =
+        match crate::secrets::get_config_vars(&state.pool, &state.config, &app.id).await {
+            Ok(vars) => vars
+                .iter()
+                .map(|var| format!("{}={}", var.key, var.value))
+                .collect(),
+            Err(error) => return super::internal_error(error).into_response(),
+        };
     let volumes: Vec<(String, String)> =
         match queries::list_storage_mounts(&state.pool, &app.id).await {
             Ok(mounts) => mounts

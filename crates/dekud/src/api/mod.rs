@@ -729,8 +729,9 @@ async fn import_app_config(
         Err(e) => return internal_error(e).into_response(),
     };
 
+    // Only the key names matter here, so read the stored rows directly.
     let existing: std::collections::HashSet<String> =
-        match queries::get_config_vars(&state.pool, &app.id).await {
+        match queries::get_config_vars_raw(&state.pool, &app.id).await {
             Ok(vars) => vars.into_iter().map(|var| var.key).collect(),
             Err(e) => return internal_error(e).into_response(),
         };
@@ -758,7 +759,10 @@ async fn import_app_config(
             created += 1;
         }
 
-        if let Err(e) = queries::set_config_var(&state.pool, &app.id, key, value, false).await {
+        if let Err(e) =
+            crate::secrets::set_config_var(&state.pool, &state.config, &app.id, key, value, false)
+                .await
+        {
             return internal_error(e).into_response();
         }
     }
@@ -1356,10 +1360,11 @@ async fn get_app_object_store_link(
         Err(e) => return internal_error(e).into_response(),
     };
 
-    let config_vars = match queries::get_config_vars(&state.pool, &app.id).await {
-        Ok(vars) => vars,
-        Err(e) => return internal_error(e).into_response(),
-    };
+    let config_vars =
+        match crate::secrets::get_config_vars(&state.pool, &state.config, &app.id).await {
+            Ok(vars) => vars,
+            Err(e) => return internal_error(e).into_response(),
+        };
 
     let values = config_vars
         .into_iter()
@@ -1461,7 +1466,10 @@ async fn link_app_object_store(
         crate::objectstore::normalized_app_prefix(&object_store, &app.name, body.prefix.as_deref());
 
     for (key, value) in app_object_store_env_pairs(&object_store, &prefix) {
-        if let Err(e) = queries::set_config_var(&state.pool, &app.id, key, &value, false).await {
+        if let Err(e) =
+            crate::secrets::set_config_var(&state.pool, &state.config, &app.id, key, &value, false)
+                .await
+        {
             return internal_error(e).into_response();
         }
     }
@@ -2058,6 +2066,38 @@ async fn metrics_handler(State(state): State<SharedState>) -> impl IntoResponse 
     }
 }
 
+/// Report whether values are encrypted at rest, and how many config values are.
+async fn encryption_at_rest_check(state: &SharedState) -> serde_json::Value {
+    let (total, encrypted) = queries::count_config_var_encryption(&state.pool)
+        .await
+        .unwrap_or((0, 0));
+
+    match state.config.at_rest_cipher() {
+        Ok(Some(_)) => serde_json::json!({
+            "name": "encryption_at_rest",
+            "status": "ok",
+            "detail": format!("key configured; {encrypted} of {total} config values encrypted, backups encrypted"),
+        }),
+        // Ciphertext with no key is a failure, not a posture warning: those values
+        // cannot be read, so the affected apps cannot deploy.
+        Ok(None) if encrypted > 0 => serde_json::json!({
+            "name": "encryption_at_rest",
+            "status": "fail",
+            "detail": format!("no key configured but {encrypted} config value(s) are encrypted and cannot be read; restore the key (DEKU_ENCRYPTION_KEY or [encryption])"),
+        }),
+        Ok(None) => serde_json::json!({
+            "name": "encryption_at_rest",
+            "status": "warn",
+            "detail": format!("no key configured; {total} config value(s) and backups are stored in the clear (set DEKU_ENCRYPTION_KEY or [encryption])"),
+        }),
+        Err(error) => serde_json::json!({
+            "name": "encryption_at_rest",
+            "status": "fail",
+            "detail": error.to_string(),
+        }),
+    }
+}
+
 /// Inspect every TLS-enabled app's certificate so expiry is visible before it
 /// takes an app down. Returns `None` when no app uses TLS.
 async fn tls_certificate_check(pool: &SqlitePool) -> Option<serde_json::Value> {
@@ -2180,6 +2220,8 @@ async fn doctor(State(state): State<SharedState>) -> impl IntoResponse {
     if let Some(check) = tls_certificate_check(&state.pool).await {
         checks.push(check);
     }
+
+    checks.push(encryption_at_rest_check(&state).await);
 
     let overall = if checks.iter().any(|check| check["status"] == "fail") {
         "degraded"
@@ -3299,7 +3341,7 @@ async fn list_config(
         }
         Err(e) => return internal_error(e).into_response(),
     };
-    match queries::get_config_vars(&state.pool, &app.id).await {
+    match crate::secrets::list_config_vars(&state.pool, &state.config, &app.id).await {
         Ok(vars) => (StatusCode::OK, Json(serde_json::json!(vars))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -3333,8 +3375,15 @@ async fn set_config(
         }
         Err(e) => return internal_error(e).into_response(),
     };
-    match queries::set_config_var(&state.pool, &app.id, &body.key, &body.value, body.is_global)
-        .await
+    match crate::secrets::set_config_var(
+        &state.pool,
+        &state.config,
+        &app.id,
+        &body.key,
+        &body.value,
+        body.is_global,
+    )
+    .await
     {
         Ok(()) => {
             state.events.emit(

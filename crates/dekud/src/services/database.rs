@@ -495,6 +495,7 @@ pub async fn destroy(pool: &SqlitePool, docker: &Docker, name: &str) -> Result<(
 
 pub async fn link(
     pool: &SqlitePool,
+    cfg: &DekuConfig,
     service_name: &str,
     app_name: &str,
     spec: &DbServiceSpec,
@@ -517,34 +518,34 @@ pub async fn link(
         config.host_port,
         &config.name,
     );
-    queries::set_config_var(pool, &app.id, spec.env_key, &url, false).await?;
+    crate::secrets::set_config_var(pool, cfg, &app.id, spec.env_key, &url, false).await?;
     queries::link_service(pool, &svc.id, &app.id, spec.env_key).await?;
     Ok(())
 }
 
 /// Seal a dump for upload and report the label to record in the database.
 fn seal_backup(cfg: &DekuConfig, payload: Vec<u8>) -> Result<(Vec<u8>, &'static str)> {
-    match cfg.backup_cipher()? {
+    match cfg.at_rest_cipher()? {
         Some(cipher) => Ok((
-            cipher.seal(&payload)?,
-            crate::backup_crypto::ENCRYPTION_LABEL_AES256_GCM,
+            cipher.seal(crate::crypto::ENVELOPE_MAGIC_BACKUP, &payload)?,
+            crate::crypto::ENCRYPTION_LABEL_AES256_GCM,
         )),
-        None => Ok((payload, crate::backup_crypto::ENCRYPTION_LABEL_NONE)),
+        None => Ok((payload, crate::crypto::ENCRYPTION_LABEL_NONE)),
     }
 }
 
 /// Decrypt a downloaded backup. Payloads written before encryption was enabled
 /// carry no envelope and pass through untouched.
 fn open_backup(cfg: &DekuConfig, payload: Vec<u8>) -> Result<Vec<u8>> {
-    if !crate::backup_crypto::is_encrypted(&payload) {
+    if !crate::crypto::is_encrypted(&payload, crate::crypto::ENVELOPE_MAGIC_BACKUP) {
         return Ok(payload);
     }
-    let cipher = cfg.backup_cipher()?.ok_or_else(|| {
+    let cipher = cfg.at_rest_cipher()?.ok_or_else(|| {
         anyhow!(
-            "backup is encrypted but no key is configured; set DEKU_BACKUP_KEY or [backup_encryption]"
+            "backup is encrypted but no key is configured; set DEKU_ENCRYPTION_KEY or [encryption]"
         )
     })?;
-    cipher.open(&payload)
+    cipher.open(crate::crypto::ENVELOPE_MAGIC_BACKUP, &payload)
 }
 
 pub async fn backup_postgres(
@@ -1249,9 +1250,10 @@ pub async fn restore_redis(
 pub async fn verify_linked_services_post_deploy(
     pool: &SqlitePool,
     docker: &Docker,
+    cfg: &DekuConfig,
     app_id: &str,
 ) -> Result<Vec<String>> {
-    let config_vars = queries::get_config_vars(pool, app_id).await?;
+    let config_vars = crate::secrets::get_config_vars(pool, cfg, app_id).await?;
     let config_by_key: HashMap<String, String> = config_vars
         .into_iter()
         .map(|entry| (entry.key, entry.value))
@@ -1707,7 +1709,48 @@ pub async fn get_logs(docker: &Docker, plugin: &str, name: &str, n: usize) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_service_config, redis_spec, ServiceConfig};
+    use super::{open_backup, parse_service_config, redis_spec, seal_backup, ServiceConfig};
+    use crate::config::{DekuConfig, EncryptionConfig};
+
+    fn cfg_with_key() -> DekuConfig {
+        DekuConfig {
+            encryption: Some(EncryptionConfig {
+                key: Some("ab".repeat(32)),
+                key_file: None,
+            }),
+            ..DekuConfig::default()
+        }
+    }
+
+    #[test]
+    fn backup_payloads_round_trip_through_the_shared_key() {
+        let cfg = cfg_with_key();
+        let dump = b"-- pg_dump output".to_vec();
+
+        let (sealed, label) = seal_backup(&cfg, dump.clone()).expect("seal");
+        assert_eq!(label, crate::crypto::ENCRYPTION_LABEL_AES256_GCM);
+        assert_ne!(sealed, dump, "the stored payload must not be the dump");
+        assert_eq!(open_backup(&cfg, sealed).expect("open"), dump);
+    }
+
+    #[test]
+    fn unencrypted_backups_still_open() {
+        let cfg = cfg_with_key();
+        let plain = b"-- pg_dump output".to_vec();
+        let (stored, label) = seal_backup(&DekuConfig::default(), plain.clone()).expect("seal");
+        assert_eq!(label, crate::crypto::ENCRYPTION_LABEL_NONE);
+        assert_eq!(stored, plain);
+        // A payload written before encryption existed must restore under a key.
+        assert_eq!(open_backup(&cfg, stored).expect("open"), plain);
+    }
+
+    #[test]
+    fn an_encrypted_backup_needs_the_key() {
+        let (sealed, _) = seal_backup(&cfg_with_key(), b"dump".to_vec()).expect("seal");
+        let error = open_backup(&DekuConfig::default(), sealed)
+            .expect_err("encrypted backup must not open without a key");
+        assert!(error.to_string().contains("no key is configured"));
+    }
 
     #[test]
     fn parses_service_config_json() {

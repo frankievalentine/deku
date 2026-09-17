@@ -652,7 +652,16 @@ async fn do_deploy(
             "deploy.release",
             Some(serde_json::json!({ "command": release.command })),
         );
-        run_release_phase(pool, docker, events, app_id, &built.tag, &release.command).await?;
+        run_release_phase(
+            pool,
+            docker,
+            events,
+            cfg,
+            app_id,
+            &built.tag,
+            &release.command,
+        )
+        .await?;
     }
 
     // ── Deploy phase ──────────────────────────────────────────────────────────
@@ -684,7 +693,7 @@ async fn do_deploy(
     let previous_containers = queries::list_containers_for_app(pool, app_id).await?;
 
     // Load per-app config
-    let config_vars = queries::get_config_vars(pool, app_id).await?;
+    let config_vars = crate::secrets::get_config_vars(pool, cfg, app_id).await?;
     let env: Vec<String> = config_vars
         .iter()
         .map(|cv| format!("{}={}", cv.key, cv.value))
@@ -979,7 +988,7 @@ async fn do_deploy(
     queries::update_deployment(pool, deploy_id, DeployStatus::Live, Some(&built.tag)).await?;
     deployment.status = DeployStatus::Live;
 
-    match database::verify_linked_services_post_deploy(pool, docker, app_id).await {
+    match database::verify_linked_services_post_deploy(pool, docker, cfg, app_id).await {
         Ok(lines) => {
             for line in lines {
                 events.emit(
@@ -1049,6 +1058,7 @@ async fn run_release_phase(
     pool: &SqlitePool,
     docker: &DockerClient,
     events: &EventSender,
+    cfg: &DekuConfig,
     app_id: &str,
     image_tag: &str,
     command: &str,
@@ -1061,7 +1071,7 @@ async fn run_release_phase(
     };
     use futures::StreamExt;
 
-    let config_vars = queries::get_config_vars(pool, app_id).await?;
+    let config_vars = crate::secrets::get_config_vars(pool, cfg, app_id).await?;
     let env: Vec<String> = config_vars
         .iter()
         .map(|cv| format!("{}={}", cv.key, cv.value))

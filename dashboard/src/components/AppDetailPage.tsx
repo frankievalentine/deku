@@ -1018,6 +1018,7 @@ function ConfigPanel({
                 <th scope="col">Key</th>
                 <th scope="col">Value</th>
                 <th scope="col">Scope</th>
+                <th scope="col">At rest</th>
                 <th scope="col">
                   <span className="sr-only">Actions</span>
                 </th>
@@ -1027,8 +1028,15 @@ function ConfigPanel({
               {config.map((item) => (
                 <tr key={item.key}>
                   <td className="font-mono">{item.key}</td>
-                  <td className="font-mono">{item.value}</td>
+                  <td className="font-mono">
+                    {item.error ? (
+                      <span className="text-danger">Unreadable: {item.error}</span>
+                    ) : (
+                      item.value
+                    )}
+                  </td>
                   <td>{item.is_global ? 'Global' : 'App'}</td>
+                  <td>{item.encrypted ? 'Encrypted' : 'Plain'}</td>
                   <td>
                     <button
                       className="btn btn-outline btn-danger-outline btn-sm"
