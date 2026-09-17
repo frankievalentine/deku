@@ -21,6 +21,7 @@ Current release-facing `deku` command surface.
 - `deku deploy run|list|rollback|token`
 - `deku doctor`
 - `deku alerts [--all]`
+- `deku env list|create|remove`
 - `deku domains list|add|remove`
 - `deku exec <app> <command>...`
 - `deku letsencrypt enable|disable|status|config`
@@ -292,6 +293,19 @@ See [Backups](/backups/).
 - `git report <app>`
 - `git remote add <app>`
 - `git doctor`
+
+### `deku env`
+
+Every app has a `production` environment, which is what `deku deploy run <app>` targets. Additional
+environments are named deployment targets for the same app.
+
+- `env list <app>` — slug, display name, tracked branch, and whether it is production
+- `env create <app> <name> [--slug <slug>] [--branch <ref>]` — create one; the slug is derived from
+  the name unless given, and an explicit slug must be lowercase letters, digits, and `-`
+- `env remove <app> <slug>` — remove one; production cannot be removed
+
+`--branch` records the git ref an environment tracks. Nothing auto-deploys on push yet, so it is
+metadata used for display and for choosing a target.
 
 ### `deku alerts`
 

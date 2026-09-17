@@ -26,6 +26,9 @@ pub async fn create_app(pool: &SqlitePool, new_app: &NewApp) -> Result<App> {
     .execute(pool)
     .await?;
 
+    // Every app starts with the environment that plain `deku deploy run` targets.
+    ensure_production_environment(pool, &app.id).await?;
+
     Ok(app)
 }
 
@@ -210,6 +213,7 @@ pub async fn delete_app(pool: &SqlitePool, name: &str) -> Result<()> {
         "DELETE FROM app_auth WHERE app_id = ?",
         "DELETE FROM redirects WHERE app_id = ?",
         "DELETE FROM app_deploy_tokens WHERE app_id = ?",
+        "DELETE FROM environments WHERE app_id = ?",
     ] {
         sqlx::query(statement)
             .bind(&app.id)
@@ -285,6 +289,7 @@ pub async fn list_events(
 pub async fn create_deployment(
     pool: &SqlitePool,
     app_id: &str,
+    environment_id: &str,
     builder: BuilderType,
 ) -> Result<Deployment> {
     let dep = Deployment {
@@ -297,15 +302,16 @@ pub async fn create_deployment(
         finished_at: None,
     };
 
-    sqlx::query!(
-        r#"INSERT INTO deployments (id, app_id, status, builder, created_at)
-           VALUES (?1, ?2, ?3, ?4, ?5)"#,
-        dep.id,
-        dep.app_id,
-        dep.status,
-        dep.builder,
-        dep.created_at,
+    sqlx::query(
+        "INSERT INTO deployments (id, app_id, environment_id, status, builder, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
+    .bind(&dep.id)
+    .bind(&dep.app_id)
+    .bind(environment_id)
+    .bind(dep.status.to_string())
+    .bind(dep.builder.to_string())
+    .bind(dep.created_at)
     .execute(pool)
     .await?;
 
@@ -424,22 +430,47 @@ pub async fn list_deployments(pool: &SqlitePool, app_id: &str) -> Result<Vec<Dep
 
 // ── Config vars ───────────────────────────────────────────────────────────────
 
+/// App-wide config vars, i.e. the ones with no environment override.
+///
+/// Per-environment overrides live in the same table, so every read that predates
+/// environments must exclude them explicitly.
 pub async fn get_config_vars_raw(pool: &SqlitePool, app_id: &str) -> Result<Vec<ConfigVar>> {
-    let vars = sqlx::query_as!(
-        ConfigVar,
-        r#"SELECT
-            app_id    as "app_id!",
-            key       as "key!",
-            value     as "value!",
-            is_global as "is_global!"
-           FROM config_vars
-           WHERE app_id = ?1 OR is_global = TRUE
-           ORDER BY key"#,
-        app_id
+    let vars = sqlx::query_as::<_, ConfigVar>(
+        "SELECT app_id, key, value, is_global FROM config_vars \
+         WHERE (app_id = ?1 OR is_global = TRUE) AND environment_id IS NULL \
+         ORDER BY key",
     )
+    .bind(app_id)
     .fetch_all(pool)
     .await?;
     Ok(vars)
+}
+
+/// Config var overrides that apply only inside one environment.
+pub async fn get_environment_config_vars_raw(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
+) -> Result<Vec<ConfigVar>> {
+    let rows = sqlx::query(
+        "SELECT app_id, environment_id, key, value, is_global \
+         FROM config_vars WHERE app_id = ?1 AND environment_id = ?2 ORDER BY key",
+    )
+    .bind(app_id)
+    .bind(environment_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(ConfigVar {
+                app_id: row.try_get("app_id")?,
+                key: row.try_get("key")?,
+                value: row.try_get("value")?,
+                is_global: row.try_get("is_global")?,
+            })
+        })
+        .collect()
 }
 
 pub async fn set_config_var_raw(
@@ -449,28 +480,138 @@ pub async fn set_config_var_raw(
     value: &str,
     is_global: bool,
 ) -> Result<()> {
-    sqlx::query!(
-        r#"INSERT INTO config_vars (app_id, key, value, is_global)
-           VALUES (?1, ?2, ?3, ?4)
-           ON CONFLICT(app_id, key) DO UPDATE SET value = excluded.value, is_global = excluded.is_global"#,
-        app_id,
-        key,
-        value,
-        is_global,
+    sqlx::query(
+        "INSERT INTO config_vars (app_id, environment_id, key, value, is_global) \
+         VALUES (?1, NULL, ?2, ?3, ?4) \
+         ON CONFLICT(app_id, key) WHERE environment_id IS NULL \
+         DO UPDATE SET value = excluded.value, is_global = excluded.is_global",
     )
+    .bind(app_id)
+    .bind(key)
+    .bind(value)
+    .bind(is_global)
     .execute(pool)
     .await?;
     Ok(())
 }
 
 pub async fn unset_config_var(pool: &SqlitePool, app_id: &str, key: &str) -> Result<()> {
-    sqlx::query!(
-        "DELETE FROM config_vars WHERE app_id = ?1 AND key = ?2",
-        app_id,
-        key
+    // App-wide only: an environment override is removed with its environment.
+    sqlx::query(
+        "DELETE FROM config_vars WHERE app_id = ?1 AND key = ?2 AND environment_id IS NULL",
     )
+    .bind(app_id)
+    .bind(key)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+// ── Environments ──────────────────────────────────────────────────────────────
+
+/// The slug every app's implicit production environment uses.
+pub const PRODUCTION_ENVIRONMENT_SLUG: &str = "production";
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct Environment {
+    pub id: String,
+    pub app_id: String,
+    pub name: String,
+    pub slug: String,
+    pub branch: Option<String>,
+    pub is_production: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+pub async fn create_environment(
+    pool: &SqlitePool,
+    app_id: &str,
+    name: &str,
+    slug: &str,
+    branch: Option<&str>,
+    is_production: bool,
+) -> Result<Environment> {
+    let environment = Environment {
+        id: Uuid::new_v4().to_string(),
+        app_id: app_id.to_string(),
+        name: name.to_string(),
+        slug: slug.to_string(),
+        branch: branch.map(str::to_string),
+        is_production,
+        created_at: Utc::now(),
+    };
+
+    sqlx::query(
+        "INSERT INTO environments (id, app_id, name, slug, branch, is_production, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )
+    .bind(&environment.id)
+    .bind(&environment.app_id)
+    .bind(&environment.name)
+    .bind(&environment.slug)
+    .bind(&environment.branch)
+    .bind(environment.is_production)
+    .bind(environment.created_at)
+    .execute(pool)
+    .await?;
+
+    Ok(environment)
+}
+
+pub async fn list_environments(pool: &SqlitePool, app_id: &str) -> Result<Vec<Environment>> {
+    Ok(sqlx::query_as::<_, Environment>(
+        "SELECT id, app_id, name, slug, branch, is_production, created_at FROM environments \
+         WHERE app_id = ?1 ORDER BY is_production DESC, slug",
+    )
+    .bind(app_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_environment(pool: &SqlitePool, app_id: &str, slug: &str) -> Result<Environment> {
+    sqlx::query_as::<_, Environment>(
+        "SELECT id, app_id, name, slug, branch, is_production, created_at FROM environments \
+         WHERE app_id = ?1 AND slug = ?2",
+    )
+    .bind(app_id)
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| DekuError::EnvironmentNotFound(slug.to_string()))
+}
+
+/// Every app has a production environment; create it on first use.
+///
+/// The migration backfills existing apps, so this only does work for an app
+/// created on an older code path or one whose environment was removed.
+pub async fn ensure_production_environment(pool: &SqlitePool, app_id: &str) -> Result<Environment> {
+    if let Ok(environment) = get_environment(pool, app_id, PRODUCTION_ENVIRONMENT_SLUG).await {
+        return Ok(environment);
+    }
+    create_environment(
+        pool,
+        app_id,
+        "production",
+        PRODUCTION_ENVIRONMENT_SLUG,
+        None,
+        true,
+    )
+    .await
+}
+
+/// Delete a non-production environment. Production always exists.
+pub async fn delete_environment(pool: &SqlitePool, app_id: &str, slug: &str) -> Result<()> {
+    let environment = get_environment(pool, app_id, slug).await?;
+    if environment.is_production {
+        return Err(DekuError::InvalidInput(
+            "the production environment cannot be removed".to_string(),
+        ));
+    }
+
+    sqlx::query("DELETE FROM environments WHERE id = ?1")
+        .bind(&environment.id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -2234,6 +2375,66 @@ mod service_backup_tests {
         let backups = list_service_backups(&pool, "svc-1").await.expect("list");
         assert_eq!(backups.len(), 1);
         assert_eq!(backups[0].encryption, "none");
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::{create_app, delete_environment, ensure_production_environment, list_environments};
+    use deku_core::types::NewApp;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::SqlitePool;
+
+    async fn pool_with_app(name: &str) -> (SqlitePool, String) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        crate::db::migrate(&pool).await.expect("migrate");
+        let app = create_app(
+            &pool,
+            &NewApp {
+                name: name.to_string(),
+            },
+        )
+        .await
+        .expect("app");
+        (pool, app.id)
+    }
+
+    #[tokio::test]
+    async fn every_app_starts_with_a_production_environment() {
+        let (pool, app_id) = pool_with_app("one").await;
+        let environments = list_environments(&pool, &app_id).await.expect("list");
+        assert_eq!(environments.len(), 1);
+        assert_eq!(environments[0].slug, "production");
+        assert!(environments[0].is_production);
+    }
+
+    #[tokio::test]
+    async fn production_environment_creation_is_idempotent() {
+        let (pool, app_id) = pool_with_app("two").await;
+        let first = ensure_production_environment(&pool, &app_id)
+            .await
+            .expect("first");
+        let second = ensure_production_environment(&pool, &app_id)
+            .await
+            .expect("second");
+        assert_eq!(first.id, second.id);
+        assert_eq!(
+            list_environments(&pool, &app_id).await.expect("list").len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn production_cannot_be_deleted() {
+        let (pool, app_id) = pool_with_app("three").await;
+        let error = delete_environment(&pool, &app_id, "production")
+            .await
+            .expect_err("production must be protected");
+        assert!(error.to_string().contains("cannot be removed"));
     }
 }
 

@@ -53,6 +53,8 @@ enum Commands {
     Doctor(commands::doctor::DoctorArgs),
     /// Show active alerts
     Alerts(commands::alerts::AlertsArgs),
+    /// Deployment environments
+    Env(commands::env::EnvArgs),
     /// Configuration variables
     Config(commands::config::ConfigArgs),
     /// Deployment operations
@@ -130,6 +132,7 @@ async fn main() -> Result<()> {
                 Commands::Redirects(args) => commands::redirects::run(args, &client).await,
                 Commands::Doctor(args) => commands::doctor::run(args, &client).await,
                 Commands::Alerts(args) => commands::alerts::run(args, &client).await,
+                Commands::Env(args) => commands::env::run(args, &client).await,
                 Commands::Config(args) => commands::config::run(args, &client).await,
                 Commands::Deploy(args) => commands::deploy::run(args, &client).await,
                 Commands::Ps(args) => commands::ps::run(args, &client).await,

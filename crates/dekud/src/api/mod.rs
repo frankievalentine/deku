@@ -103,6 +103,15 @@ fn build_api_router(state: SharedState) -> Router {
             delete(remove_redirect_handler),
         )
         .route("/api/doctor", get(doctor))
+        // Environments
+        .route(
+            "/api/apps/{name}/environments",
+            get(list_environments_handler).post(create_environment_handler),
+        )
+        .route(
+            "/api/apps/{name}/environments/{slug}",
+            delete(delete_environment_handler),
+        )
         // Deploy tokens
         .route(
             "/api/apps/{name}/deploy-tokens",
@@ -541,6 +550,13 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> Response 
 fn not_found(msg: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": msg.to_string() })),
+    )
+}
+
+fn bad_request(msg: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
         Json(serde_json::json!({ "error": msg.to_string() })),
     )
 }
@@ -2013,6 +2029,151 @@ async fn remove_redirect_handler(
         return internal_error(e).into_response();
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct CreateEnvironmentBody {
+    name: String,
+    /// Defaults to a slug derived from `name`.
+    slug: Option<String>,
+    /// Git ref this environment tracks. Metadata only: nothing auto-deploys on
+    /// push yet.
+    branch: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/environments",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name")),
+    responses((status = 200, description = "List an app's environments"))
+)]
+async fn list_environments_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    match queries::list_environments(&state.pool, &app.id).await {
+        Ok(environments) => (StatusCode::OK, Json(serde_json::json!(environments))).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/environments",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name")),
+    request_body = CreateEnvironmentBody,
+    responses((status = 201, description = "Environment created"), (status = 400, description = "Invalid name or slug"))
+)]
+async fn create_environment_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<CreateEnvironmentBody>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let display_name = body.name.trim().to_string();
+    if display_name.is_empty() {
+        return bad_request("environment name must not be empty".to_string()).into_response();
+    }
+    // An explicit slug is taken as given and validated, so the caller gets the
+    // slug they asked for or an error. A derived slug is normalized from the name.
+    let slug = match body
+        .slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(slug) => slug.to_string(),
+        None => crate::app_name::slugify(&display_name),
+    };
+    if let Err(error) = crate::app_name::validate_slug(&slug) {
+        return bad_request(error).into_response();
+    }
+    if slug == queries::PRODUCTION_ENVIRONMENT_SLUG {
+        return bad_request(
+            "production already exists for every app and cannot be recreated".to_string(),
+        )
+        .into_response();
+    }
+
+    let branch = body
+        .branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty());
+
+    match queries::create_environment(&state.pool, &app.id, &display_name, &slug, branch, false)
+        .await
+    {
+        Ok(environment) => {
+            state.events.emit(
+                Some(app.id.clone()),
+                "app.environment.created",
+                Some(serde_json::json!({ "slug": environment.slug })),
+            );
+            (StatusCode::CREATED, Json(serde_json::json!(environment))).into_response()
+        }
+        Err(deku_core::error::DekuError::Database(sqlx::Error::Database(error)))
+            if error.is_unique_violation() =>
+        {
+            bad_request(format!("environment '{slug}' already exists")).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/apps/{name}/environments/{slug}",
+    tag = "apps",
+    params(("name" = String, Path, description = "App name"), ("slug" = String, Path, description = "Environment slug")),
+    responses((status = 204, description = "Environment removed"), (status = 400, description = "Production cannot be removed"))
+)]
+async fn delete_environment_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path((name, slug)): axum::extract::Path<(String, String)>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    match queries::delete_environment(&state.pool, &app.id, &slug).await {
+        Ok(()) => {
+            state.events.emit(
+                Some(app.id.clone()),
+                "app.environment.removed",
+                Some(serde_json::json!({ "slug": slug })),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(deku_core::error::DekuError::EnvironmentNotFound(_)) => {
+            not_found(format!("environment '{slug}' not found")).into_response()
+        }
+        Err(deku_core::error::DekuError::InvalidInput(message)) => {
+            bad_request(message).into_response()
+        }
+        Err(e) => internal_error(e).into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]

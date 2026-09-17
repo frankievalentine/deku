@@ -356,8 +356,13 @@ pub async fn run_deploy(
         },
     };
 
+    // The environment this rollout belongs to. Production is the implicit target
+    // until deploy takes an explicit environment.
+    let environment = queries::ensure_production_environment(pool, app_id).await?;
+
     // Step 1: Create deployment record
-    let mut deployment = queries::create_deployment(pool, app_id, builder_type).await?;
+    let mut deployment =
+        queries::create_deployment(pool, app_id, &environment.id, builder_type).await?;
     let deploy_id = deployment.id.clone();
 
     events.emit(
@@ -373,7 +378,17 @@ pub async fn run_deploy(
     queries::update_app_status(pool, app_id, AppStatus::Created).await?;
 
     // Wrap the rest in a closure so we can always update deployment status on failure
-    let result = do_deploy(pool, docker, events, cfg, plugins, &req, &mut deployment).await;
+    let result = do_deploy(
+        pool,
+        docker,
+        events,
+        cfg,
+        plugins,
+        &req,
+        &mut deployment,
+        &environment.id,
+    )
+    .await;
 
     // Resolve the app once for hook payloads; a hook failure never changes the
     // deploy outcome, so these two events are advisory.
@@ -436,6 +451,7 @@ pub async fn run_deploy(
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 async fn do_deploy(
     pool: &SqlitePool,
     docker: &DockerClient,
@@ -444,6 +460,7 @@ async fn do_deploy(
     plugins: &crate::plugins::PluginRegistry,
     req: &DeployRequest,
     deployment: &mut deku_core::types::Deployment,
+    environment_id: &str,
 ) -> anyhow::Result<String> {
     let app_id = &req.app_id;
     let app_name = &req.app_name;
@@ -658,6 +675,7 @@ async fn do_deploy(
             events,
             cfg,
             app_id,
+            environment_id,
             &built.tag,
             &release.command,
         )
@@ -692,8 +710,10 @@ async fn do_deploy(
     // Collect previous containers for retirement
     let previous_containers = queries::list_containers_for_app(pool, app_id).await?;
 
-    // Load per-app config
-    let config_vars = crate::secrets::get_config_vars(pool, cfg, app_id).await?;
+    // Load per-environment config: app-wide values with this environment's
+    // overrides applied.
+    let config_vars =
+        crate::secrets::resolve_config_vars(pool, cfg, app_id, Some(environment_id)).await?;
     let env: Vec<String> = config_vars
         .iter()
         .map(|cv| format!("{}={}", cv.key, cv.value))
@@ -1054,12 +1074,14 @@ async fn do_deploy(
 
 // ── Release phase ─────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn run_release_phase(
     pool: &SqlitePool,
     docker: &DockerClient,
     events: &EventSender,
     cfg: &DekuConfig,
     app_id: &str,
+    environment_id: &str,
     image_tag: &str,
     command: &str,
 ) -> anyhow::Result<()> {
@@ -1071,7 +1093,8 @@ async fn run_release_phase(
     };
     use futures::StreamExt;
 
-    let config_vars = crate::secrets::get_config_vars(pool, cfg, app_id).await?;
+    let config_vars =
+        crate::secrets::resolve_config_vars(pool, cfg, app_id, Some(environment_id)).await?;
     let env: Vec<String> = config_vars
         .iter()
         .map(|cv| format!("{}={}", cv.key, cv.value))

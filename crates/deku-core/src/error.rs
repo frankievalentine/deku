@@ -32,6 +32,12 @@ pub enum DekuError {
     #[error("unauthorized")]
     Unauthorized,
 
+    #[error("environment not found: {0}")]
+    EnvironmentNotFound(String),
+
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }

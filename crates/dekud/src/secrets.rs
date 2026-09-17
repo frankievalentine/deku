@@ -109,6 +109,45 @@ pub async fn get_config_vars(
     Ok(vars)
 }
 
+/// Config vars for one environment: app-wide values with that environment's
+/// overrides applied on top.
+///
+/// This is what the deploy path injects. Passing `None` for the environment gives
+/// the app-wide set alone.
+pub async fn resolve_config_vars(
+    pool: &SqlitePool,
+    cfg: &DekuConfig,
+    app_id: &str,
+    environment_id: Option<&str>,
+) -> Result<Vec<ConfigVar>> {
+    let mut merged = get_config_vars(pool, cfg, app_id).await?;
+
+    let Some(environment_id) = environment_id else {
+        return Ok(merged);
+    };
+
+    let mut overrides =
+        queries::get_environment_config_vars_raw(pool, app_id, environment_id).await?;
+    for replacement in &mut overrides {
+        replacement.value = decrypt_value(cfg, &replacement.value).map_err(|error| {
+            anyhow!(
+                "config var '{}' could not be decrypted: {error}",
+                replacement.key
+            )
+        })?;
+
+        match merged
+            .iter_mut()
+            .find(|existing| existing.key == replacement.key)
+        {
+            Some(existing) => *existing = replacement.clone(),
+            None => merged.push(replacement.clone()),
+        }
+    }
+
+    Ok(merged)
+}
+
 /// Config vars for display, where a single unreadable value must not hide the rest.
 pub async fn list_config_vars(
     pool: &SqlitePool,
@@ -230,21 +269,6 @@ mod tests {
     }
 
     #[test]
-    fn a_different_envelope_is_not_accepted() {
-        // A backup envelope base64-encoded under the config prefix must not open.
-        let cfg = cfg_with_key(&key());
-        let cipher = cfg.at_rest_cipher().expect("resolves").expect("key");
-        let backup = cipher
-            .seal(crate::crypto::ENVELOPE_MAGIC_BACKUP, b"dump")
-            .expect("seal");
-        let disguised = format!(
-            "{ENVELOPE_PREFIX}{}",
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, backup)
-        );
-        assert!(decrypt_value(&cfg, &disguised).is_err());
-    }
-
-    #[test]
     fn view_serializes_the_encryption_state() {
         let view = ConfigVarView {
             app_id: "app-1".to_string(),
@@ -257,5 +281,20 @@ mod tests {
         let json = serde_json::to_value(&view).expect("serialize");
         assert_eq!(json["encrypted"], true);
         assert_eq!(json["error"], "no key");
+    }
+
+    #[test]
+    fn a_different_envelope_is_not_accepted() {
+        // A backup envelope base64-encoded under the config prefix must not open.
+        let cfg = cfg_with_key(&key());
+        let cipher = cfg.at_rest_cipher().expect("resolves").expect("key");
+        let backup = cipher
+            .seal(crate::crypto::ENVELOPE_MAGIC_BACKUP, b"dump")
+            .expect("seal");
+        let disguised = format!(
+            "{ENVELOPE_PREFIX}{}",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, backup)
+        );
+        assert!(decrypt_value(&cfg, &disguised).is_err());
     }
 }

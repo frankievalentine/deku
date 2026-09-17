@@ -11,6 +11,7 @@ pub mod dashboard;
 pub mod deploy;
 pub mod doctor;
 pub mod domains;
+pub mod env;
 pub mod git;
 pub mod letsencrypt;
 pub mod logs;

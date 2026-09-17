@@ -37,8 +37,66 @@ pub fn validate(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Environment slugs are stricter than app names.
+///
+/// A slug is used in generated hostnames (`<app>-<slug>.<domain>`) and in the
+/// per-environment config file name, so it stays inside DNS-label territory:
+/// lowercase letters, digits, and '-'.
+pub fn validate_slug(slug: &str) -> Result<(), String> {
+    validate(slug)?;
+    if let Some(character) = slug
+        .chars()
+        .find(|c| !matches!(c, 'a'..='z' | '0'..='9' | '-'))
+    {
+        return Err(format!(
+            "environment slug must use only lowercase letters, digits, and '-' (found {character:?})"
+        ));
+    }
+    Ok(())
+}
+
+/// Derive a slug from a display name: `Staging EU` becomes `staging-eu`.
+pub fn slugify(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    let mut last_was_dash = false;
+    for character in name.chars() {
+        let character = character.to_ascii_lowercase();
+        if matches!(character, 'a'..='z' | '0'..='9') {
+            slug.push(character);
+            last_was_dash = false;
+        } else if !last_was_dash && !slug.is_empty() {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    slug.trim_end_matches('-').to_string()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{slugify, validate_slug};
+
+    #[test]
+    fn slugs_reject_uppercase_and_underscores() {
+        assert!(validate_slug("staging").is_ok());
+        assert!(validate_slug("pr-123").is_ok());
+        assert!(validate_slug("Staging").is_err());
+        assert!(validate_slug("staging_eu").is_err());
+        assert!(validate_slug("staging.eu").is_err());
+        assert!(validate_slug("").is_err());
+        assert!(validate_slug("-leading").is_err());
+        assert!(validate_slug("../etc").is_err());
+    }
+
+    #[test]
+    fn slugify_normalizes_a_display_name() {
+        assert_eq!(slugify("Staging EU"), "staging-eu");
+        assert_eq!(slugify("  PR 123  "), "pr-123");
+        assert_eq!(slugify("Feature//Branch"), "feature-branch");
+        assert_eq!(slugify("already-fine"), "already-fine");
+        assert_eq!(slugify("--"), "");
+    }
+
     use super::validate;
 
     #[test]
