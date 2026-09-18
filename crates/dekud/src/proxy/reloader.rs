@@ -226,6 +226,13 @@ pub async fn ensure_app_config_include(conf_dir: &Path) -> Result<IncludeAction>
         std::fs::write(&path, app_include_contents(conf_dir))
             .with_context_label(&path, "writing the Angie app config include")?;
         tracing::info!(path = %path.display(), "added the Angie include for app configs");
+
+        // Reload so the vhosts the include just made reachable are actually
+        // loaded, rather than waiting for some later config write to happen to
+        // trigger it.
+        if let Err(error) = reload().await {
+            tracing::warn!("added the app config include but could not reload Angie: {error}");
+        }
     }
 
     Ok(action)
