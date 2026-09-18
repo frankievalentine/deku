@@ -79,13 +79,20 @@ pub struct FileConfig<'a> {
 /// unchanged file while issuance is failing is how a host ends up hammering the
 /// certificate authority.
 pub async fn sync(cfg: &DekuConfig, email: Option<&str>) -> Result<Outcome> {
-    let path = config_path(&cfg.angie_conf_dir);
-    let previous = std::fs::read(&path).ok();
-
     let desired = match wanted(cfg, email)? {
         Some(config) => Some(render(&config)?),
         None => None,
     };
+    sync_file(&cfg.angie_conf_dir, desired.as_deref()).await
+}
+
+/// Write, remove, or leave the file alone to match what is wanted.
+///
+/// Split from the configuration so the rule can be checked on its own: `None`
+/// wants no file, and `Some` wants exactly that content.
+async fn sync_file(conf_dir: &Path, desired: Option<&str>) -> Result<Outcome> {
+    let path = config_path(conf_dir);
+    let previous = std::fs::read(&path).ok();
 
     match &desired {
         Some(contents) => {
@@ -367,6 +374,81 @@ mod tests {
         .expect_err("a domain with a newline should be rejected");
 
         assert!(error.to_string().contains("global domain"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn syncing_writes_only_what_changed() {
+        // A write here reloads Angie, which signals the pid in the standard pid
+        // file. On a host that is actually running Angie, that file exists and
+        // the reload would try to validate these throwaway contents, so the case
+        // is left to the live checks rather than made flaky here.
+        if std::path::Path::new("/run/angie/angie.pid").exists() {
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let conf_dir = temp.path();
+        let path = conf_dir.join(CONFIG_FILE_NAME);
+
+        // Nothing wanted and nothing there: no file, and nothing to reload for.
+        assert_eq!(
+            super::sync_file(conf_dir, None).await.expect("sync"),
+            super::Outcome::Unchanged
+        );
+        assert!(!path.exists());
+
+        assert_eq!(
+            super::sync_file(conf_dir, Some("first"))
+                .await
+                .expect("sync"),
+            super::Outcome::Written
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "first");
+
+        // The same content is what keeps a start from re-requesting a
+        // certificate: a write here would reload Angie, and a reload re-requests
+        // every certificate that is not currently valid.
+        assert_eq!(
+            super::sync_file(conf_dir, Some("first"))
+                .await
+                .expect("sync"),
+            super::Outcome::Unchanged
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "first");
+
+        assert_eq!(
+            super::sync_file(conf_dir, Some("second"))
+                .await
+                .expect("sync"),
+            super::Outcome::Written
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "second");
+
+        // Disabling removes it; removing again does nothing.
+        assert_eq!(
+            super::sync_file(conf_dir, None).await.expect("sync"),
+            super::Outcome::Removed
+        );
+        assert!(!path.exists());
+        assert_eq!(
+            super::sync_file(conf_dir, None).await.expect("sync"),
+            super::Outcome::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_rejected_file_is_put_back_the_way_it_was() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("deku+acme.conf");
+
+        // There was a file before: its contents come back.
+        std::fs::write(&path, "rejected").expect("write");
+        super::restore(&path, Some(b"previous")).expect("restore");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "previous");
+
+        // There was not: nothing is left behind for Angie to read.
+        super::restore(&path, None).expect("restore");
+        assert!(!path.exists());
     }
 
     #[test]
