@@ -20,6 +20,7 @@ import {
 } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
+import Spinner from './Spinner';
 
 interface ObjectStoreDraft {
   provider: string;
@@ -272,7 +273,7 @@ function ObjectStoreInner() {
   if (loading) {
     return (
       <div className="panel loading-state">
-        <span className="loading-spinner" />
+        <Spinner />
         <span>Loading object store configuration…</span>
       </div>
     );
@@ -656,7 +657,7 @@ function ObjectStoreInner() {
 
                 {linkLoading ? (
                   <div className="panel loading-state">
-                    <span className="loading-spinner" />
+                    <Spinner />
                     <span>Loading app link status…</span>
                   </div>
                 ) : appLink ? (

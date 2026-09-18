@@ -30,6 +30,7 @@ import { showToast } from '../lib/shell';
 import ConnectScreen from './ConnectScreen';
 import ServiceStateBadge from './ServiceStateBadge';
 import TableScroll from './TableScroll';
+import Spinner from './Spinner';
 
 interface HostState {
   apps: App[];
@@ -197,7 +198,7 @@ function HostInner() {
   if (loading) {
     return (
       <div className="panel loading-state">
-        <span className="loading-spinner" />
+        <Spinner />
         <span>Loading host overview…</span>
       </div>
     );

@@ -8,6 +8,7 @@ import {
 } from '../lib/query';
 import ConnectScreen from './ConnectScreen';
 import TableScroll from './TableScroll';
+import Spinner from './Spinner';
 
 const EMPTY_ROUTING_STATUS: RoutingStatusResponse = {
   angie: {
@@ -58,7 +59,7 @@ function RoutingInner() {
   if (loading) {
     return (
       <div className="panel loading-state">
-        <span className="loading-spinner" />
+        <Spinner />
         <span>Loading routing status…</span>
       </div>
     );

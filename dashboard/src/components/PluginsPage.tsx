@@ -4,6 +4,7 @@ import { deletePlugin, fetchPlugins, installPlugin, type Plugin } from '../lib/a
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import TableScroll from './TableScroll';
+import Spinner from './Spinner';
 
 export default function PluginsPage() {
   const tokenAccess = useTokenAccess();
@@ -90,7 +91,7 @@ function PluginsInner() {
   if (loading) {
     return (
       <div className="panel loading-state">
-        <span className="loading-spinner" />
+        <Spinner />
         <span>Loading plugins…</span>
       </div>
     );

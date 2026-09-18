@@ -934,6 +934,9 @@ select:focus-visible {
 .error-state {
   display: grid;
   place-items: center;
+  /* Without this the auto rows stretch across the tall panel and push the
+     indicator and its label to opposite ends. */
+  align-content: center;
   gap: var(--space-3);
   min-height: 18rem;
   text-align: center;
@@ -946,6 +949,18 @@ select:focus-visible {
   border-top-color: currentColor;
   border-radius: 999px;
   animation: spin 0.8s linear infinite;
+}
+
+/* Whole-panel loading indicator. It scales with the viewport so it reads as a
+   page-level progress mark rather than an inline glyph, and takes the accent
+   colour so it works in both themes. */
+.spinner-rings {
+  /* Scales with the viewport so it suits the panel rather than the text line
+     height: 36px on a phone, up to 64px on a wide window. */
+  width: clamp(2.25rem, 7vw, 4rem);
+  height: clamp(2.25rem, 7vw, 4rem);
+  color: var(--color-accent);
+  flex: none;
 }
 
 .spin {

@@ -4,6 +4,7 @@ import { addSshKey, deleteSshKey, fetchSshKeys, type SshKey } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import TableScroll from './TableScroll';
+import Spinner from './Spinner';
 
 export default function SshKeysPage() {
   const tokenAccess = useTokenAccess();
@@ -103,7 +104,7 @@ function SshKeysInner() {
   if (loading) {
     return (
       <div className="panel loading-state">
-        <span className="loading-spinner" />
+        <Spinner />
         <span>Loading SSH keys…</span>
       </div>
     );

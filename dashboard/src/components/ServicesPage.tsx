@@ -25,6 +25,7 @@ import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import ServiceStateBadge from './ServiceStateBadge';
 import TableScroll from './TableScroll';
+import Spinner from './Spinner';
 
 const SERVICE_KINDS: ManagedServiceKind[] = [...MANAGED_SERVICE_KINDS];
 
@@ -287,7 +288,7 @@ function ServicesInner() {
   if (loading) {
     return (
       <div className="panel loading-state">
-        <span className="loading-spinner" />
+        <Spinner />
         <span>Loading managed services…</span>
       </div>
     );
@@ -453,7 +454,7 @@ function ServicesInner() {
             </>
           ) : detailQuery.isPending && !activeDetail ? (
             <div className="loading-state service-detail-loading">
-              <span className="loading-spinner" />
+              <Spinner />
               <span>Loading {activeServiceName}…</span>
             </div>
           ) : !activeDetail ? (

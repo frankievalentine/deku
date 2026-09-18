@@ -15,6 +15,7 @@ import { copyText, showToast } from '../lib/shell';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import Icon from './Icon';
+import Spinner from './Spinner';
 
 interface SettingsState {
   totalApps: number;
@@ -202,7 +203,7 @@ function SettingsInner() {
   if (loading) {
     return (
       <div className="panel loading-state">
-        <span className="loading-spinner" />
+        <Spinner />
         <span>Loading dashboard settings…</span>
       </div>
     );
