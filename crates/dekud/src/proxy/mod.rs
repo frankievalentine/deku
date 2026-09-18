@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use deku_core::types::Upstream;
 use std::path::{Path, PathBuf};
 
-pub use reloader::{dump, loaded_config_files, reload};
+pub use reloader::{
+    app_config_files, dump, ensure_app_config_include, loaded_config_files, missing_app_configs,
+    reload, IncludeAction,
+};
 pub use writer::{
     app_config_path, read_app_config, remove_app_config, write_app_config, write_raw_app_config,
 };

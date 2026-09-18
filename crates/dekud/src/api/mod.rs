@@ -2429,53 +2429,13 @@ async fn tls_certificate_check(pool: &SqlitePool) -> Option<serde_json::Value> {
     }))
 }
 
-/// The app config file names on disk, which Angie is expected to load.
-///
-/// Compared by name rather than by full path: an include may reach the
-/// directory through a symlink or a different spelling, and the question here
-/// is whether Angie reads the file at all, not how it spells the path.
-fn app_config_files(conf_dir: &std::path::Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(conf_dir) else {
-        return Vec::new();
-    };
-
-    let mut files: Vec<String> = entries
-        .flatten()
-        // A directory can be named `something.conf`; only files are configs.
-        .filter(|entry| entry.path().is_file())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "conf"))
-        .filter_map(|entry| {
-            entry
-                .path()
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-        })
-        .collect();
-    files.sort();
-    files
-}
-
-/// The app configs on disk that the effective configuration does not load.
-fn missing_app_configs(expected: &[String], loaded: &[String]) -> Vec<String> {
-    let loaded_names: Vec<&str> = loaded
-        .iter()
-        .filter_map(|path| path.rsplit('/').next())
-        .collect();
-
-    expected
-        .iter()
-        .filter(|name| !loaded_names.contains(&name.as_str()))
-        .cloned()
-        .collect()
-}
-
 /// Check that the app configs on disk are the ones Angie actually loads.
 ///
 /// The directory check only proves the files exist. A missing `include` leaves
 /// every vhost unread while the directory looks healthy, so the effective
 /// configuration is inspected instead of assumed.
 async fn angie_includes_check(conf_dir: &std::path::Path) -> serde_json::Value {
-    let expected = app_config_files(conf_dir);
+    let expected = crate::proxy::app_config_files(conf_dir);
     if expected.is_empty() {
         return serde_json::json!({
             "name": "angie_includes",
@@ -2497,7 +2457,8 @@ async fn angie_includes_check(conf_dir: &std::path::Path) -> serde_json::Value {
         }
     };
 
-    let missing = missing_app_configs(&expected, &crate::proxy::loaded_config_files(&dump));
+    let missing =
+        crate::proxy::missing_app_configs(&expected, &crate::proxy::loaded_config_files(&dump));
 
     if missing.is_empty() {
         serde_json::json!({
@@ -4778,49 +4739,4 @@ async fn deploy_archive(
         Json(serde_json::json!({ "message": "deploy started", "app": name })),
     )
         .into_response()
-}
-
-#[cfg(test)]
-mod doctor_tests {
-    use super::{app_config_files, missing_app_configs};
-
-    #[test]
-    fn only_config_files_are_expected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("demo.conf"), "server {}").expect("write");
-        std::fs::write(dir.path().join("notes.txt"), "ignore me").expect("write");
-        std::fs::create_dir(dir.path().join("sub.conf")).expect("dir");
-
-        assert_eq!(app_config_files(dir.path()), vec!["demo.conf".to_string()]);
-    }
-
-    #[test]
-    fn a_config_the_effective_configuration_omits_is_reported() {
-        let expected = vec!["demo.conf".to_string(), "shop.conf".to_string()];
-        // Angie's `-T` output names every file it loaded.
-        let loaded = vec![
-            "/etc/angie/angie.conf".to_string(),
-            "/etc/angie/conf.d/deku/demo.conf".to_string(),
-        ];
-
-        assert_eq!(
-            missing_app_configs(&expected, &loaded),
-            vec!["shop.conf".to_string()],
-            "a config that is not loaded must be named"
-        );
-    }
-
-    #[test]
-    fn nothing_is_reported_when_every_config_is_loaded() {
-        let expected = vec!["demo.conf".to_string()];
-        let loaded = vec!["/etc/angie/conf.d/deku/demo.conf".to_string()];
-        assert!(missing_app_configs(&expected, &loaded).is_empty());
-    }
-
-    #[test]
-    fn a_missing_include_reports_every_config() {
-        let expected = vec!["demo.conf".to_string()];
-        let loaded = vec!["/etc/angie/angie.conf".to_string()];
-        assert_eq!(missing_app_configs(&expected, &loaded), expected);
-    }
 }

@@ -42,6 +42,26 @@ async fn main() -> Result<()> {
     }
     info!("dekud starting");
 
+    // Make sure Angie loads the directory app configs are written to. Whether
+    // the distribution's configuration includes it is not something Deku
+    // controls, and an app whose vhost is never read looks identical to one that
+    // is, so this is checked rather than assumed.
+    match proxy::ensure_app_config_include(&cfg.angie_conf_dir).await {
+        Ok(proxy::IncludeAction::WriteDropIn) => {
+            info!("added the Angie include for app configs");
+        }
+        Ok(proxy::IncludeAction::Unexplained) => {
+            warn!(
+                conf_dir = %cfg.angie_conf_dir.display(),
+                "app configs are present but not loaded by Angie, and the include already exists; run `deku doctor`"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            warn!("could not check the Angie app config include: {error}");
+        }
+    }
+
     let pool = db::connect(&cfg).await?;
     db::migrate(&pool).await?;
 
