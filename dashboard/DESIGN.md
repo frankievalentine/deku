@@ -26,14 +26,19 @@ and the shared contract; change tokens in the stylesheet, not here.
 | Class | Purpose |
 | --- | --- |
 | `panel`, `hero-panel` | Framed content surface. `hero-panel` is the top-of-page summary band. |
+| `panel-grid`, `panel-span-full` | Two-column panel grid. `panel-span-full` on a child makes it span the full row, e.g. a wide table. |
 | `page-header`, `page-title`, `page-copy` | Page heading row. `page-title` is the only display-scale type. |
 | `section-title`, `eyebrow` | Section heading and small uppercase label. |
 | `metrics-grid`, `metric-card` | Numeric summary tiles; 4-up desktop, 2x2 below 1200px. |
+| `status-band`, `status-band-item` | Single-row figures inside `hero-panel`; divider-separated, not boxed. Use instead of `metrics-grid` when the page already has a hero. |
+| `alert-list`, `alert-row` | Stacked alert rows with a severity edge; for narrow columns where an alert table would clip. |
 | `data-grid` | Label/value pairs. |
 | `stack-sm/md/lg`, `cluster`, `button-row`, `form-actions` | Spacing and grouping primitives. |
 | `table`, `table-scroll` | Data tables; always wrap in `TableScroll` for narrow viewports. |
 | `btn`, `btn-primary`, `btn-secondary`, `btn-outline`, `btn-ghost`, `btn-danger` | Buttons. Size with `btn-sm` (Basecoat 1.0 compat alias). |
 | `input`, `textarea`, `form-group`, `form-label` | Form controls and labels. |
+| `tabs`, `app-tabs`, `app-tab`, `app-tab-track` | Basecoat tabs root plus the app's tab-button treatment. |
+| `console-output`, `console-line` | Streaming command output in the app console. |
 | `empty-state`, `loading-state`, `error-state` | Page-level states. |
 | `modal-backdrop`, `modal-shell`, `modal-badge`, `modal-title`, `modal-copy` | Confirmation dialog. |
 
@@ -79,7 +84,7 @@ carried by color alone: pair the dot or tint with a label or icon.
   `--text-display` 24px (connect screen, `.connect-title`),
   `--text-section-title` 20px (`h2`/`.section-title`/`.modal-title`),
   `--text-card-title` 17px (`h3`/`.deploy-title`), `--text-metric` 22px
-  (`.metric-card strong`, `.segment-button strong`), `--text-body` 15px,
+  (`.metric-card strong`), `--text-body` 15px,
   `--text-meta` 13px, `--text-label` 12px floor for uppercase labels.
   Headings `line-height` ~1.1, body 1.6, uppercase labels get positive
   letter-spacing. Tabular figures on changing numbers.
@@ -145,12 +150,13 @@ carried by color alone: pair the dot or tint with a label or icon.
   and falls back to `data-empty`. Basecoat rules live in `@layer components`, so
   every unlayered override here wins on layer order; state rules such as
   `[aria-hidden="true"] { display: none }` must be restated explicitly.
-- **Sidebar**: Basecoat `.sidebar` with `data-breakpoint`. Desktop navigation is
-  permanent; below 1024px it becomes a modal overlay. Opening it on mobile moves
-  focus into the panel, marks `.shell-body` inert, traps Tab, closes on Escape
-  or the close button, and returns focus to the toggle. Layout sync and the
-  toggle drive it through the element method API
-  (`src/lib/sidebar-overlay.ts`).
+- **Sidebar**: Basecoat `.sidebar` with `data-side="left"` and
+  `data-breakpoint`. Desktop navigation is permanent; below 1024px it becomes a
+  modal overlay. Opening it on mobile moves focus into the panel, marks
+  `.shell-body` inert, traps Tab, closes on Escape or the close button, and
+  returns focus to the toggle. Layout sync and the toggle drive it through the
+  element method API (`src/lib/sidebar-overlay.ts`). Closing on a control click
+  is Basecoat's own behavior, not ours.
 - **ConfirmModal**: required for destructive actions; confirm button repeats the
   consequence, never "OK". Closing is idempotent: the backdrop, Cancel and the
   native `close` event all route through one guarded notifier, so a caller never
@@ -165,13 +171,57 @@ carried by color alone: pair the dot or tint with a label or icon.
   layer supplies pre-1.0 aliases (`btn-sm`, `btn-sm-icon-outline`).
 - New markup uses the 1.0 API: a root class plus documented attributes
   (`class="btn" data-variant="outline" data-size="sm"`).
+- Tailwind preflight (in `@layer base`) owns the element reset. `global.css`
+  must not restate `box-sizing`/`margin`/`padding` on `*`: unlayered rules
+  outrank every `@layer components` rule and would strip padding from Basecoat
+  components (select options, tabs, sidebar groups, dialogs).
 - Basecoat 1.0 removed the document-level `basecoat:toast` and
   `basecoat:sidebar` events. `src/lib/basecoat-compat.ts` bridges the app's
   existing event dispatches onto the supported element methods
   (`toaster.toast()`, `sidebar.open()/close()/toggle()`).
+- The component scripts are imported in `Base.astro` in dependency order after
+  the runtime; `tabs` is imported alongside `select`, `popover`, `sidebar`,
+  `command`, and `toast`. Each `basecoat-css/<name>` module needs a
+  `declare module` entry in `src/basecoat.d.ts`.
+- `SelectField` is a React wrapper over the documented `div.select` contract.
+  Basecoat rescans options through `refresh()`, dispatches `change` with
+  `detail.value`, and closes on outside clicks but not on window blur, so the
+  wrapper adds the blur close.
+- App detail tabs are Basecoat's `.tabs`: `<nav role="tablist">` of
+  `role="tab"` buttons over `role="tabpanel"` panels. Basecoat owns keyboard
+  navigation and selection on the DOM and emits no change event, so a
+  `MutationObserver` mirrors the selected tab into React state and the hash.
+  Panels stay mounted as stable `role="tabpanel"` wrappers toggled with
+  `hidden`, but each panel's content only mounts while it is active, so the log
+  stream and panel queries stay lazy.
+- The sidebar keeps its visual design on Basecoat's markup: `data-side="left"`,
+  `<nav>`, and `role="group"` groups labeled by a heading. Basecoat's sidebar
+  script handles the mobile close-on-any-control-click; `sidebar-overlay.ts`
+  keeps only the modal focus trap, body `inert`, Escape, and focus return.
+
+## Object store providers
+
+The daemon has no provider registry: `provider` is a stored label and the only
+behavior it drives is a region default and path-vs-virtual addressing, with
+signing always the generic S3 SigV4 path. `src/lib/object-store-providers.ts`
+holds the presets (R2, S3, B2, MinIO, Wasabi, DigitalOcean Spaces, Other) that
+fill those conventions. Keep two invariants when editing it:
+
+- **Write the canonical slug** (`r2`, `aws`, `b2`, `minio`, `wasabi`,
+  `digitalocean`, `custom`) as the stored `provider`, so existing configs and
+  `deku objectstore info` stay consistent.
+- **Never rewrite a saved value by opening the page.** A stored provider outside
+  the preset list gets its own "(saved)" option instead of being normalized to
+  `custom`. Every field stays editable, including address style, so MinIO and
+  unlisted services remain usable.
 
 ## Copy
 
 Sentence case everywhere, verb-first buttons ("Create app", "Rotate token"),
 errors that state the fix next to the field that failed, and no exclamation
-marks or "oops". Link text names its destination.
+marks or "oops". Link text names its destination. Prefer the word an operator
+would use over the internal API term: "Domains" not "Proxy", "Processes" not
+"Runtime", "Databases and caches" not "Managed services", "Deploy tokens",
+"health check", and "environment" only when the operator needs it. Say what a
+control does and what happens next, not the mechanism behind it ("Runs a
+one-off command in a fresh copy of the app image", not "console exec").

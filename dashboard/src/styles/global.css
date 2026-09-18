@@ -492,6 +492,151 @@ ol {
   font-variant-numeric: tabular-nums;
 }
 
+/* Single status band. A row of separated figures rather than boxed tiles, so
+   it does not read as a second grid of metric cards under the hero. */
+.status-band {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.status-band-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: var(--space-4) var(--space-4) var(--space-3) 0;
+  border-inline-start: 1px solid var(--color-border);
+  padding-inline-start: var(--space-4);
+}
+
+.status-band-item:first-child {
+  border-inline-start: none;
+  padding-inline-start: 0;
+}
+
+.status-band-item a {
+  display: contents;
+  color: inherit;
+}
+
+.status-band-item strong {
+  color: var(--color-text-primary);
+  font-family: var(--font-heading);
+  font-size: 1.75rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.status-band-item span {
+  color: var(--color-text-soft);
+  font-size: var(--text-meta);
+}
+
+.status-band-item small {
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+}
+
+.status-band-item-warning strong {
+  color: var(--tone-warning-fg);
+}
+
+.status-band-item-danger strong {
+  color: var(--tone-danger-fg);
+}
+
+.status-band-item-success strong {
+  color: var(--color-text-primary);
+}
+
+/* Alerts read as stacked rows rather than a wide table: the panel is half the
+   page, and a five-column table clipped its own message column. */
+.alert-list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.alert-row {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-inline-start-width: 3px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface-alt);
+}
+
+.alert-row-warning {
+  border-inline-start-color: var(--tone-warning-border);
+}
+
+.alert-row-critical {
+  border-inline-start-color: var(--tone-danger-border);
+}
+
+.alert-row-head {
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.alert-row-message {
+  min-width: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.alert-row-meta {
+  gap: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+}
+
+/* Attached networks: a short name/action list rather than a two-column table,
+   which left a wide gutter in a half-width panel. */
+.network-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.network-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface-alt);
+}
+
+.network-row-name {
+  min-width: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Select and its action share one row, so the button sits beside the control
+   instead of across a gap at the far edge of the panel. */
+.network-attach-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.network-attach-form .form-group {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .page-header {
   display: flex;
   gap: var(--space-4);
@@ -521,6 +666,11 @@ ol {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* A panel that needs the full row inside a `.panel-grid`, e.g. a wide table. */
+.panel-span-full {
+  grid-column: 1 / -1;
+}
+
 .deploy-grid {
   display: grid;
   gap: var(--space-5);
@@ -528,34 +678,62 @@ ol {
   align-items: stretch;
 }
 
-.segment-control {
-  display: grid;
-  gap: var(--space-3);
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.engine-tabs {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
 }
 
-.segment-button {
-  display: grid;
+.engine-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.engine-tab {
+  display: inline-flex;
+  align-items: center;
   gap: var(--space-2);
-  padding: var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-subtle);
+  flex: 0 0 auto;
+  min-height: 2.75rem;
+  margin-bottom: -1px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--color-text-soft);
-  text-align: left;
+  white-space: nowrap;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
-.segment-button strong {
-  font-family: var(--font-heading);
-  font-size: var(--text-metric);
+.engine-tab:hover {
   color: var(--color-text-primary);
-  font-variant-numeric: tabular-nums;
 }
 
-.segment-button.is-selected {
-  border-color: var(--color-surface-selection-border);
-  background: var(--color-surface-selection);
-  color: var(--color-accent);
+.engine-tab:focus-visible {
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.engine-tab.is-selected {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-accent);
+}
+
+.engine-tab-count {
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .app-tab-grid {
@@ -644,7 +822,12 @@ ol {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
-.btn-danger:hover,
+.btn-danger:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+.btn-danger:hover:not(:disabled),
 .btn-danger[aria-pressed="true"] {
   filter: brightness(0.96);
 }
@@ -763,6 +946,45 @@ select:focus-visible {
     inset 0 0 0 1px color-mix(in srgb, var(--color-border-strong) 36%, transparent),
     0 0 0 3px color-mix(in srgb, var(--color-border-strong) 14%, transparent);
   outline: none;
+}
+
+/* SelectField (Basecoat `div.select`). The native control is replaced because
+   the browser draws its option list, which cannot be styled or constrained.
+   The chain is: the root must not stretch to its grid/flex track, the trigger
+   carries the width, and the popover's `min-width: max(100%, 9rem)` therefore
+   resolves against the trigger rather than the row. `--select-trigger-width`
+   lets a page size one trigger. */
+.select {
+  justify-self: start;
+  align-self: start;
+}
+
+.select > button.select-trigger {
+  width: var(--select-trigger-width, 12rem);
+  max-width: 100%;
+}
+
+.select > button.select-trigger > svg {
+  opacity: 0.5;
+}
+
+/* Basecoat styles options `cursor-default`; this dashboard uses a pointer so the
+   list reads as clickable. Disabled options keep the default cursor. */
+.select > [data-popover] [role="option"] {
+  cursor: pointer;
+}
+
+.select > [data-popover] [role="option"][aria-disabled="true"] {
+  cursor: default;
+}
+
+/* Basecoat renders the empty listbox message from `data-empty` as a `::before`
+   on the listbox, which inherits the row's type but not its spacing or color. */
+.select > [data-popover] [role="listbox"][data-empty]:not(:has([data-value]))::before {
+  display: block;
+  padding: 0.6rem 0.75rem;
+  color: var(--color-text-muted);
+  font-size: var(--text-meta);
 }
 
 .file-input {
@@ -912,11 +1134,21 @@ select:focus-visible {
 
 .table th,
 .table td {
-  padding: 0.9rem 0;
+  padding: 0.7rem var(--space-3);
   text-align: left;
   border-bottom: 1px solid var(--color-border-subtle);
   vertical-align: top;
   overflow-wrap: anywhere;
+}
+
+.table th:first-child,
+.table td:first-child {
+  padding-inline-start: 0;
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-inline-end: 0;
 }
 
 .table th {
@@ -1069,7 +1301,7 @@ select:focus-visible {
   font-size: 0.78rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .deploy-card {
@@ -2495,6 +2727,31 @@ select:focus-visible {
 
 .skeleton-log-terminal {
   padding-block: var(--space-4);
+}
+
+.console-output {
+  min-height: 12rem;
+  max-height: 24rem;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-log);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.console-line {
+  display: block;
+}
+
+.console-line-error {
+  color: var(--tone-danger-fg);
 }
 
 .log-line {

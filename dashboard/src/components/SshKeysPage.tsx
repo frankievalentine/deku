@@ -128,9 +128,7 @@ function SshKeysInner() {
       <section className="hero-panel">
         <div className="stack-md">
           <h1 className="page-title">SSH keys</h1>
-          <p className="page-copy">
-            Register public keys that the Deku CLI uses to authenticate against this host.
-          </p>
+          <p className="page-copy">Public keys that the Deku CLI uses to sign in to this server.</p>
         </div>
       </section>
 

@@ -81,7 +81,7 @@ function AppListInner() {
       setShowCreate(true);
       query.delete('create');
       const next = query.toString();
-      window.history.replaceState({}, '', next ? `/?${next}` : '/');
+      window.history.replaceState({}, '', next ? `/apps?${next}` : '/apps');
     }
   }, []);
 
@@ -157,14 +157,12 @@ function AppListInner() {
         <div className="apps-header-top">
           <div className="apps-header-copy">
             <p className="eyebrow">Apps</p>
-            <h1 className="page-title">Applications</h1>
-            <p className="page-copy">Open an app to deploy, route, scale, and inspect it.</p>
+            <h1 className="page-title">Apps</h1>
+            <p className="page-copy">
+              Open an app to deploy it, connect a domain, and watch it run.
+            </p>
           </div>
           <div className="cluster">
-            <a className="btn btn-secondary" href="/settings">
-              <Icon name="settings" size={16} />
-              <span>Settings</span>
-            </a>
             <button
               type="button"
               className="btn btn-primary"

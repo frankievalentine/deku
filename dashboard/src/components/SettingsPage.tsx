@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { type SubmitEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
 import { clearToken, getDashboardBuildVersion, setToken } from '../lib/api';
 import {
@@ -7,15 +7,14 @@ import {
   getErrorMessage,
   useDaemonHealthQuery,
   useRotateDashboardTokenMutation,
-  useSetLetsEncryptConfigMutation,
   useSettingsSummaryQuery,
   useVersionStatusQuery,
 } from '../lib/query';
 import { copyText, showToast } from '../lib/shell';
-import AcmeSettingsPanel from './AcmeSettingsPanel';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import Icon from './Icon';
+import PluginsPanel from './PluginsPanel';
 import Spinner from './Spinner';
 
 interface SettingsState {
@@ -55,17 +54,13 @@ export default function SettingsPage() {
 
 function SettingsInner() {
   const queryClient = useQueryClient();
-  const [emailDraft, setEmailDraft] = useState('');
-  const [emailError, setEmailError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [latestToken, setLatestToken] = useState<string | null>(null);
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const emailInput = useRef<HTMLInputElement>(null);
   const settingsQuery = useSettingsSummaryQuery();
   const healthQuery = useDaemonHealthQuery({ refetchInterval: 30_000 });
   const versionQuery = useVersionStatusQuery({ refetchInterval: 300_000 });
-  const setLetsEncryptConfigMutation = useSetLetsEncryptConfigMutation();
   const rotateDashboardTokenMutation = useRotateDashboardTokenMutation();
   const state = settingsQuery.data ?? EMPTY_SETTINGS_STATE;
   const loading = settingsQuery.isPending;
@@ -84,10 +79,6 @@ function SettingsInner() {
   useEffect(() => {
     setLatestToken(window.sessionStorage.getItem('deku_rotated_token'));
   }, []);
-
-  useEffect(() => {
-    setEmailDraft(state.tlsEmail ?? '');
-  }, [state.tlsEmail]);
 
   useEffect(() => {
     if (settingsQuery.error) {
@@ -113,37 +104,6 @@ function SettingsInner() {
     }
     return `Running the latest release (${versionStatus.current_version})`;
   }, [versionError, versionStatus]);
-
-  async function handleSaveEmail(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const email = emailDraft.trim();
-    const nextEmailError = validateEmail(email);
-
-    if (nextEmailError) {
-      setEmailError(nextEmailError);
-      emailInput.current?.focus();
-      return;
-    }
-
-    try {
-      setBusy('tls-email');
-      setEmailError(null);
-      await setLetsEncryptConfigMutation.mutateAsync(email);
-      showToast({
-        title: 'TLS email saved',
-        description: `Global Let's Encrypt email updated to ${email}.`,
-        variant: 'success',
-      });
-    } catch (error) {
-      showToast({
-        title: 'Unable to save TLS email',
-        description: error instanceof Error ? error.message : 'Saving failed.',
-        variant: 'error',
-      });
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function handleRotateToken() {
     try {
@@ -214,10 +174,8 @@ function SettingsInner() {
     <div className="stack-lg">
       <section className="hero-panel">
         <div className="stack-md">
-          <h1 className="page-title">Settings</h1>
-          <p className="page-copy">
-            Dashboard token, release status, and Let’s Encrypt configuration for this host.
-          </p>
+          <h1 className="page-title">Dashboard settings</h1>
+          <p className="page-copy">Access token, release version, and plugins.</p>
         </div>
         <div className="metrics-grid">
           <Metric
@@ -337,102 +295,9 @@ function SettingsInner() {
             <p className="text-muted">This host is already on the latest published Deku release.</p>
           ) : null}
         </article>
-
-        <article className="panel stack-md">
-          <h2 className="section-title">Let’s Encrypt account email</h2>
-          <p className="text-muted">
-            Used for certificate operations across every routed app on this host.
-          </p>
-
-          <form onSubmit={handleSaveEmail} className="stack-md" noValidate>
-            <div className="form-group">
-              <label className="form-label" htmlFor="settings-le-email">
-                Account email
-              </label>
-              <input
-                id="settings-le-email"
-                ref={emailInput}
-                className="input"
-                type="email"
-                value={emailDraft}
-                onChange={(event) => {
-                  setEmailDraft(event.target.value);
-                  if (emailError) setEmailError(null);
-                }}
-                placeholder="ops@example.com"
-                disabled={busy !== null}
-                autoComplete="email"
-                spellCheck={false}
-                required
-                aria-invalid={emailError ? true : undefined}
-                aria-describedby={emailError ? 'settings-le-email-error' : undefined}
-              />
-              {emailError ? (
-                <p id="settings-le-email-error" className="text-danger">
-                  {emailError}
-                </p>
-              ) : null}
-            </div>
-            <div className="form-actions">
-              <button className="btn btn-primary" type="submit" disabled={busy !== null}>
-                <Icon name="settings" size={16} />
-                {busy === 'tls-email' ? <span className="loading-spinner" /> : null}
-                <span>Save email</span>
-              </button>
-            </div>
-          </form>
-
-          <p className="text-muted">
-            {state.tlsConfigured
-              ? `Current email: ${state.tlsEmail}`
-              : 'No account email is set. It is optional: the certificate authority uses it to reach you about the account, and certificates are issued without one.'}
-          </p>
-        </article>
-
-        <AcmeSettingsPanel />
-
-        <article className="panel stack-md">
-          <h2 className="section-title">Storage and services</h2>
-
-          <div className="summary-list">
-            <SummaryLink
-              href="/object-store"
-              icon="object-store"
-              title="Object store"
-              description={
-                state.objectStoreConfigured
-                  ? `Configured${state.objectStoreProvider ? ` with ${state.objectStoreProvider}` : ''}`
-                  : 'Not configured'
-              }
-            />
-            <SummaryLink
-              href="/services"
-              icon="services"
-              title="Managed services"
-              description={`${state.totalServices} services configured`}
-            />
-          </div>
-        </article>
-
-        <article className="panel stack-md">
-          <h2 className="section-title">SSH keys and plugins</h2>
-
-          <div className="summary-list">
-            <SummaryLink
-              href="/ssh-keys"
-              icon="ssh-keys"
-              title="SSH keys"
-              description={`${state.sshKeyCount} keys registered for CLI access`}
-            />
-            <SummaryLink
-              href="/plugins"
-              icon="plugins"
-              title="Plugins"
-              description={`${state.pluginCount} plugins loaded by the daemon`}
-            />
-          </div>
-        </article>
       </section>
+
+      <PluginsPanel />
 
       <ConfirmModal
         open={confirmRotate}
@@ -458,42 +323,5 @@ function Metric({ label, value }: { label: string; value: string }) {
       <p>{label}</p>
       <strong>{value}</strong>
     </div>
-  );
-}
-
-function validateEmail(email: string): string | null {
-  if (!email) {
-    return 'Enter the account email for Let’s Encrypt.';
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return 'Enter a valid email address, such as ops@example.com.';
-  }
-
-  return null;
-}
-
-function SummaryLink({
-  href,
-  icon,
-  title,
-  description,
-}: {
-  href: string;
-  icon: 'object-store' | 'services' | 'ssh-keys' | 'plugins';
-  title: string;
-  description: string;
-}) {
-  return (
-    <a className="summary-link-card" href={href}>
-      <span className="summary-link-icon">
-        <Icon name={icon} size={18} />
-      </span>
-      <span className="summary-link-copy">
-        <strong>{title}</strong>
-        <small>{description}</small>
-      </span>
-      <Icon name="open" size={16} className="summary-link-arrow" />
-    </a>
   );
 }

@@ -1,12 +1,16 @@
+import { type SubmitEvent, useEffect, useState } from 'react';
 import { useTokenAccess } from '../hooks/useHasToken';
-import type { LetsEncryptConfig, RoutingStatusResponse, RoutingTableEntry } from '../lib/api';
+import type { LetsEncryptConfig, RoutingStatusResponse } from '../lib/api';
 import {
   getFirstQueryError,
   useLetsEncryptConfigQuery,
   useRoutingStatusQuery,
-  useRoutingTableQuery,
+  useSetLetsEncryptConfigMutation,
 } from '../lib/query';
+import { showToast } from '../lib/shell';
+import AcmeSettingsPanel from './AcmeSettingsPanel';
 import ConnectScreen from './ConnectScreen';
+import Icon from './Icon';
 import Spinner from './Spinner';
 import TableScroll from './TableScroll';
 
@@ -37,21 +41,55 @@ export default function RoutingPage() {
 }
 
 function RoutingInner() {
-  const tableQuery = useRoutingTableQuery({ refetchInterval: 30_000 });
   const statusQuery = useRoutingStatusQuery({ refetchInterval: 30_000 });
   const tlsConfigQuery = useLetsEncryptConfigQuery();
-  const table = tableQuery.data ?? EMPTY_ROUTING_TABLE;
+  const setLetsEncryptConfigMutation = useSetLetsEncryptConfigMutation();
   const status = statusQuery.data ?? EMPTY_ROUTING_STATUS;
   const tlsConfig = tlsConfigQuery.data ?? EMPTY_TLS_CONFIG;
-  const error = getFirstQueryError(
-    [tableQuery.error, statusQuery.error, tlsConfigQuery.error],
-    null
-  );
-  const loading = tableQuery.isPending || statusQuery.isPending;
-  const loaded = tableQuery.data !== undefined && statusQuery.data !== undefined;
+  const error = getFirstQueryError([statusQuery.error, tlsConfigQuery.error], null);
+  const loading = statusQuery.isPending;
+  const loaded = statusQuery.data !== undefined;
+
+  const [emailDraft, setEmailDraft] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEmailDraft(tlsConfig.email ?? '');
+  }, [tlsConfig.email]);
+
+  async function handleSaveEmail(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const email = emailDraft.trim();
+    const nextEmailError = validateEmail(email);
+
+    if (nextEmailError) {
+      setEmailError(nextEmailError);
+      document.getElementById('routing-le-email')?.focus();
+      return;
+    }
+
+    try {
+      setBusy('tls-email');
+      setEmailError(null);
+      await setLetsEncryptConfigMutation.mutateAsync(email);
+      showToast({
+        title: 'TLS email saved',
+        description: `Global Let's Encrypt email updated to ${email}.`,
+        variant: 'success',
+      });
+    } catch (nextError) {
+      showToast({
+        title: 'Unable to save TLS email',
+        description: nextError instanceof Error ? nextError.message : 'Saving failed.',
+        variant: 'error',
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
 
   function retryAll() {
-    void tableQuery.refetch();
     void statusQuery.refetch();
     void tlsConfigQuery.refetch();
   }
@@ -82,9 +120,9 @@ function RoutingInner() {
     <div className="stack-lg">
       <section className="hero-panel">
         <div className="stack-md">
-          <h1 className="page-title">Routing</h1>
+          <h1 className="page-title">Domains and certificates</h1>
           <p className="page-copy">
-            Published routes, proxy validation, and Let’s Encrypt configuration for every app.
+            Domains, HTTPS certificates, and how traffic reaches each app.
           </p>
         </div>
         <div className="metrics-grid">
@@ -106,7 +144,10 @@ function RoutingInner() {
 
       <section className="panel-grid">
         <article className="panel stack-md">
-          <h2 className="section-title">Proxy configuration</h2>
+          <div className="stack-sm">
+            <p className="eyebrow">Proxy</p>
+            <h2 className="section-title">Proxy configuration</h2>
+          </div>
           <p
             className={`callout ${status.angie.config_valid ? 'callout-success' : 'callout-danger'}`}
           >
@@ -118,23 +159,71 @@ function RoutingInner() {
         </article>
 
         <article className="panel stack-md">
-          <h2 className="section-title">Let’s Encrypt email</h2>
+          <div className="stack-sm">
+            <p className="eyebrow">Certificates</p>
+            <h2 className="section-title">Let’s Encrypt account email</h2>
+            <p className="page-copy">
+              Used for certificate operations across every routed app on this host.
+            </p>
+          </div>
+
+          <form onSubmit={handleSaveEmail} className="stack-md" noValidate>
+            <div className="form-group">
+              <label className="form-label" htmlFor="routing-le-email">
+                Account email
+              </label>
+              <input
+                id="routing-le-email"
+                className="input"
+                type="email"
+                value={emailDraft}
+                onChange={(event) => {
+                  setEmailDraft(event.target.value);
+                  if (emailError) setEmailError(null);
+                }}
+                placeholder="ops@example.com"
+                disabled={busy !== null}
+                autoComplete="email"
+                spellCheck={false}
+                required
+                aria-invalid={emailError ? true : undefined}
+                aria-describedby={emailError ? 'routing-le-email-error' : undefined}
+              />
+              {emailError ? (
+                <p id="routing-le-email-error" className="text-danger">
+                  {emailError}
+                </p>
+              ) : null}
+            </div>
+            <div className="form-actions">
+              <button className="btn btn-primary" type="submit" disabled={busy !== null}>
+                <Icon name="settings" size={16} />
+                {busy === 'tls-email' ? <span className="loading-spinner" /> : null}
+                <span>Save email</span>
+              </button>
+            </div>
+          </form>
+
           <p className="text-muted">
             {tlsConfig.configured
               ? `Current email: ${tlsConfig.email}`
               : 'No account email is set. It is optional: the certificate authority uses it to reach you about the account, and certificates are issued without one.'}
           </p>
-          <div className="form-actions">
-            <a className="btn btn-primary" href="/settings">
-              Update Let’s Encrypt email
-            </a>
-          </div>
         </article>
       </section>
 
+      <AcmeSettingsPanel />
+
       <article className="panel stack-md">
-        <h2 className="section-title">App to upstream map</h2>
-        {table.length === 0 ? (
+        <div className="stack-sm">
+          <p className="eyebrow">Traffic</p>
+          <h2 className="section-title">Routes</h2>
+          <p className="page-copy">
+            Every app's domains, environment and preview hostnames, upstreams, and routing health.
+          </p>
+        </div>
+
+        {status.apps.length === 0 ? (
           <p className="text-muted">
             No routes are published yet. Add a domain to an app and deploy it to publish one.
           </p>
@@ -142,7 +231,7 @@ function RoutingInner() {
           <TableScroll>
             <table className="table">
               <caption className="sr-only">
-                Routing table mapping each app to its domains and upstreams
+                Routing table mapping each app to its domains, hostnames, and upstreams
               </caption>
               <thead>
                 <tr>
@@ -150,56 +239,7 @@ function RoutingInner() {
                   <th scope="col">Domains</th>
                   <th scope="col">Environment and preview hostnames</th>
                   <th scope="col">Upstreams</th>
-                </tr>
-              </thead>
-              <tbody>
-                {table.map((entry) => (
-                  <tr key={entry.app}>
-                    <td>{entry.app}</td>
-                    <td className="font-mono">
-                      {entry.domains.length === 0 ? 'None' : entry.domains.join(', ')}
-                    </td>
-                    <td className="font-mono">
-                      {entry.hostnames.length === 0
-                        ? 'None'
-                        : entry.hostnames
-                            .map((hostname) =>
-                              hostname.deployment_id
-                                ? `${hostname.hostname} (preview, ${hostname.environment})`
-                                : `${hostname.hostname} (${hostname.environment})`
-                            )
-                            .join(', ')}
-                    </td>
-                    <td className="font-mono">
-                      {entry.upstreams.length === 0
-                        ? 'None'
-                        : entry.upstreams
-                            .map((upstream) => `${upstream.host}:${upstream.port}`)
-                            .join(', ')}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
-        )}
-      </article>
-
-      <article className="panel stack-md">
-        <h2 className="section-title">Routing health</h2>
-        {status.apps.length === 0 ? (
-          <p className="text-muted">
-            No apps are available. Create an app to see its routing status here.
-          </p>
-        ) : (
-          <TableScroll>
-            <table className="table">
-              <caption className="sr-only">Routing status for each app</caption>
-              <thead>
-                <tr>
-                  <th scope="col">App</th>
                   <th scope="col">Status</th>
-                  <th scope="col">Hostnames</th>
                   <th scope="col">TLS</th>
                   <th scope="col">Proxy config</th>
                   <th scope="col">Issues</th>
@@ -211,10 +251,30 @@ function RoutingInner() {
                     <td>
                       <a href={`/app?name=${encodeURIComponent(app.app)}`}>{app.app}</a>
                     </td>
+                    <td className="font-mono">
+                      {app.domains.length === 0 ? 'None' : app.domains.join(', ')}
+                    </td>
+                    <td className="font-mono">
+                      {app.hostnames.length === 0
+                        ? 'None'
+                        : app.hostnames
+                            .map((hostname) =>
+                              hostname.deployment_id
+                                ? `${hostname.hostname} (preview, ${hostname.environment})`
+                                : `${hostname.hostname} (${hostname.environment})`
+                            )
+                            .join(', ')}
+                    </td>
+                    <td className="font-mono">
+                      {app.upstreams.length === 0
+                        ? 'None'
+                        : app.upstreams
+                            .map((upstream) => `${upstream.host}:${upstream.port}`)
+                            .join(', ')}
+                    </td>
                     <td>
                       <ServiceState status={app.status} />
                     </td>
-                    <td>{app.hostnames.length === 0 ? 'None' : app.hostnames.length}</td>
                     <td>{app.tls_enabled ? (app.tls_ready ? 'Ready' : 'Enabled') : 'Off'}</td>
                     <td className="font-mono">
                       {app.proxy_config_present ? 'Present' : 'Missing'}
@@ -231,8 +291,6 @@ function RoutingInner() {
   );
 }
 
-const EMPTY_ROUTING_TABLE: RoutingTableEntry[] = [];
-
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="metric-card">
@@ -240,6 +298,18 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function validateEmail(email: string): string | null {
+  if (!email) {
+    return 'Enter the account email for Let’s Encrypt.';
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return 'Enter a valid email address, such as ops@example.com.';
+  }
+
+  return null;
 }
 
 function ServiceState({ status }: { status: string }) {

@@ -46,7 +46,7 @@ export default function AppOperationsPanel({
       await deleteAppMutation.mutateAsync(appName);
       setNotice(`Deleted app ${appName}. Redirecting to fleet view…`);
       window.setTimeout(() => {
-        window.location.assign('/');
+        window.location.assign('/apps');
       }, 500);
     } catch (nextError) {
       setError(getErrorMessage(nextError, 'Unable to delete app.'));
@@ -61,11 +61,8 @@ export default function AppOperationsPanel({
       <article className="panel stack-md">
         <div className="stack-sm">
           <p className="eyebrow">App settings</p>
-          <h2 className="section-title">Metadata and control surface</h2>
-          <p className="page-copy">
-            Inspect the immutable app record and the operational state the daemon currently exposes
-            for this app.
-          </p>
+          <h2 className="section-title">App details</h2>
+          <p className="page-copy">Basic facts about this app and whether it can be changed.</p>
         </div>
 
         <dl className="data-grid">
@@ -93,8 +90,8 @@ export default function AppOperationsPanel({
 
         <p className={locked ? 'callout callout-warning' : 'callout callout-success'}>
           {locked
-            ? 'This app is currently locked. Deploy and mutation routes already respect that lock state.'
-            : 'This app is writable. Lock and unlock controls are still unavailable because the daemon does not expose an HTTP route for them yet.'}
+            ? 'This app is locked. Deploys and changes are disabled until it is unlocked.'
+            : 'This app is writable. Locking it from the dashboard is not available yet.'}
         </p>
       </article>
 
