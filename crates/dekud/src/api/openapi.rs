@@ -8,7 +8,7 @@
 //! Handlers are annotated with `#[utoipa::path]` incrementally; `ApiDoc` lists
 //! the annotated subset and the completeness test guards that list.
 
-use super::acme::{__path_get_acme, __path_put_acme, __path_verify_acme};
+use super::acme::{__path_acme_status, __path_get_acme, __path_put_acme, __path_verify_acme};
 use super::console::{__path_exec, __path_run};
 use super::services::{
     __path_cron_add, __path_cron_list, __path_cron_remove, __path_delete_backup_schedule,
@@ -375,6 +375,7 @@ pub struct PluginRuntimeSchema {
         get_backup_schedule,
         le_config,
         get_acme,
+        acme_status,
         put_acme,
         verify_acme,
         le_disable,
@@ -597,6 +598,7 @@ mod tests {
         ("get", "/api/events"),
         ("get", "/api/events/stream"),
         ("get", "/api/acme"),
+        ("get", "/api/acme/status"),
         ("get", "/api/letsencrypt/config"),
         ("get", "/api/letsencrypt/status/{app}"),
         ("get", "/api/mysql/services"),

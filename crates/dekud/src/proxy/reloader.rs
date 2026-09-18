@@ -38,6 +38,29 @@ pub async fn validate() -> Result<()> {
     anyhow::bail!("angie config validation failed: {}{}", stdout, stderr);
 }
 
+/// The banner Angie prints for `-V`.
+///
+/// The build options are in this output, and they are the only way to tell
+/// whether the module a feature needs was compiled in.
+pub async fn version() -> Result<String> {
+    let output = tokio::process::Command::new(angie_bin())
+        .arg("-V")
+        .output()
+        .await?;
+
+    // Angie prints the banner to stderr.
+    let mut banner = String::from_utf8_lossy(&output.stdout).to_string();
+    banner.push_str(&String::from_utf8_lossy(&output.stderr));
+
+    if !output.status.success() && banner.trim().is_empty() {
+        anyhow::bail!(
+            "angie -V produced no output and exited with {}",
+            output.status
+        );
+    }
+    Ok(banner)
+}
+
 /// The effective configuration, as Angie resolves it.
 ///
 /// `angie -T` writes every included file, each preceded by a marker naming its

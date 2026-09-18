@@ -51,6 +51,8 @@ enum Commands {
     Redirects(commands::redirects::RedirectsArgs),
     /// Diagnose host and daemon health
     Doctor(commands::doctor::DoctorArgs),
+    /// Automatic TLS certificates for generated hostnames
+    Acme(commands::acme::AcmeArgs),
     /// Show active alerts
     Alerts(commands::alerts::AlertsArgs),
     /// Deployment environments
@@ -131,6 +133,7 @@ async fn main() -> Result<()> {
                 Commands::Maintenance(args) => commands::maintenance::run(args, &client).await,
                 Commands::Redirects(args) => commands::redirects::run(args, &client).await,
                 Commands::Doctor(args) => commands::doctor::run(args, &client).await,
+                Commands::Acme(args) => commands::acme::run(args, &client).await,
                 Commands::Alerts(args) => commands::alerts::run(args, &client).await,
                 Commands::Env(args) => commands::env::run(args, &client).await,
                 Commands::Config(args) => commands::config::run(args, &client).await,

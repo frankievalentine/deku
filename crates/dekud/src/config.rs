@@ -541,6 +541,17 @@ pub enum TokenSource {
     File,
 }
 
+impl TokenSource {
+    /// A name for the source, for a message that must not carry the token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TokenSource::Environment => "DEKU_ACME_API_TOKEN",
+            TokenSource::Inline => "the configuration file",
+            TokenSource::File => "the token file",
+        }
+    }
+}
+
 /// An ACME API token and where it came from, so a surface can report its origin
 /// without ever returning the secret.
 #[derive(Debug, Clone)]

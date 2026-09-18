@@ -153,6 +153,69 @@ pub async fn put_acme(
     }
 }
 
+/// What the settings asked for, and what has actually happened.
+///
+/// The settings alone cannot answer the question an operator has when the
+/// generated hostnames are still served over HTTP: whether the request is in
+/// place, and whether a certificate has been issued yet.
+#[utoipa::path(
+    get,
+    path = "/api/acme/status",
+    tag = "acme",
+    responses((status = 200, description = "Certificate settings and issuance status"))
+)]
+pub async fn acme_status(State(_state): State<SharedState>) -> impl IntoResponse {
+    let cfg = match crate::config::load() {
+        Ok(cfg) => cfg,
+        Err(error) => return internal_error(error).into_response(),
+    };
+
+    let token = cfg.acme_api_token().ok().flatten();
+    let account_email = crate::services::letsencrypt::get_global_email(&cfg)
+        .await
+        .ok()
+        .flatten();
+
+    let certificate = acme::file::wildcard_certificate(&cfg.acme);
+    let exists = certificate.exists();
+    let not_after = match exists {
+        true => crate::services::letsencrypt::certificate_not_after(&certificate).await,
+        false => None,
+    };
+    let (expires_at, days_remaining, lifecycle) =
+        crate::services::letsencrypt::classify_expiry(not_after.as_deref(), chrono::Utc::now());
+    // A lifecycle of `unknown` would read as "could not inspect", which is not
+    // the same as "there is nothing there".
+    let lifecycle = if exists {
+        lifecycle
+    } else {
+        crate::services::letsencrypt::CertLifecycle::Missing
+    };
+
+    let config_file = acme::file::config_path(&cfg.angie_conf_dir);
+    let mut payload = settings_json(
+        &cfg,
+        token.is_some(),
+        token.map(|token| token.source),
+        account_email,
+    );
+
+    // Whether Angie has been asked, and whether it has succeeded.
+    payload["request_file"] = serde_json::json!({
+        "path": config_file,
+        "written": config_file.exists(),
+    });
+    payload["certificate"] = serde_json::json!({
+        "path": certificate,
+        "exists": exists,
+        "expires_at": expires_at,
+        "days_remaining": days_remaining,
+        "lifecycle": lifecycle,
+    });
+
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct AcmeVerifyBody {
     /// A token to check before saving it. Omit to check the stored one.

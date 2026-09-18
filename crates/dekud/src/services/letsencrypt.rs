@@ -105,6 +105,17 @@ pub async fn get_global_email(cfg: &DekuConfig) -> Result<Option<String>> {
     }
 }
 
+/// The `notAfter` of a certificate file, when it can be read.
+///
+/// Small on purpose: a caller that only wants the expiry should not have to know
+/// how a certificate is inspected.
+pub async fn certificate_not_after(path: &std::path::Path) -> Option<String> {
+    inspect_certificate(path)
+        .await
+        .ok()
+        .and_then(|info| info.not_after)
+}
+
 /// How close a certificate is to expiry, or why it cannot be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

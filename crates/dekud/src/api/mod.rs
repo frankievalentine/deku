@@ -325,6 +325,7 @@ fn build_api_router(state: SharedState) -> Router {
             "/api/acme",
             get(acme_settings::get_acme).put(acme_settings::put_acme),
         )
+        .route("/api/acme/status", get(acme_settings::acme_status))
         .route("/api/acme/verify", post(acme_settings::verify_acme))
         // Networks
         .route(
@@ -2485,6 +2486,118 @@ async fn angie_includes_check(conf_dir: &std::path::Path) -> serde_json::Value {
     }
 }
 
+/// Check the certificate settings, the way the settings endpoint checks them.
+///
+/// A host that cannot obtain a certificate should say so here rather than fail
+/// at the certificate authority, where the reason comes back as an error string.
+fn acme_config_check(cfg: &crate::config::DekuConfig) -> serde_json::Value {
+    if !cfg.acme.enabled {
+        return serde_json::json!({
+            "name": "acme",
+            "status": "ok",
+            "detail": "disabled",
+        });
+    }
+
+    if let Err(error) = cfg.acme.validate(cfg.global_domain.as_deref()) {
+        return serde_json::json!({
+            "name": "acme",
+            "status": "fail",
+            "detail": error.to_string(),
+        });
+    }
+
+    match cfg.acme_api_token() {
+        Ok(Some(token)) => serde_json::json!({
+            "name": "acme",
+            "status": "ok",
+            "detail": format!(
+                "{} via {} for {}",
+                cfg.acme.provider,
+                token.source.as_str(),
+                cfg.acme.directory,
+            ),
+        }),
+        Ok(None) => serde_json::json!({
+            "name": "acme",
+            "status": "fail",
+            "detail": "enabled but no provider token is configured",
+        }),
+        Err(error) => serde_json::json!({
+            "name": "acme",
+            "status": "fail",
+            "detail": error.to_string(),
+        }),
+    }
+}
+
+/// Check whether the wildcard certificate has been issued.
+///
+/// Not issued is a warning rather than a failure: a certificate is requested
+/// asynchronously, so a host that was just configured has not been issued one
+/// yet. It is worth reporting because the derived hostnames are served over HTTP
+/// alone until it arrives.
+fn acme_certificate_check(cfg: &crate::config::DekuConfig) -> serde_json::Value {
+    if !cfg.acme.enabled || !cfg.acme.wildcard {
+        return serde_json::json!({
+            "name": "acme_certificate",
+            "status": "ok",
+            "detail": "no wildcard certificate is configured",
+        });
+    }
+
+    let certificate = crate::acme::file::wildcard_certificate(&cfg.acme);
+    if certificate.exists() {
+        serde_json::json!({
+            "name": "acme_certificate",
+            "status": "ok",
+            "detail": format!("issued at {}", certificate.display()),
+        })
+    } else {
+        serde_json::json!({
+            "name": "acme_certificate",
+            "status": "warn",
+            "detail": format!(
+                "not issued yet at {}; environment and per-deployment hostnames are served over HTTP until it is, and one reconcile after issuance adds TLS",
+                certificate.display()
+            ),
+        })
+    }
+}
+
+/// Check that Angie was built with the ACME module.
+///
+/// The module is in Angie's packages but not in a build from source, so the
+/// build options are read rather than assumed. Without it the certificate
+/// request file is a configuration error for the whole server.
+async fn acme_module_check() -> serde_json::Value {
+    match crate::proxy::version().await {
+        Ok(banner) => {
+            let version = banner.lines().next().unwrap_or_default().trim().to_string();
+            if banner.contains("--with-http_acme_module") {
+                serde_json::json!({
+                    "name": "angie_acme_module",
+                    "status": "ok",
+                    "detail": version,
+                })
+            } else {
+                serde_json::json!({
+                    "name": "angie_acme_module",
+                    "status": "fail",
+                    "detail": format!(
+                        "{version} was built without --with-http_acme_module, so it cannot request a certificate"
+                    ),
+                })
+            }
+        }
+        Err(error) => serde_json::json!({
+            "name": "angie_acme_module",
+            "status": "warn",
+            "detail": format!("could not read the Angie build options: {error}"),
+        }),
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/doctor",
@@ -2549,6 +2662,14 @@ async fn doctor(State(state): State<SharedState>) -> impl IntoResponse {
     }
 
     checks.push(encryption_at_rest_check(&state).await);
+
+    // Certificate settings are only checked when a certificate is wanted, so a
+    // host that has not configured one does not report noise about it.
+    if state.config.acme.enabled {
+        checks.push(acme_module_check().await);
+        checks.push(acme_config_check(&state.config));
+        checks.push(acme_certificate_check(&state.config));
+    }
 
     let overall = if checks.iter().any(|check| check["status"] == "fail") {
         "degraded"

@@ -1,3 +1,4 @@
+pub mod acme;
 pub mod alerts;
 pub mod apps;
 pub mod auth;
