@@ -91,6 +91,12 @@ export default function AcmeSettingsPanel() {
         certificate authority can verify the domain.
       </p>
 
+      <p className="callout callout-warning">
+        These settings are saved and validated, but certificates are not requested yet: the proxy
+        configuration that asks the certificate authority is not in place. Nothing is issued from
+        this screen for now.
+      </p>
+
       {settingsQuery.isPending ? <p className="text-muted">Loading settings…</p> : null}
 
       {notice ? <p className="callout callout-success">{notice}</p> : null}

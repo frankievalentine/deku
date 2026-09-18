@@ -21,11 +21,14 @@ docker             ok     daemon reachable
 angie_config_dir   ok     /etc/angie/conf.d/deku
 object_store       warn   not configured; backups unavailable
 inventory          ok     3 apps, 1 services
+encryption_at_rest warn   no key configured; values and backups are stored in the clear
 ```
+
+A `tls_certificates` row appears once any app has TLS enabled.
 
 States are `ok`, `warn`, and `fail`. A `warn` means a feature is unavailable while the host is still serving; a `fail` means something is broken. `deku doctor` exits `1` when any check has failed, so you can use it as a health gate in a script or monitoring probe.
 
-The checks cover the daemon version, the database, the Docker daemon, the Angie config directory, the object store, and the app and service inventory.
+The checks cover the daemon version, the database, the Docker daemon, the Angie config directory, the object store, encryption at rest, TLS certificates, and the app and service inventory.
 
 ## Stop a log stream after it goes quiet
 

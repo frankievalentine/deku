@@ -31,11 +31,12 @@ If your browser is on another machine, either use the printed SSH tunnel command
 - **App detail**: Manage config vars, domains, ports, routing, TLS, scale, deployment history, and live logs for a single app
 - **Deployment detail**: Inspect rollout history, lifecycle events, builder details, and rollback targets
 - **Host overview**: Review platform-wide app status, routing state, TLS configuration, object store status, services, SSH keys, plugins, and recent events
-- **Routing**: Inspect the routing table, validate proxy state, and manage the global Let’s Encrypt email setting
+- **Routing**: Inspect the routing table — each app's domains, its environment and per-deployment (preview) hostnames, and its upstreams — validate proxy state, and manage the global Let’s Encrypt email setting
 - **Services**: Create and inspect Postgres, MySQL, MariaDB, Redis, and MongoDB services, link them to apps, and manage backups and restores
 - **Object Store**: Configure and test the S3-compatible object store used for host-level backups, deploy artifact retention, and app credential linking
 - **SSH Keys**: Add and remove trusted public keys for server access workflows
 - **Plugins**: Inspect loaded plugins and load or unload plugin libraries by path
+- **Settings**: Manage the dashboard access token, check for updates, set the Let’s Encrypt account email, review storage and services, and configure host-level settings
 - **API**: Open the interactive API reference, generated from the daemon's OpenAPI document
 
 ## What You Can Manage Here
