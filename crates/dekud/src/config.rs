@@ -53,6 +53,34 @@ pub struct DekuConfig {
     /// Log storage limits.
     #[serde(default)]
     pub logs: LogsConfig,
+    /// Preview deployment retention.
+    #[serde(default)]
+    pub previews: PreviewsConfig,
+}
+
+/// How many deployments per environment stay reachable at their own URL.
+///
+/// A replaced deployment's containers are kept running so its per-deployment
+/// URL keeps serving the build it named. Only deployments beyond this count are
+/// retired, and lowering it retires the excess on the next deploy.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PreviewsConfig {
+    /// Deployments kept per environment, counting the live one. A value below 1
+    /// is treated as 1, which keeps only the live deployment.
+    #[serde(default = "default_keep_deployments")]
+    pub keep_deployments: usize,
+}
+
+impl Default for PreviewsConfig {
+    fn default() -> Self {
+        Self {
+            keep_deployments: default_keep_deployments(),
+        }
+    }
+}
+
+fn default_keep_deployments() -> usize {
+    3
 }
 
 /// Settings for stored deployment logs.
@@ -293,6 +321,7 @@ struct RawDekuConfig {
     encryption: Option<EncryptionConfig>,
     alerts: Option<AlertsConfig>,
     logs: Option<LogsConfig>,
+    previews: Option<PreviewsConfig>,
 }
 
 fn default_config_dir() -> PathBuf {
@@ -397,6 +426,7 @@ impl Default for DekuConfig {
             encryption: None,
             alerts: AlertsConfig::default(),
             logs: LogsConfig::default(),
+            previews: PreviewsConfig::default(),
         }
     }
 }
@@ -516,6 +546,7 @@ pub fn load() -> Result<DekuConfig> {
         encryption: raw.encryption,
         alerts: raw.alerts.unwrap_or_default(),
         logs: raw.logs.unwrap_or_default(),
+        previews: raw.previews.unwrap_or_default(),
     };
 
     Ok(cfg)

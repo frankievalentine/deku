@@ -990,6 +990,63 @@ pub async fn list_containers_for_app(
     Ok(containers)
 }
 
+/// Deployment ids of one environment, newest first, optionally excluding one.
+///
+/// The deploy path uses this to decide which previous deployments stay reachable
+/// at their own URL, and therefore which containers to keep running.
+pub async fn list_recent_environment_deployments(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
+    exclude_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<String>> {
+    let ids = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM deployments \
+         WHERE app_id = ?1 AND environment_id = ?2 AND (?3 IS NULL OR id != ?3) \
+         ORDER BY created_at DESC, rowid DESC LIMIT ?4",
+    )
+    .bind(app_id)
+    .bind(environment_id)
+    .bind(exclude_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
+/// Host ports of every deployment with running web containers, in one environment.
+///
+/// Each retained deployment gets its own vhost, so these are grouped per
+/// deployment rather than collapsed into the environment's live upstream set.
+/// Newest deployment first.
+pub async fn list_deployment_upstream_ports(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
+) -> Result<Vec<(String, Vec<u16>)>> {
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        "SELECT c.deployment_id, c.host_port FROM containers c \
+         JOIN deployments d ON d.id = c.deployment_id \
+         WHERE c.app_id = ?1 AND d.environment_id = ?2 AND c.status = 'running' \
+           AND c.process_type = 'web' AND c.host_port IS NOT NULL \
+         ORDER BY d.created_at DESC, d.rowid DESC, c.created_at ASC",
+    )
+    .bind(app_id)
+    .bind(environment_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut grouped: Vec<(String, Vec<u16>)> = Vec::new();
+    for (deployment_id, port) in rows {
+        match grouped.last_mut() {
+            Some((current, ports)) if *current == deployment_id => ports.push(port as u16),
+            _ => grouped.push((deployment_id, vec![port as u16])),
+        }
+    }
+    Ok(grouped)
+}
+
 /// Running containers belonging to one environment's deployments.
 ///
 /// The retire step needs this scoped: environments share the host, so an
@@ -2818,6 +2875,104 @@ mod upstream_port_tests {
             .await
             .expect("ports")
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn recent_deployments_are_ordered_limited_and_scoped() {
+        let pool = test_pool().await;
+        let production = insert_app(&pool, "app-1", "one", "dep-prod-1").await;
+        let staging = insert_environment(&pool, "app-1", "staging", "dep-staging").await;
+
+        for (id, offset) in [("dep-prod-2", 1), ("dep-prod-3", 2)] {
+            sqlx::query(
+                "INSERT INTO deployments (id, app_id, environment_id, status, builder, image_tag, created_at) \
+                 VALUES (?1, 'app-1', ?2, 'live', 'dockerfile', 'deku/x:2', ?3)",
+            )
+            .bind(id)
+            .bind(&production)
+            .bind((chrono::Utc::now() + chrono::Duration::seconds(offset)).to_rfc3339())
+            .execute(&pool)
+            .await
+            .expect("insert deployment");
+        }
+
+        let recent = super::list_recent_environment_deployments(
+            &pool,
+            "app-1",
+            &production,
+            Some("dep-prod-3"),
+            5,
+        )
+        .await
+        .expect("recent");
+        assert_eq!(
+            recent,
+            vec!["dep-prod-2", "dep-prod-1"],
+            "newest first, excluding the named deployment, and nothing from staging"
+        );
+
+        let limited = super::list_recent_environment_deployments(
+            &pool,
+            "app-1",
+            &production,
+            Some("dep-prod-3"),
+            1,
+        )
+        .await
+        .expect("limited");
+        assert_eq!(
+            limited,
+            vec!["dep-prod-2"],
+            "the limit caps the retention set"
+        );
+
+        let staging_recent =
+            super::list_recent_environment_deployments(&pool, "app-1", &staging, None, 5)
+                .await
+                .expect("staging recent");
+        assert_eq!(
+            staging_recent,
+            vec!["dep-staging"],
+            "one environment's retirement must not count another's deployments"
+        );
+    }
+
+    #[tokio::test]
+    async fn per_deployment_upstreams_are_grouped_and_scoped() {
+        let pool = test_pool().await;
+        let production = insert_app(&pool, "app-1", "one", "dep-prod-1").await;
+        insert_environment(&pool, "app-1", "staging", "dep-staging").await;
+        sqlx::query(
+            "INSERT INTO deployments (id, app_id, environment_id, status, builder, image_tag, created_at) \
+             VALUES ('dep-prod-2', 'app-1', ?1, 'live', 'dockerfile', 'deku/x:2', ?2)",
+        )
+        .bind(&production)
+        .bind((chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339())
+        .execute(&pool)
+        .await
+        .expect("insert deployment");
+
+        insert_container_in(&pool, "p1a", "app-1", "dep-prod-1", Some(41001)).await;
+        insert_container_in(&pool, "p1b", "app-1", "dep-prod-1", Some(41002)).await;
+        insert_container_in(&pool, "p2a", "app-1", "dep-prod-2", Some(41003)).await;
+        insert_container_in(&pool, "s1", "app-1", "dep-staging", Some(41004)).await;
+
+        let grouped = super::list_deployment_upstream_ports(&pool, "app-1", &production)
+            .await
+            .expect("grouped");
+        assert_eq!(grouped.len(), 2, "one entry per deployment with containers");
+        assert_eq!(grouped[0].0, "dep-prod-2", "newest deployment first");
+        assert_eq!(grouped[0].1, vec![41003]);
+        assert_eq!(grouped[1].0, "dep-prod-1");
+        let mut ports = grouped[1].1.clone();
+        ports.sort_unstable();
+        assert_eq!(ports, vec![41001, 41002], "every replica of a deployment");
+        assert!(
+            grouped
+                .iter()
+                .all(|(deployment_id, _)| deployment_id != "dep-staging"),
+            "another environment's containers must not appear"
+        );
     }
 
     #[tokio::test]

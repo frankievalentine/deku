@@ -729,12 +729,32 @@ async fn do_deploy(
     )
     .await?;
 
-    // Collect this environment's previous containers for retirement. Scoping to
-    // the environment matters: an app-wide list would include the containers of
-    // every other environment, and retiring them would take those environments
-    // down. Collected before the new containers exist, so it is the retiring set.
-    let previous_containers =
-        queries::list_containers_for_environment(pool, app_id, environment_id).await?;
+    // Which of this environment's deployments stay reachable at their own URL:
+    // the new one plus the newest (keep - 1) previous ones. Their containers are
+    // left running; everything older is retired after the usual grace period, so
+    // a per-deployment URL keeps serving the build it named for as long as the
+    // deployment is retained.
+    //
+    // Scoping to the environment matters: an app-wide list would include the
+    // containers of every other environment, and retiring them would take those
+    // environments down. Collected before the new containers exist, so what
+    // remains after the filter is exactly the retiring set.
+    let keep = cfg.previews.keep_deployments.max(1);
+    let retained_previous = queries::list_recent_environment_deployments(
+        pool,
+        app_id,
+        environment_id,
+        Some(deploy_id.as_str()),
+        (keep - 1) as i64,
+    )
+    .await?;
+
+    let previous_containers: Vec<_> =
+        queries::list_containers_for_environment(pool, app_id, environment_id)
+            .await?
+            .into_iter()
+            .filter(|container| !retained_previous.contains(&container.deployment_id))
+            .collect();
 
     // Load per-environment config: app-wide values with this environment's
     // overrides applied.

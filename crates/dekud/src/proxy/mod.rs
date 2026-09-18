@@ -124,6 +124,37 @@ async fn build_vhosts(
             upstreams,
             tls,
         });
+
+        // One vhost per retained deployment, so a specific build stays reachable
+        // at its own hostname after it stops being the environment's live one.
+        // Only deployments whose containers are still running appear, which is
+        // exactly the retention set the deploy path keeps alive.
+        if let Some(global_domain) = global_domain {
+            let deployments =
+                crate::db::queries::list_deployment_upstream_ports(pool, app_id, &environment.id)
+                    .await?;
+            for (deployment_id, ports) in deployments {
+                // The hostname is shortened for DNS, but the vhost key keeps the
+                // whole id: it names the upstream and the log files, where a
+                // truncated id could collide and merge two deployments' traffic.
+                let short = &deployment_id[..8.min(deployment_id.len())];
+                vhosts.push(writer::VhostConfig {
+                    domains: vec![format!(
+                        "{app_name}-{}-{short}.{global_domain}",
+                        environment.slug
+                    )],
+                    upstreams: ports
+                        .into_iter()
+                        .map(|port| Upstream {
+                            host: "127.0.0.1".to_string(),
+                            port,
+                        })
+                        .collect(),
+                    key: format!("{app_name}-{}-{deployment_id}", environment.slug),
+                    tls: false,
+                });
+            }
+        }
     }
 
     // A vhost with nothing to serve is omitted rather than pointed at nothing.
@@ -329,7 +360,8 @@ mod tests {
             .await
             .expect("vhosts");
 
-        assert_eq!(vhosts.len(), 2, "production plus one environment");
+        // Two environment vhosts plus one per seeded deployment.
+        assert_eq!(vhosts.len(), 4);
         let staging = vhosts
             .iter()
             .find(|vhost| vhost.key == "demo-staging")
@@ -404,6 +436,91 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![9999],
             "staging serves the replica the caller reported"
+        );
+    }
+
+    #[tokio::test]
+    async fn each_retained_deployment_gets_its_own_hostname() {
+        let pool = pool_with_app_and_domain("app-1").await;
+        let production = seed_environment(&pool, "app-1", "production", true, 3000).await;
+        seed_environment(&pool, "app-1", "staging", false, 3100).await;
+
+        // A retained predecessor: no longer the environment's live deployment,
+        // but its containers are still running and its URL must still work.
+        let retained = "11111111-2222-3333-4444-555555555555";
+        sqlx::query(
+            "INSERT INTO deployments (id, app_id, environment_id, status, builder, image_tag, created_at) \
+             VALUES (?1, 'app-1', ?2, 'rolled_back', 'dockerfile', 'deku/x:2', ?3)",
+        )
+        .bind(retained)
+        .bind(&production)
+        .bind((chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339())
+        .execute(&pool)
+        .await
+        .expect("insert predecessor");
+        sqlx::query(
+            "INSERT INTO containers (id, app_id, deployment_id, process_type, status, host_port, created_at) \
+             VALUES ('c-old', 'app-1', ?1, 'web', 'running', 3001, CURRENT_TIMESTAMP)",
+        )
+        .bind(retained)
+        .execute(&pool)
+        .await
+        .expect("insert predecessor container");
+
+        let desired = DesiredAppConfig {
+            environment_id: &production,
+            domains: &[String::from("example.com")],
+            upstreams: &[Upstream {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+            }],
+            tls: false,
+            auth: None,
+            maintenance: false,
+            maintenance_message: None,
+            redirects: &[],
+        };
+
+        let vhosts = super::build_vhosts(&pool, Some("apps.test"), "app-1", "demo", &desired)
+            .await
+            .expect("vhosts");
+
+        let retained_vhost = vhosts
+            .iter()
+            .find(|vhost| vhost.key.ends_with(retained))
+            .expect("a retained deployment keeps a vhost");
+        assert_eq!(
+            retained_vhost.domains,
+            vec![String::from("demo-production-11111111.apps.test")],
+            "the hostname carries the app, the environment, and a short deployment id"
+        );
+        assert_eq!(
+            retained_vhost
+                .upstreams
+                .iter()
+                .map(|upstream| upstream.port)
+                .collect::<Vec<_>>(),
+            vec![3001],
+            "a per-deployment vhost serves only that deployment's replica"
+        );
+        assert!(
+            retained_vhost.key.ends_with(retained),
+            "the vhost key keeps the whole id, so upstream and log names cannot collide"
+        );
+
+        // The environment's own stable vhost still points at the live replica.
+        let environment_vhost = vhosts
+            .iter()
+            .find(|vhost| vhost.key == "demo")
+            .expect("the production vhost");
+        assert_eq!(environment_vhost.domains, vec![String::from("example.com")]);
+        assert_eq!(
+            environment_vhost
+                .upstreams
+                .iter()
+                .map(|upstream| upstream.port)
+                .collect::<Vec<_>>(),
+            vec![3000]
         );
     }
 
