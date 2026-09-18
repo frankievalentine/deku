@@ -59,6 +59,26 @@ pub fn key_path(app_name: &str) -> PathBuf {
     PathBuf::from(format!("/etc/angie/ssl/deku_{app_name}.key"))
 }
 
+/// The certificate a derived hostname is served with, once one is ready.
+///
+/// A wildcard certificate for the global domain covers every environment and
+/// per-deployment hostname. Until Angie has obtained it the hostnames are served
+/// over HTTP alone, which is why this is only a source once the file is on disk:
+/// a vhost cannot serve a certificate that has not been issued, and naming one
+/// that is not there would stop the whole configuration from loading.
+///
+/// Once the certificate exists, the vhosts that serve it reference it by
+/// variable, so a renewal replaces what they serve without them being written
+/// again. Before it exists they are written without TLS, which means a hostname
+/// starts being served over HTTPS on the first reconcile after issuance.
+fn derived_certificate(acme: Option<&crate::config::AcmeConfig>) -> Option<writer::CertSource> {
+    let acme = acme.filter(|acme| acme.enabled && acme.wildcard)?;
+    let certificate = crate::acme::file::wildcard_certificate(acme);
+    certificate.exists().then(|| writer::CertSource::Acme {
+        client: crate::acme::file::WILDCARD_CLIENT.to_string(),
+    })
+}
+
 /// Whether an app has anything to route.
 ///
 /// An app with no domain of its own is still reachable through the derived
@@ -204,11 +224,16 @@ async fn app_tls_enabled(pool: &sqlx::SqlitePool, app_id: &str) -> Result<bool> 
 async fn build_vhosts(
     pool: &sqlx::SqlitePool,
     global_domain: Option<&str>,
+    acme: Option<&crate::config::AcmeConfig>,
     app_id: &str,
     app_name: &str,
     desired: &DesiredAppConfig<'_>,
 ) -> Result<Vec<writer::VhostConfig>> {
     let environments = crate::db::queries::list_environments(pool, app_id).await?;
+    // Decided once for the whole file: the certificate either exists or it does
+    // not, and every derived hostname of every environment is served the same
+    // way.
+    let derived_cert = derived_certificate(acme);
     let mut vhosts = Vec::new();
 
     for environment in environments {
@@ -243,7 +268,11 @@ async fn build_vhosts(
             (format!("{app_name}-{}", environment.slug), vec![hostname])
         };
 
-        let (upstreams, tls) = if from_caller {
+        // Only production is served on the app's own domains, and so only
+        // production uses the certificate issued for them. An environment is
+        // served on a derived hostname, which that certificate does not cover,
+        // so naming it would point the vhost at a file that does not exist.
+        let (upstreams, tls_enabled) = if from_caller {
             (desired.upstreams.to_vec(), desired.tls)
         } else {
             let upstreams =
@@ -256,11 +285,20 @@ async fn build_vhosts(
             (upstreams, tls)
         };
 
+        let cert = if environment.is_production {
+            tls_enabled.then(|| writer::CertSource::File {
+                cert: cert_path(app_name),
+                key: key_path(app_name),
+            })
+        } else {
+            derived_cert.clone()
+        };
+
         vhosts.push(writer::VhostConfig {
             key,
             domains,
             upstreams,
-            tls,
+            cert,
         });
 
         // One vhost per retained deployment, so a specific build stays reachable
@@ -293,7 +331,7 @@ async fn build_vhosts(
                         })
                         .collect(),
                     key: format!("{app_name}-{}-{deployment_id}", environment.slug),
-                    tls: false,
+                    cert: derived_cert.clone(),
                 });
             }
         }
@@ -315,6 +353,7 @@ pub async fn reconcile_app(
     pool: &sqlx::SqlitePool,
     conf_dir: &Path,
     global_domain: Option<&str>,
+    acme: Option<&crate::config::AcmeConfig>,
     app_id: &str,
     app_name: &str,
 ) -> Result<()> {
@@ -328,6 +367,7 @@ pub async fn reconcile_app(
         pool,
         conf_dir,
         global_domain,
+        acme,
         app_id,
         app_name,
         Some(DesiredAppConfig {
@@ -353,6 +393,7 @@ pub async fn apply_app_config(
     pool: &sqlx::SqlitePool,
     conf_dir: &Path,
     global_domain: Option<&str>,
+    acme: Option<&crate::config::AcmeConfig>,
     app_id: &str,
     app_name: &str,
     desired: Option<DesiredAppConfig<'_>>,
@@ -360,7 +401,7 @@ pub async fn apply_app_config(
     let previous = read_app_config(conf_dir, app_name)?;
 
     let vhosts = match &desired {
-        Some(config) => build_vhosts(pool, global_domain, app_id, app_name, config).await?,
+        Some(config) => build_vhosts(pool, global_domain, acme, app_id, app_name, config).await?,
         None => Vec::new(),
     };
 
@@ -538,7 +579,7 @@ mod tests {
             redirects: &[],
         };
 
-        let vhosts = super::build_vhosts(&pool, Some("apps.test"), "app-1", "demo", &desired)
+        let vhosts = super::build_vhosts(&pool, Some("apps.test"), None, "app-1", "demo", &desired)
             .await
             .expect("vhosts");
 
@@ -558,7 +599,10 @@ mod tests {
             vec![3100],
             "environment vhost must serve its own replica"
         );
-        assert!(!staging.tls, "a generated hostname has no certificate");
+        assert!(
+            staging.cert.is_none(),
+            "a generated hostname has no certificate until one is issued"
+        );
     }
 
     #[tokio::test]
@@ -583,7 +627,7 @@ mod tests {
             redirects: &[],
         };
 
-        let vhosts = super::build_vhosts(&pool, Some("apps.test"), "app-1", "demo", &desired)
+        let vhosts = super::build_vhosts(&pool, Some("apps.test"), None, "app-1", "demo", &desired)
             .await
             .expect("vhosts");
 
@@ -663,7 +707,7 @@ mod tests {
             redirects: &[],
         };
 
-        let vhosts = super::build_vhosts(&pool, Some("apps.test"), "app-1", "demo", &desired)
+        let vhosts = super::build_vhosts(&pool, Some("apps.test"), None, "app-1", "demo", &desired)
             .await
             .expect("vhosts");
 
@@ -735,7 +779,7 @@ mod tests {
             redirects: &[],
         };
 
-        let vhosts = super::build_vhosts(&pool, Some("apps.test"), "app-1", "demo", &desired)
+        let vhosts = super::build_vhosts(&pool, Some("apps.test"), None, "app-1", "demo", &desired)
             .await
             .expect("vhosts");
 
@@ -878,7 +922,7 @@ mod tests {
             redirects: &[],
         };
 
-        let vhosts = super::build_vhosts(&pool, None, "app-1", "demo", &desired)
+        let vhosts = super::build_vhosts(&pool, None, None, "app-1", "demo", &desired)
             .await
             .expect("vhosts");
 
@@ -909,6 +953,99 @@ mod tests {
         // A global domain that is only whitespace is no global domain, which is
         // the same rule the hostname helpers apply.
         assert!(!super::has_routable_hosts(&[], Some("   ")));
+    }
+
+    #[tokio::test]
+    async fn a_derived_hostname_serves_the_wildcard_once_it_is_issued() {
+        let pool = pool_with_app_and_domain("app-1").await;
+        let production = seed_environment(&pool, "app-1", "production", true, 3000).await;
+        seed_environment(&pool, "app-1", "staging", false, 3100).await;
+
+        let desired = DesiredAppConfig {
+            environment_id: &production,
+            domains: &[String::from("example.com")],
+            upstreams: &[Upstream {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+            }],
+            tls: true,
+            auth: None,
+            maintenance: false,
+            maintenance_message: None,
+            redirects: &[],
+        };
+
+        let certs = tempfile::tempdir().expect("tempdir should create");
+        let acme = crate::config::AcmeConfig {
+            enabled: true,
+            wildcard: true,
+            client_path: certs.path().to_path_buf(),
+            ..crate::config::AcmeConfig::default()
+        };
+
+        // Before Angie has obtained the certificate, a derived hostname is
+        // served over HTTP alone. Naming a certificate that is not there would
+        // stop the whole configuration from loading, taking every app with it.
+        let vhosts = super::build_vhosts(
+            &pool,
+            Some("apps.test"),
+            Some(&acme),
+            "app-1",
+            "demo",
+            &desired,
+        )
+        .await
+        .expect("vhosts");
+        let staging = vhosts
+            .iter()
+            .find(|vhost| vhost.key == "demo-staging")
+            .expect("staging vhost");
+        assert!(
+            staging.cert.is_none(),
+            "no certificate has been issued yet, so there is none to serve"
+        );
+
+        // Production serves the certificate for its own domains, which is a
+        // different one entirely.
+        let served = vhosts
+            .iter()
+            .find(|vhost| vhost.key == "demo")
+            .expect("production vhost");
+        assert_eq!(
+            served.cert,
+            Some(super::writer::CertSource::File {
+                cert: super::cert_path("demo"),
+                key: super::key_path("demo"),
+            })
+        );
+
+        // Once the client has a certificate, the same hostnames serve it.
+        let issued = acme.client_path.join("deku_wildcard");
+        std::fs::create_dir_all(&issued).expect("the client directory should create");
+        std::fs::write(issued.join("certificate.pem"), "certificate")
+            .expect("the certificate should write");
+
+        let vhosts = super::build_vhosts(
+            &pool,
+            Some("apps.test"),
+            Some(&acme),
+            "app-1",
+            "demo",
+            &desired,
+        )
+        .await
+        .expect("vhosts");
+        let staging = vhosts
+            .iter()
+            .find(|vhost| vhost.key == "demo-staging")
+            .expect("staging vhost");
+        assert_eq!(
+            staging.cert,
+            Some(super::writer::CertSource::Acme {
+                client: crate::acme::file::WILDCARD_CLIENT.to_string(),
+            }),
+            "an environment hostname serves the wildcard once it is issued"
+        );
     }
 
     fn write_executable(path: &std::path::Path, body: &str) {
@@ -950,6 +1087,7 @@ mod tests {
         let result = apply_app_config(
             &pool,
             &conf_dir,
+            None,
             None,
             "app-1",
             "demo",

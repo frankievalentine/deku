@@ -14,8 +14,8 @@ server {
     http2  on;
     server_name{{#each domains}} {{this}}{{/each}};
 
-    ssl_certificate     /etc/angie/ssl/deku_{{key}}.crt;
-    ssl_certificate_key /etc/angie/ssl/deku_{{key}}.key;
+    ssl_certificate     {{cert_file}};
+    ssl_certificate_key {{cert_key_file}};
 
     access_log /var/log/angie/deku_{{key}}_access.log;
     error_log  /var/log/angie/deku_{{key}}_error.log;

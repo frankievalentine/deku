@@ -3101,10 +3101,14 @@ async fn update_routing(
         redirects: &extras.redirects,
     });
 
+    // Read the ACME setting fresh: it can be changed while the daemon runs, and
+    // it decides whether a derived hostname is served over HTTPS.
+    let acme = current_config(&state).acme;
     if let Err(e) = crate::proxy::apply_app_config(
         &state.pool,
         &state.config.angie_conf_dir,
         state.config.global_domain.as_deref(),
+        Some(&acme),
         &app.id,
         &name,
         desired,
@@ -3131,10 +3135,14 @@ async fn reconcile_proxy_for_app(
     app_id: &str,
     app_name: &str,
 ) -> anyhow::Result<()> {
+    // Read the ACME setting fresh: it can be changed while the daemon runs, and
+    // it decides whether a derived hostname is served over HTTPS.
+    let acme = crate::config::load().map(|fresh| fresh.acme).ok();
     crate::proxy::reconcile_app(
         &state.pool,
         &state.config.angie_conf_dir,
         state.config.global_domain.as_deref(),
+        acme.as_ref(),
         app_id,
         app_name,
     )

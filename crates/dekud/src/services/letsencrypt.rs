@@ -27,6 +27,7 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
         pool,
         &cfg.angie_conf_dir,
         cfg.global_domain.as_deref(),
+        Some(&cfg.acme),
         &app.id,
         app_name,
         Some(crate::proxy::DesiredAppConfig {
@@ -64,6 +65,7 @@ pub async fn disable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Res
         pool,
         &cfg.angie_conf_dir,
         cfg.global_domain.as_deref(),
+        Some(&cfg.acme),
         &app.id,
         app_name,
         Some(crate::proxy::DesiredAppConfig {

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use handlebars::Handlebars;
 use serde_json::json;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use deku_core::types::Upstream;
 
@@ -55,6 +55,18 @@ pub fn write_raw_app_config(conf_dir: &Path, app_name: &str, contents: &[u8]) ->
     Ok(())
 }
 
+/// Where a vhost's certificate comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertSource {
+    /// A certificate for this vhost's own domains, kept on disk by the
+    /// per-app certificate flow.
+    File { cert: PathBuf, key: PathBuf },
+    /// The wildcard certificate Angie maintains for the global domain. It is
+    /// referenced by variable rather than by path, because it is Angie's to
+    /// request and renew and the vhost is written before it exists.
+    Acme { client: String },
+}
+
 /// One vhost inside an app's config file.
 ///
 /// `key` is unique within the file: it names the upstream block and the log
@@ -65,7 +77,8 @@ pub struct VhostConfig {
     pub key: String,
     pub domains: Vec<String>,
     pub upstreams: Vec<Upstream>,
-    pub tls: bool,
+    /// `None` serves the vhost over HTTP alone.
+    pub cert: Option<CertSource>,
 }
 
 /// Directives shared by every vhost of an app.
@@ -138,7 +151,19 @@ pub fn write_app_config(
 
     let mut rendered = String::new();
     for vhost in vhosts {
-        let template = if vhost.tls { "https_app" } else { "http_app" };
+        let (template, cert_file, cert_key_file) = match &vhost.cert {
+            Some(CertSource::File { cert, key }) => (
+                "https_app",
+                cert.display().to_string(),
+                key.display().to_string(),
+            ),
+            Some(CertSource::Acme { client }) => (
+                "https_app",
+                format!("$acme_cert_{client}"),
+                format!("$acme_cert_key_{client}"),
+            ),
+            None => ("http_app", String::new(), String::new()),
+        };
 
         let upstream_data: Vec<_> = vhost
             .upstreams
@@ -150,6 +175,8 @@ pub fn write_app_config(
             "key": vhost.key,
             "domains": vhost.domains,
             "upstreams": upstream_data,
+            "cert_file": cert_file,
+            "cert_key_file": cert_key_file,
             "auth_basic": auth_basic,
             "auth_basic_user_file": auth_basic_user_file,
             "forward_auth": forward_auth,
@@ -219,7 +246,7 @@ pub fn remove_app_config(conf_dir: &Path, app_name: &str) -> Result<()> {
 mod tests {
     use super::{
         app_config_path, read_app_config, remove_app_config, write_app_config, AppVhostPolicy,
-        VhostConfig,
+        CertSource, VhostConfig,
     };
     use deku_core::types::Upstream;
 
@@ -228,7 +255,7 @@ mod tests {
             key: "demo".to_string(),
             domains: domains.to_vec(),
             upstreams: upstreams.to_vec(),
-            tls: false,
+            cert: None,
         }
     }
 
@@ -261,7 +288,7 @@ mod tests {
         .expect("config should be utf8")
     }
 
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn removing_an_app_config_also_removes_its_htpasswd() {
@@ -314,6 +341,54 @@ mod tests {
     }
 
     #[test]
+    fn a_vhost_serves_the_certificate_it_is_given() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let conf_dir = temp.path();
+        let own = VhostConfig {
+            key: "demo".to_string(),
+            domains: vec![String::from("example.com")],
+            upstreams: upstreams(),
+            cert: Some(CertSource::File {
+                cert: PathBuf::from("/etc/angie/ssl/deku_demo.crt"),
+                key: PathBuf::from("/etc/angie/ssl/deku_demo.key"),
+            }),
+        };
+        let derived = VhostConfig {
+            key: "demo-staging".to_string(),
+            domains: vec![String::from("demo-staging.apps.test")],
+            upstreams: upstreams(),
+            cert: Some(CertSource::Acme {
+                client: "deku_wildcard".to_string(),
+            }),
+        };
+
+        write_app_config(conf_dir, "demo", &[own, derived], &policy(&[], false, None))
+            .expect("config should write");
+        let rendered = read_rendered(conf_dir);
+
+        assert!(
+            rendered.contains("ssl_certificate     /etc/angie/ssl/deku_demo.crt;"),
+            "an app's own domains are served the certificate on disk: {rendered}"
+        );
+        // The wildcard is referenced by variable, because it is Angie's to
+        // request and renew, and the vhost may be written before it exists.
+        assert!(
+            rendered.contains("ssl_certificate     $acme_cert_deku_wildcard;"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("ssl_certificate_key $acme_cert_key_deku_wildcard;"),
+            "{rendered}"
+        );
+        // A vhost without a certificate is served over HTTP alone.
+        assert_eq!(
+            rendered.matches("listen 443 ssl;").count(),
+            2,
+            "only the vhosts that name a certificate listen for TLS"
+        );
+    }
+
+    #[test]
     fn every_vhost_lands_in_one_file_with_its_own_upstream() {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path();
@@ -324,7 +399,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3000,
             }],
-            tls: false,
+            cert: None,
         };
         let staging = VhostConfig {
             key: "demo-staging".to_string(),
@@ -333,7 +408,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 3100,
             }],
-            tls: false,
+            cert: None,
         };
 
         write_app_config(
@@ -536,13 +611,13 @@ mod tests {
             key: "demo".to_string(),
             domains: vec![String::from("example.com")],
             upstreams: upstreams(),
-            tls: false,
+            cert: None,
         };
         let staging = VhostConfig {
             key: "demo-staging".to_string(),
             domains: vec![String::from("demo-staging.example.test")],
             upstreams: upstreams(),
-            tls: false,
+            cert: None,
         };
 
         write_app_config(

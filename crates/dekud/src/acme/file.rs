@@ -37,6 +37,17 @@ pub fn is_app_config_file(name: &str) -> bool {
     name.ends_with(".conf") && name != CONFIG_FILE_NAME
 }
 
+/// The file Angie writes the wildcard certificate to.
+///
+/// Angie keeps each client's files in a subdirectory named after the client, so
+/// the certificate appearing there is what tells Deku that the hostnames it
+/// covers can be served over HTTPS.
+pub fn wildcard_certificate(acme: &AcmeConfig) -> PathBuf {
+    acme.client_path
+        .join(WILDCARD_CLIENT)
+        .join("certificate.pem")
+}
+
 /// What syncing the file did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {

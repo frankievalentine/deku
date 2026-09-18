@@ -997,6 +997,7 @@ async fn do_deploy(
                     pool,
                     &cfg.angie_conf_dir,
                     cfg.global_domain.as_deref(),
+                    Some(&cfg.acme),
                     app_id,
                     app_name,
                     Some(proxy::DesiredAppConfig {
@@ -1153,6 +1154,7 @@ async fn do_deploy(
                 &pool_clone,
                 &cfg_clone.angie_conf_dir,
                 cfg_clone.global_domain.as_deref(),
+                Some(&cfg_clone.acme),
                 &app_id_clone,
                 &app_name_clone,
             )
