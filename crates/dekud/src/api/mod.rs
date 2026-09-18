@@ -4283,6 +4283,51 @@ async fn build_routing_status_response(state: &AppState) -> anyhow::Result<Routi
     })
 }
 
+/// What an app's proxy config is built from, and what the status says about it.
+///
+/// Kept apart from the app so the rule can be checked on its own: what counts as
+/// complete routing inputs has to be the rule the proxy writes by, or the status
+/// reports a problem for an app that is serving.
+struct RoutingInputs<'a> {
+    domains: &'a [String],
+    global_domain: Option<&'a str>,
+    upstreams_present: bool,
+    proxy_config_present: bool,
+}
+
+impl<'a> RoutingInputs<'a> {
+    /// Whether there is a host to route on: a domain of the app's own, or a
+    /// global domain to derive an environment hostname from.
+    fn routable(&self) -> bool {
+        crate::proxy::has_routable_hosts(self.domains, self.global_domain)
+    }
+
+    /// Whether there is both something to route on and something to route to.
+    fn inputs_complete(&self) -> bool {
+        self.routable() && self.upstreams_present
+    }
+
+    fn issues(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        if !self.routable() {
+            issues
+                .push("no domains configured and no global domain to derive one from".to_string());
+        }
+        if !self.upstreams_present {
+            issues.push("no upstreams configured".to_string());
+        }
+
+        if self.inputs_complete() && !self.proxy_config_present {
+            issues.push("angie config fragment is missing".to_string());
+        }
+        if !self.inputs_complete() && self.proxy_config_present {
+            issues.push("angie config fragment exists without complete routing inputs".to_string());
+        }
+
+        issues
+    }
+}
+
 async fn build_routing_status_for_app(
     state: &AppState,
     app: &deku_core::types::App,
@@ -4300,21 +4345,13 @@ async fn build_routing_status_for_app(
     let proxy_config_path = crate::proxy::app_config_path(&state.config.angie_conf_dir, &app.name);
     let proxy_config_present = proxy_config_path.exists();
     let tls_status = crate::services::letsencrypt::status(&state.pool, &app.name).await?;
-    let mut issues = Vec::new();
-    let inputs_complete = !domains.is_empty() && !upstreams.is_empty();
-
-    if domains.is_empty() {
-        issues.push("no domains configured".to_string());
-    }
-    if upstreams.is_empty() {
-        issues.push("no upstreams configured".to_string());
-    }
-    if inputs_complete && !proxy_config_present {
-        issues.push("angie config fragment is missing".to_string());
-    }
-    if !inputs_complete && proxy_config_present {
-        issues.push("angie config fragment exists without complete routing inputs".to_string());
-    }
+    let inputs = RoutingInputs {
+        domains: &domains,
+        global_domain: state.config.global_domain.as_deref(),
+        upstreams_present: !upstreams.is_empty(),
+        proxy_config_present,
+    };
+    let mut issues = inputs.issues();
     if app.tls_enabled && !tls_status.certificate.exists {
         issues.push(format!(
             "certificate file missing: {}",
@@ -4333,7 +4370,7 @@ async fn build_routing_status_for_app(
 
     let status = if issues.is_empty() {
         "ready"
-    } else if !inputs_complete {
+    } else if !inputs.inputs_complete() {
         "pending"
     } else {
         "degraded"
@@ -4739,4 +4776,76 @@ async fn deploy_archive(
         Json(serde_json::json!({ "message": "deploy started", "app": name })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod routing_inputs_tests {
+    use super::RoutingInputs;
+
+    fn issues_for(
+        domains: &[&str],
+        global_domain: Option<&str>,
+        upstreams_present: bool,
+        proxy_config_present: bool,
+    ) -> Vec<String> {
+        let domains: Vec<String> = domains.iter().map(|domain| domain.to_string()).collect();
+        RoutingInputs {
+            domains: &domains,
+            global_domain,
+            upstreams_present,
+            proxy_config_present,
+        }
+        .issues()
+    }
+
+    fn inputs_for(domains: &[&str], global_domain: Option<&str>, upstreams_present: bool) -> bool {
+        let domains: Vec<String> = domains.iter().map(|domain| domain.to_string()).collect();
+        RoutingInputs {
+            domains: &domains,
+            global_domain,
+            upstreams_present,
+            proxy_config_present: true,
+        }
+        .inputs_complete()
+    }
+
+    #[test]
+    fn a_global_domain_completes_a_domain_less_app() {
+        // The proxy serves this app at its environment and per-deployment
+        // hostnames, so the status must not call its inputs incomplete.
+        assert!(inputs_for(&[], Some("apps.test"), true));
+        assert!(
+            issues_for(&[], Some("apps.test"), true, true).is_empty(),
+            "a serving app is not an issue"
+        );
+    }
+
+    #[test]
+    fn an_app_with_nothing_to_route_on_is_incomplete() {
+        assert!(!inputs_for(&[], None, true));
+        let issues = issues_for(&[], None, true, false);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("no domains configured")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_fragment_without_complete_inputs_is_reported() {
+        let issues = issues_for(&[], None, false, true);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("exists without complete routing inputs")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn an_app_with_domains_is_incomplete_without_upstreams() {
+        assert!(!inputs_for(&["example.com"], None, false));
+        assert!(inputs_for(&["example.com"], None, true));
+    }
 }
