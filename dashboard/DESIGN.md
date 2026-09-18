@@ -37,10 +37,10 @@ and the shared contract; change tokens in the stylesheet, not here.
 | `table`, `table-scroll` | Data tables; always wrap in `TableScroll` for narrow viewports. |
 | `btn`, `btn-primary`, `btn-secondary`, `btn-outline`, `btn-ghost`, `btn-danger` | Buttons. Size with `btn-sm` (Basecoat 1.0 compat alias). |
 | `input`, `textarea`, `form-group`, `form-label` | Form controls and labels. |
-| `tabs`, `app-tabs`, `app-tab`, `app-tab-track` | Basecoat tabs root plus the app's tab-button treatment. |
+| `tabs`, `app-tabs`, `app-tab`, `app-tabs-track` | Basecoat tabs root plus the app's tab-button treatment. |
 | `console-output`, `console-line` | Streaming command output in the app console. |
 | `empty-state`, `loading-state`, `error-state` | Page-level states. |
-| `modal-backdrop`, `modal-shell`, `modal-badge`, `modal-title`, `modal-copy` | Confirmation dialog. |
+| `modal-shell`, `modal-badge`, `modal-title`, `modal-copy` | Confirmation dialog. The backdrop is the dialog's `::backdrop` pseudo-element, not a class. |
 
 ## Tokens
 

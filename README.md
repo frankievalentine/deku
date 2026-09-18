@@ -1,6 +1,10 @@
 # Deku
 
-<p><sub>Linux amd64 release artifacts: <code>deku</code> 10.9 MB, <code>dekud</code> 17.8 MB, dashboard bundle 1.3 MB</sub></p>
+<p><sub>Linux amd64 release artifacts: <code>deku</code> 11.4 MB, <code>dekud</code> 20.5 MB, dashboard bundle 1.3 MB</sub></p>
+
+<p align="center">
+  <img src="docs/public/images/deku-dashboard-dark.webp" alt="The Deku dashboard host overview, showing app status, routing, and recent activity." width="1672" />
+</p>
 
 Deku is a lightweight self-hosted PaaS for deploying and operating applications on your own server.
 
@@ -12,20 +16,28 @@ It combines:
 - Angie for routing and TLS
 - A built-in dashboard served directly by the daemon
 
-## What You Can Do
+## Features
 
-- **App lifecycle**: create apps, deploy from a source directory or image, inspect deployment history, and roll back
-- **Starter templates**: begin from local framework templates adapted for Deku deploys
-- **Runtime management**: manage config vars, domains, port mappings, TLS, process scale, logs, networks, storage mounts, and cron entries
-- **Readiness gating**: every web replica must pass its health check before traffic switches, and all ready replicas serve
-- **Runtime access**: run a one-off command in a fresh container with `deku run`, or inspect a running container with `deku exec`
+- **Deploy any source**: a source directory, a pre-built image, or a `git push` over SSH
+- **Starter templates**: local framework templates adapted for Deku deploys
+- **Rollback**: every deployment is retained and can be restored
+- **Environments**: staging, preview, and other targets with their own config overrides
+- **Readiness gating**: a web replica must pass its health check before it receives traffic, and every ready replica serves
+- **Remote builds**: offload image builds to a separate host, or force a local build for one deploy
+- **Config vars**: app-wide or per-environment, encrypted at rest
+- **Domains and TLS**: attach hostnames and get certificates automatically
+- **Process management**: set replica counts, memory, and CPU limits per process type
+- **Runtime access**: run a one-off command in a fresh container, or inspect a running one
+- **Logs**: stream and search build and runtime output
+- **Scheduled jobs**: run commands on a cron schedule
+- **Networks and storage**: attach shared Docker networks and persistent mounts
 - **Traffic control**: serve a maintenance page, redirect individual paths, and put HTTP basic auth or forward auth in front of an app
-- **Resource limits**: cap the memory and CPU each process can use
 - **Managed services**: provision Postgres, MySQL, MariaDB, Redis, and MongoDB, link them to apps, and back them up on demand or on a schedule
-- **Diagnostics**: check host health with `deku doctor`, and stream app logs from the CLI
+- **Dashboard**: the whole surface above is available in the browser, served by the daemon itself
+- **Diagnostics**: check host health with `deku doctor`
+- **Alerts and metrics**: active alerts and daemon metrics, exposed as a Prometheus endpoint
 - **Lifecycle hooks**: post build, deploy, and app events to an HTTP endpoint, and gate a deploy on the response
-- **Build offloading**: send image builds to a remote build host when the operator configures one
-- **CLI and API**: automate with the full `deku` command surface, the HTTP API, and the OpenAPI 3.1 reference at `/api/docs`
+- **CLI and API**: the full `deku` command surface, an HTTP API, and an OpenAPI 3.1 reference at `/api/docs`
 
 ## Quick Start
 

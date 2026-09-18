@@ -7,6 +7,11 @@ The dashboard is the main web interface for operating apps and host-level featur
 
 It is served directly by `dekud` from the configured dashboard directory. In the packaged install path, the installer stages the built dashboard assets for you from the release bundle.
 
+<figure class="page-theme-image">
+  <img class="page-theme-image-light" src="/images/deku-dashboard-light.webp" alt="The Deku dashboard host overview, showing app status, routing, and recent activity." width="1672" height="941" loading="lazy" decoding="async" />
+  <img class="page-theme-image-dark" src="/images/deku-dashboard-dark.webp" alt="The Deku dashboard host overview, showing app status, routing, and recent activity." width="1672" height="941" loading="lazy" decoding="async" />
+</figure>
+
 ## Accessing the Dashboard
 
 Run:

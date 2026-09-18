@@ -200,6 +200,37 @@ html .page-content-wrapper {
   color: var(--sl-color-text-accent) !important;
 }
 
+/* Inline screenshot that swaps with the active theme. Both variants stay in the DOM and one is
+   hidden, so the switch follows Starlight's manual toggle as well as the OS preference. */
+.page-theme-image {
+  display: block;
+  margin-block: var(--page-space-5, 1.5rem);
+  border: 1px solid var(--sl-color-hairline, var(--page-border));
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.page-theme-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Starlight's `p + :not(...)` content rule adds a top margin to elements that follow a
+     paragraph; inside this figure the border already frames the image, so clear it. */
+  margin: 0;
+}
+
+.page-theme-image .page-theme-image-dark {
+  display: none;
+}
+
+[data-theme="dark"] .page-theme-image .page-theme-image-light {
+  display: none;
+}
+
+[data-theme="dark"] .page-theme-image .page-theme-image-dark {
+  display: block;
+}
+
 :where(a, button, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--sl-color-text-accent);
   outline-offset: 2px;
