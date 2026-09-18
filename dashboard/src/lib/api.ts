@@ -500,11 +500,57 @@ export function setScale(appName: string, scales: ScaleMap): Promise<void> {
   });
 }
 
-export async function fetchLogs(appName: string, n = 100): Promise<string[]> {
-  const response = await apiFetch<{ logs: string[] }>(
-    `/api/apps/${encodeURIComponent(appName)}/logs?n=${n}`
+export interface LogLine {
+  id: string;
+  app_id: string;
+  deployment_id: string | null;
+  environment_id: string | null;
+  source: 'build' | 'runtime' | string;
+  stream: 'stdout' | 'stderr' | string;
+  level: string;
+  message: string;
+  created_at: string;
+  snippet?: string | null;
+}
+
+/** Filters shared by the log query and the live stream. */
+export interface LogFilters {
+  search?: string;
+  source?: string;
+  stream?: string;
+  level?: string;
+  deployment?: string;
+}
+
+function logQueryString(filters: LogFilters): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(filters)) {
+    if (typeof value === 'string' && value.trim()) {
+      parts.push(`${key}=${encodeURIComponent(value.trim())}`);
+    }
+  }
+  return parts.join('&');
+}
+
+export async function fetchLogs(
+  appName: string,
+  n = 100,
+  filters: LogFilters = {}
+): Promise<LogLine[]> {
+  const query = logQueryString(filters);
+  const response = await apiFetch<{ lines: LogLine[] }>(
+    `/api/apps/${encodeURIComponent(appName)}/logs?n=${n}${query ? `&${query}` : ''}`
   );
-  return response.logs;
+  return response.lines;
+}
+
+export function appLogStreamUrl(appName: string, token?: string, filters: LogFilters = {}): string {
+  const query = logQueryString(filters);
+  const url = `${BASE_URL}/api/apps/${encodeURIComponent(appName)}/logs/stream${
+    query ? `?${query}` : ''
+  }`;
+  if (!token) return url;
+  return `${url}${query ? '&' : '?'}token=${encodeURIComponent(token)}`;
 }
 
 export function fetchSshKeys(): Promise<SshKey[]> {

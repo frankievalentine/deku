@@ -462,6 +462,7 @@ async fn run_git_deploy(
         &state.pool,
         &state.docker,
         &state.events,
+        &state.logs,
         &state.config,
         state.plugins.as_ref(),
         req,

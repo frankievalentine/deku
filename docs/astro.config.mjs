@@ -143,6 +143,7 @@ export default defineConfig({
             { label: 'Resource limits', link: '/resource-limits/' },
             { label: 'Backups', link: '/backups/' },
             { label: 'Diagnostics', link: '/diagnostics/' },
+            { label: 'Logs', link: '/logs/' },
             { label: 'Monitoring and alerts', link: '/monitoring/' },
           ],
         },

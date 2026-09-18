@@ -49,6 +49,7 @@ pub struct AppState {
     pub version_status: RwLock<Option<CachedVersionStatus>>,
     pub pool: SqlitePool,
     pub events: EventSender,
+    pub logs: std::sync::Arc<crate::logs::LogBus>,
     pub docker: DockerClient,
     pub plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     pub deploy_locks: crate::deploy_lock::AppDeployLocks,
@@ -59,6 +60,7 @@ impl AppState {
         config: DekuConfig,
         pool: SqlitePool,
         events: EventSender,
+        logs: std::sync::Arc<crate::logs::LogBus>,
         docker: DockerClient,
         plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     ) -> Arc<Self> {
@@ -68,6 +70,7 @@ impl AppState {
             config,
             pool,
             events,
+            logs,
             docker,
             plugins,
             deploy_locks: crate::deploy_lock::AppDeployLocks::default(),
@@ -140,6 +143,7 @@ fn build_api_router(state: SharedState) -> Router {
         .route("/api/apps/{name}/rollback", post(trigger_rollback))
         // Logs
         .route("/api/apps/{name}/logs", get(get_logs))
+        .route("/api/apps/{name}/logs/stream", get(stream_app_logs))
         .route("/api/apps/{name}/checks", get(get_app_checks))
         // One-off commands
         .route("/api/apps/{name}/run", post(console::run))
@@ -3170,6 +3174,7 @@ async fn trigger_deploy(
     let pool = state.pool.clone();
     let docker = state.docker.clone();
     let events = state.events.clone();
+    let logs = state.logs.clone();
     let cfg = current_config(&state);
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
@@ -3179,7 +3184,8 @@ async fn trigger_deploy(
     tokio::spawn(async move {
         let _guard = deploy_lock.lock().await;
         if let Err(e) =
-            crate::deploy::run_deploy(&pool, &docker, &events, &cfg, plugins.as_ref(), req).await
+            crate::deploy::run_deploy(&pool, &docker, &events, &logs, &cfg, plugins.as_ref(), req)
+                .await
         {
             tracing::error!(app = %app_id, "deploy failed: {e}");
         }
@@ -3221,6 +3227,7 @@ async fn trigger_rollback(
     let pool = state.pool.clone();
     let docker = state.docker.clone();
     let events = state.events.clone();
+    let logs = state.logs.clone();
     let cfg = state.config.clone();
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
@@ -3233,6 +3240,7 @@ async fn trigger_rollback(
             &pool,
             &docker,
             &events,
+            &logs,
             &cfg,
             plugins.as_ref(),
             &app_id,
@@ -3254,10 +3262,37 @@ async fn trigger_rollback(
 
 // ── Logs ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct LogsQuery {
+    /// Number of lines to return.
     #[serde(default = "default_log_lines")]
     n: usize,
+    /// Case-insensitive full-text search over stored lines.
+    search: Option<String>,
+    /// Only lines from this deployment.
+    deployment: Option<String>,
+    /// Only lines from this environment.
+    environment: Option<String>,
+    /// `build` or `runtime`.
+    source: Option<String>,
+    /// `stdout` or `stderr`.
+    stream: Option<String>,
+    /// Inferred level, for example `ERROR`.
+    level: Option<String>,
+}
+
+impl LogsQuery {
+    fn filter(&self) -> crate::logs::LogQuery {
+        crate::logs::LogQuery {
+            search: self.search.clone(),
+            deployment: self.deployment.clone(),
+            environment: self.environment.clone(),
+            source: self.source.clone(),
+            stream: self.stream.clone(),
+            level: self.level.clone(),
+            limit: Some(self.n as i64),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3319,8 +3354,8 @@ struct AppChecksResponse {
     get,
     path = "/api/apps/{name}/logs",
     tag = "logs",
-    params(("name" = String, Path, description = "App name"), ("n" = usize, Query, description = "Number of log lines")),
-    responses((status = 200, description = "Fetch recent container logs"))
+    params(("name" = String, Path, description = "App name"), ("n" = usize, Query, description = "Number of log lines"), ("search" = Option<String>, Query, description = "Full-text search over stored lines"), ("deployment" = Option<String>, Query, description = "Filter by deployment id"), ("environment" = Option<String>, Query, description = "Filter by environment slug"), ("source" = Option<String>, Query, description = "build or runtime"), ("stream" = Option<String>, Query, description = "stdout or stderr"), ("level" = Option<String>, Query, description = "Inferred log level")),
+    responses((status = 200, description = "Stored log lines for an app, most recent last"))
 )]
 async fn get_logs(
     State(state): State<SharedState>,
@@ -3335,23 +3370,75 @@ async fn get_logs(
         Err(e) => return internal_error(e).into_response(),
     };
 
-    let containers = match queries::list_containers_for_app(&state.pool, &app.id).await {
-        Ok(c) => c,
+    // Stored lines cover build output and runtime output for every deployment,
+    // including deployments whose containers have since been retired.
+    let lines = match crate::logs::query(&state.pool, &app.id, &params.filter()).await {
+        Ok(lines) => lines,
         Err(e) => return internal_error(e).into_response(),
     };
 
-    let mut all_logs = Vec::new();
-    for c in containers {
-        match crate::container::get_container_logs(&state.docker, &c.id, params.n).await {
-            Ok(lines) => all_logs.extend(lines),
-            Err(e) => tracing::warn!("failed to get logs for container {}: {e}", c.id),
-        }
-    }
-
+    // `logs` stays a plain string array so existing callers keep working; `lines`
+    // carries the structured records.
+    let plain: Vec<&str> = lines
+        .iter()
+        .map(|record| record.line.message.as_str())
+        .collect();
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "logs": all_logs })),
+        Json(serde_json::json!({ "logs": plain, "lines": lines })),
     )
+        .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/apps/{name}/logs/stream",
+    tag = "logs",
+    params(("name" = String, Path, description = "App name"), ("source" = Option<String>, Query, description = "build or runtime"), ("stream" = Option<String>, Query, description = "stdout or stderr"), ("level" = Option<String>, Query, description = "Inferred log level")),
+    responses((status = 200, description = "Stream stored log lines as SSE"))
+)]
+async fn stream_app_logs(
+    State(state): State<SharedState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Query(params): Query<LogsQuery>,
+) -> impl IntoResponse {
+    let app = match queries::get_app(&state.pool, &name).await {
+        Ok(a) => a,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let filter = params.filter();
+    let app_id = app.id.clone();
+    let receiver = state.logs.subscribe();
+
+    // A plain closure: every filter is in memory, so there is nothing to await.
+    let stream = BroadcastStream::new(receiver).filter_map(move |result| {
+        let line = result.ok()?;
+        if line.app_id != app_id {
+            return None;
+        }
+
+        let wants = |wanted: &Option<String>, actual: &str| match wanted.as_deref() {
+            Some(wanted) if !wanted.trim().is_empty() => wanted.trim() == actual,
+            _ => true,
+        };
+        if !wants(&filter.source, &line.source)
+            || !wants(&filter.stream, &line.stream)
+            || !wants(&filter.level, &line.level)
+        {
+            return None;
+        }
+
+        serde_json::to_string(&line)
+            .ok()
+            .map(|data| Ok::<SseEvent, std::convert::Infallible>(SseEvent::default().data(data)))
+    });
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
         .into_response()
 }
 
@@ -4261,6 +4348,7 @@ async fn deploy_archive(
     let pool = state.pool.clone();
     let docker = state.docker.clone();
     let events = state.events.clone();
+    let logs = state.logs.clone();
     let cfg = current_config(&state);
     let plugins = state.plugins.clone();
     let app_id = app.id.clone();
@@ -4269,7 +4357,8 @@ async fn deploy_archive(
     tokio::spawn(async move {
         let _guard = deploy_lock.lock().await;
         if let Err(e) =
-            crate::deploy::run_deploy(&pool, &docker, &events, &cfg, plugins.as_ref(), req).await
+            crate::deploy::run_deploy(&pool, &docker, &events, &logs, &cfg, plugins.as_ref(), req)
+                .await
         {
             tracing::error!(app = %app_id, "archive deploy failed: {e}");
         }

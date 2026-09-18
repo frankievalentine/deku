@@ -122,8 +122,13 @@ A deploy token can only trigger deploys for its own app. See [Deploy tokens](/de
 
 ### `deku logs`
 
-- `logs <app> [-n 100]` — tail N lines from container logs
-- `logs <app> --follow [--timeout secs]` — SSE stream of event bus; `--timeout` stops after idle seconds
+- `logs <app> [-n 100]` — stored lines, build and runtime, for every deployment
+- `logs <app> --follow [--timeout secs]` — live log lines over SSE; `--timeout` stops after idle seconds
+- `logs <app> --search <term>` — case-insensitive full-text search over stored lines
+- `logs <app> --source build|runtime`, `--stream stdout|stderr`, `--level ERROR` — narrow by origin
+- `logs <app> --deployment <id>`, `--environment <slug>` — narrow to one deployment or environment
+
+Lines are stored, so a retired deployment's logs remain readable. See [Logs](/logs/).
 
 ### `deku run`
 

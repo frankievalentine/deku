@@ -50,6 +50,29 @@ pub struct DekuConfig {
     /// Background alert evaluation.
     #[serde(default)]
     pub alerts: AlertsConfig,
+    /// Log storage limits.
+    #[serde(default)]
+    pub logs: LogsConfig,
+}
+
+/// Settings for stored deployment logs.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LogsConfig {
+    /// Lines kept per app; older lines are pruned on a timer.
+    #[serde(default = "default_log_retain_lines")]
+    pub retain_lines: i64,
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self {
+            retain_lines: default_log_retain_lines(),
+        }
+    }
+}
+
+fn default_log_retain_lines() -> i64 {
+    crate::logs::DEFAULT_RETAIN_LINES
 }
 
 /// Settings for the fixed-rule alert watcher.
@@ -269,6 +292,7 @@ struct RawDekuConfig {
     hooks: Option<Vec<HookConfig>>,
     encryption: Option<EncryptionConfig>,
     alerts: Option<AlertsConfig>,
+    logs: Option<LogsConfig>,
 }
 
 fn default_config_dir() -> PathBuf {
@@ -372,6 +396,7 @@ impl Default for DekuConfig {
             hooks: Vec::new(),
             encryption: None,
             alerts: AlertsConfig::default(),
+            logs: LogsConfig::default(),
         }
     }
 }
@@ -490,6 +515,7 @@ pub fn load() -> Result<DekuConfig> {
         hooks: raw.hooks.unwrap_or_default(),
         encryption: raw.encryption,
         alerts: raw.alerts.unwrap_or_default(),
+        logs: raw.logs.unwrap_or_default(),
     };
 
     Ok(cfg)

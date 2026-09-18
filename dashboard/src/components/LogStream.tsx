@@ -1,6 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useEffectEvent, useRef, useState } from 'react';
-import { appEventStreamUrl, type EventRecord, getToken } from '../lib/api';
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
+import {
+  appEventStreamUrl,
+  appLogStreamUrl,
+  type EventRecord,
+  getToken,
+  type LogFilters,
+  type LogLine,
+} from '../lib/api';
 import { type AppLogEntry, queryKeys, useAppLogsQuery } from '../lib/query';
 
 interface LogStreamProps {
@@ -9,41 +16,71 @@ interface LogStreamProps {
 
 type LogTrackingState = 'live' | 'retrying' | 'not_live';
 
+const TAIL_SIZE = 200;
+const MAX_ENTRIES = 1000;
+
 export default function LogStream({ appName }: LogStreamProps) {
   const queryClient = useQueryClient();
   const [trackingState, setTrackingState] = useState<LogTrackingState>('not_live');
   const [autoScroll, setAutoScroll] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [clearedCount, setClearedCount] = useState(0);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [source, setSource] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectRef = useRef<number | null>(null);
-  const logsQuery = useAppLogsQuery(appName, 120, { enabled: Boolean(appName) });
+
+  // Stable identity so the query key and the live append target the same cache entry.
+  const filters = useMemo<LogFilters>(() => {
+    const next: LogFilters = {};
+    if (search.trim()) next.search = search.trim();
+    if (source) next.source = source;
+    return next;
+  }, [search, source]);
+
+  const logsQuery = useAppLogsQuery(appName, TAIL_SIZE, filters, {
+    enabled: Boolean(appName),
+  });
   const cachedEntries = logsQuery.data ?? [];
   const entries = cachedEntries.slice(Math.min(clearedCount, cachedEntries.length));
   const entryCount = entries.length;
-  const handleIncomingEvent = useEffectEvent((event: EventRecord) => {
-    const nextEntry = eventToEntry(event);
-    if (nextEntry) {
-      queryClient.setQueryData<AppLogEntry[]>(queryKeys.logs.app(appName, 120), (current = []) => {
-        const capped = current.length >= 500 ? current.slice(-499) : current;
-        return [...capped, nextEntry];
-      });
+
+  const handleIncomingLine = useEffectEvent((line: LogLine) => {
+    // The server filters by source, but search is applied here so the live view
+    // matches what the stored query would return.
+    if (filters.search) {
+      const haystack = line.message.toLowerCase();
+      const matches = filters.search
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean)
+        .every((term) => haystack.includes(term));
+      if (!matches) return;
     }
 
-    if (isTerminalDeployEvent(event.event_type)) {
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.apps.deployments(appName) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.apps.processes(appName) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.apps.scale(appName) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.apps.summary(appName) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.apps.list }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.routing.app(appName) }),
-      ]);
-    }
+    queryClient.setQueryData<AppLogEntry[]>(
+      [...queryKeys.logs.app(appName, TAIL_SIZE), filters],
+      (current = []) => {
+        const capped = current.length >= MAX_ENTRIES ? current.slice(-(MAX_ENTRIES - 1)) : current;
+        return [
+          ...capped,
+          {
+            id: line.id,
+            createdAt: line.created_at,
+            eventType: line.source === 'build' ? 'build' : 'runtime',
+            message: line.message,
+            level: line.level,
+            stream: line.stream,
+          },
+        ];
+      }
+    );
   });
 
+  // Live log lines.
   useEffect(() => {
     let cancelled = false;
     setAutoScroll(true);
@@ -54,7 +91,7 @@ export default function LogStream({ appName }: LogStreamProps) {
     function connect() {
       if (cancelled) return;
       const token = getToken();
-      const source = new EventSource(appEventStreamUrl(appName, token ?? undefined));
+      const source = new EventSource(appLogStreamUrl(appName, token ?? undefined, filters));
       eventSourceRef.current = source;
 
       source.onopen = () => {
@@ -63,9 +100,8 @@ export default function LogStream({ appName }: LogStreamProps) {
       };
 
       source.onmessage = (message) => {
-        const event = parseEvent(message.data);
-        if (!event) return;
-        handleIncomingEvent(event);
+        const line = parseLogLine(message.data);
+        if (line) handleIncomingLine(line);
       };
 
       source.onerror = () => {
@@ -88,6 +124,32 @@ export default function LogStream({ appName }: LogStreamProps) {
         window.clearTimeout(reconnectRef.current);
       }
     };
+  }, [appName, filters]);
+
+  // Deploy lifecycle events are not log lines, but the rest of the page should
+  // refresh when one lands.
+  const handleLifecycleEvent = useEffectEvent((event: EventRecord) => {
+    if (isTerminalDeployEvent(event.event_type)) {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.deployments(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.processes(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.scale(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.summary(appName) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.list }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.routing.app(appName) }),
+      ]);
+    }
+  });
+
+  useEffect(() => {
+    if (!appName) return;
+    const token = getToken();
+    const source = new EventSource(appEventStreamUrl(appName, token ?? undefined));
+    source.onmessage = (message) => {
+      const event = parseEvent(message.data);
+      if (event) handleLifecycleEvent(event);
+    };
+    return () => source.close();
   }, [appName]);
 
   useEffect(() => {
@@ -109,11 +171,12 @@ export default function LogStream({ appName }: LogStreamProps) {
   const statusTone = trackingState === 'live' ? 'live' : 'danger';
   const emptyMessage =
     trackingState === 'live'
-      ? 'Waiting for log events…'
+      ? 'Waiting for log lines…'
       : trackingState === 'retrying'
         ? 'Retrying live stream…'
         : (error ??
-          (logsQuery.error ? 'Unable to load historical logs.' : 'Live tracking is not active.'));
+          (logsQuery.error ? 'Unable to load stored logs.' : 'Live tracking is not active.'));
+  const filtered = Boolean(filters.search || filters.source);
 
   return (
     <div className="panel log-panel">
@@ -124,7 +187,9 @@ export default function LogStream({ appName }: LogStreamProps) {
             <span className="log-status-label" data-state={trackingState}>
               {statusLabel}
             </span>
-            <span className="log-status-meta">{entries.length} entries</span>
+            <span className="log-status-meta">
+              {entries.length} entries{filtered ? ' (filtered)' : ''}
+            </span>
           </div>
         </div>
         <div className="cluster">
@@ -145,6 +210,54 @@ export default function LogStream({ appName }: LogStreamProps) {
         </div>
       </div>
 
+      <form
+        className="log-filters"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setSearch(searchInput);
+          setClearedCount(0);
+        }}
+      >
+        <input
+          className="input"
+          type="search"
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.target.value)}
+          placeholder="Search stored logs…"
+          aria-label={`Search logs for ${appName}`}
+        />
+        <select
+          className="input"
+          value={source}
+          onChange={(event) => {
+            setSource(event.target.value);
+            setClearedCount(0);
+          }}
+          aria-label="Filter logs by source"
+        >
+          <option value="">Build and runtime</option>
+          <option value="runtime">Runtime only</option>
+          <option value="build">Build only</option>
+        </select>
+        <button className="btn btn-secondary btn-sm" type="submit">
+          Search
+        </button>
+        {filtered && (
+          <button
+            className="btn btn-ghost btn-sm"
+            type="button"
+            onClick={() => {
+              setSearchInput('');
+              setSearch('');
+              setSource('');
+              setClearedCount(0);
+            }}
+          >
+            Reset
+          </button>
+        )}
+      </form>
+
       <div
         ref={containerRef}
         className="log-terminal"
@@ -161,7 +274,10 @@ export default function LogStream({ appName }: LogStreamProps) {
             <span className="log-timestamp">
               {entry.createdAt ? formatTimestamp(entry.createdAt) : '--:--:--'}
             </span>
-            <span className="log-source">[{entry.eventType}]</span>
+            <span className="log-source">
+              [{entry.eventType}
+              {entry.level ? ` ${entry.level}` : ''}]
+            </span>
             <span className="log-message">{entry.message}</span>
           </div>
         ))}
@@ -179,50 +295,18 @@ function parseEvent(data: string): EventRecord | null {
   }
 }
 
-function parsePayload(payload: string | null | undefined): Record<string, unknown> | null {
-  if (!payload) return null;
+function parseLogLine(data: string): LogLine | null {
   try {
-    return JSON.parse(payload) as Record<string, unknown>;
+    return JSON.parse(data) as LogLine;
   } catch {
     return null;
   }
-}
-
-function eventToEntry(event: EventRecord): AppLogEntry | null {
-  const payload = parsePayload(event.payload);
-  if (typeof payload?.line === 'string') {
-    return {
-      id: event.id,
-      createdAt: event.created_at,
-      eventType: event.event_type,
-      message: payload.line,
-    };
-  }
-
-  if (event.event_type.startsWith('deploy.') || event.event_type.startsWith('build.')) {
-    return {
-      id: event.id,
-      createdAt: event.created_at,
-      eventType: event.event_type,
-      message: summariseEvent(event.event_type, payload),
-    };
-  }
-
-  return null;
 }
 
 function isTerminalDeployEvent(eventType: string): boolean {
   return (
     eventType === 'deploy.live' || eventType === 'deploy.failed' || eventType === 'deploy.rollback'
   );
-}
-
-function summariseEvent(type: string, payload: Record<string, unknown> | null): string {
-  if (typeof payload?.url === 'string') return `Live at ${payload.url}`;
-  if (typeof payload?.error === 'string') return payload.error;
-  if (typeof payload?.command === 'string') return `Release phase: ${payload.command}`;
-  if (typeof payload?.builder === 'string') return `Builder ${payload.builder}`;
-  return type.replaceAll('.', ' ');
 }
 
 function formatTimestamp(value: string): string {

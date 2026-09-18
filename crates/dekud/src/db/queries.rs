@@ -428,6 +428,20 @@ pub async fn list_deployments(pool: &SqlitePool, app_id: &str) -> Result<Vec<Dep
     Ok(deps)
 }
 
+/// The environment a deployment belongs to, when one is recorded.
+pub async fn get_deployment_environment_id(
+    pool: &SqlitePool,
+    deployment_id: &str,
+) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        "SELECT environment_id FROM deployments WHERE id = ?1",
+    )
+    .bind(deployment_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten())
+}
+
 // ── Config vars ───────────────────────────────────────────────────────────────
 
 /// App-wide config vars, i.e. the ones with no environment override.

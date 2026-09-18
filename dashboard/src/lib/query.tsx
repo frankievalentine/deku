@@ -79,6 +79,9 @@ export interface AppLogEntry {
   createdAt: string | null;
   message: string;
   eventType: string;
+  /** Inferred level for stored lines; absent for event-derived lines. */
+  level?: string;
+  stream?: string;
 }
 
 interface QueryHookOptions {
@@ -426,20 +429,32 @@ export function versionStatusQueryOptions(options?: QueryHookOptions) {
   });
 }
 
-export function useAppLogsQuery(appName: string, tailSize: number, options?: QueryEnabledOnly) {
-  return useQuery(appLogsQueryOptions(appName, tailSize, options));
+export function useAppLogsQuery(
+  appName: string,
+  tailSize: number,
+  filters?: import('./api').LogFilters,
+  options?: QueryEnabledOnly
+) {
+  return useQuery(appLogsQueryOptions(appName, tailSize, options, filters));
 }
 
-export function appLogsQueryOptions(appName: string, tailSize: number, options?: QueryEnabledOnly) {
+export function appLogsQueryOptions(
+  appName: string,
+  tailSize: number,
+  options?: QueryEnabledOnly,
+  filters?: import('./api').LogFilters
+) {
   return queryOptions({
-    queryKey: queryKeys.logs.app(appName, tailSize),
+    queryKey: [...queryKeys.logs.app(appName, tailSize), filters ?? {}],
     queryFn: async (): Promise<AppLogEntry[]> => {
-      const lines = await fetchLogs(appName, tailSize);
-      return lines.map((line, index) => ({
-        id: `tail-${index}-${line}`,
-        createdAt: null,
-        eventType: 'log.tail',
-        message: line,
+      const lines = await fetchLogs(appName, tailSize, filters ?? {});
+      return lines.map((line) => ({
+        id: line.id,
+        createdAt: line.created_at,
+        eventType: line.source === 'build' ? 'build' : 'runtime',
+        message: line.message,
+        level: line.level,
+        stream: line.stream,
       }));
     },
     enabled: options?.enabled ?? Boolean(appName),

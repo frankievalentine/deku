@@ -17,6 +17,7 @@ mod deploy;
 mod deploy_lock;
 mod events;
 mod hooks;
+mod logs;
 mod metrics;
 mod objectstore;
 mod plugins;
@@ -53,10 +54,19 @@ async fn main() -> Result<()> {
     }
 
     let event_bus = events::EventBus::new(pool.clone());
-    let state = api::AppState::new(cfg.clone(), pool, event_bus, docker, plugin_registry);
+    let log_bus = logs::LogBus::new(pool.clone());
+    let state = api::AppState::new(
+        cfg.clone(),
+        pool,
+        event_bus,
+        log_bus,
+        docker,
+        plugin_registry,
+    );
 
     backup_scheduler::spawn(state.clone());
     alerts::spawn(state.clone());
+    logs::spawn_maintenance(state.clone());
 
     tokio::try_join!(api::serve(state.clone()), async {
         if let Err(error) = ssh::serve(state.clone()).await {

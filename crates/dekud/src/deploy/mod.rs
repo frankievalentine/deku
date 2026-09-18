@@ -336,6 +336,7 @@ pub async fn run_deploy(
     pool: &SqlitePool,
     docker: &DockerClient,
     events: &EventSender,
+    logs: &std::sync::Arc<crate::logs::LogBus>,
     cfg: &DekuConfig,
     plugins: &crate::plugins::PluginRegistry,
     req: DeployRequest,
@@ -365,6 +366,16 @@ pub async fn run_deploy(
         queries::create_deployment(pool, app_id, &environment.id, builder_type).await?;
     let deploy_id = deployment.id.clone();
 
+    // Build output travels the event bus; mirror this deployment's share of it
+    // into the log store so build logs are searchable and survive the rollout.
+    let build_log_mirror = crate::logs::spawn_build_log_mirror(
+        events.subscribe(),
+        logs.clone(),
+        app_id.clone(),
+        deploy_id.clone(),
+        environment.id.clone(),
+    );
+
     events.emit(
         Some(app_id.clone()),
         "deploy.started",
@@ -382,6 +393,7 @@ pub async fn run_deploy(
         pool,
         docker,
         events,
+        logs,
         cfg,
         plugins,
         &req,
@@ -389,6 +401,9 @@ pub async fn run_deploy(
         &environment.id,
     )
     .await;
+
+    // Drains any build lines still buffered before returning.
+    build_log_mirror.stop().await;
 
     // Resolve the app once for hook payloads; a hook failure never changes the
     // deploy outcome, so these two events are advisory.
@@ -456,6 +471,7 @@ async fn do_deploy(
     pool: &SqlitePool,
     docker: &DockerClient,
     events: &EventSender,
+    logs: &std::sync::Arc<crate::logs::LogBus>,
     cfg: &DekuConfig,
     plugins: &crate::plugins::PluginRegistry,
     req: &DeployRequest,
@@ -836,6 +852,19 @@ async fn do_deploy(
                 );
             }
 
+            // Follow this replica from its first line. The task ends when the
+            // container stops, which is also how a retired deployment stops
+            // collecting.
+            crate::logs::spawn_runtime_collector(
+                logs.clone(),
+                docker.clone(),
+                container_id.clone(),
+                app_id.clone(),
+                Some(deploy_id.to_string()),
+                Some(environment_id.to_string()),
+                crate::logs::CollectorStart::Beginning,
+            );
+
             new_container_ids.push(container_id);
         }
     }
@@ -1179,6 +1208,7 @@ pub async fn rollback(
     pool: &SqlitePool,
     docker: &DockerClient,
     events: &EventSender,
+    logs: &std::sync::Arc<crate::logs::LogBus>,
     cfg: &DekuConfig,
     plugins: &crate::plugins::PluginRegistry,
     app_id: &str,
@@ -1218,7 +1248,7 @@ pub async fn rollback(
         build_host: Some("local".to_string()),
     };
 
-    run_deploy(pool, docker, events, cfg, plugins, req).await?;
+    run_deploy(pool, docker, events, logs, cfg, plugins, req).await?;
 
     // Mark the previous current deployment as rolled_back
     queries::update_deployment(
@@ -1319,6 +1349,7 @@ mod tests {
         pool: SqlitePool,
         docker: DockerClient,
         events: EventSender,
+        logs: std::sync::Arc<crate::logs::LogBus>,
         cfg: DekuConfig,
         plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     }
@@ -1342,12 +1373,14 @@ mod tests {
             let pool = crate::db::connect(&cfg).await.ok()?;
             crate::db::migrate(&pool).await.ok()?;
             let events = crate::events::EventBus::new(pool.clone());
+            let logs = crate::logs::LogBus::new(pool.clone());
 
             Some(Self {
                 _temp: temp,
                 pool,
                 docker,
                 events,
+                logs,
                 cfg,
                 plugins: crate::plugins::PluginRegistry::new(),
             })
@@ -1362,6 +1395,7 @@ mod tests {
                 &self.pool,
                 &self.docker,
                 &self.events,
+                &self.logs,
                 &self.cfg,
                 &self.plugins,
                 DeployRequest {
@@ -1425,6 +1459,7 @@ mod tests {
             &h.pool,
             &h.docker,
             &h.events,
+            &h.logs,
             &h.cfg,
             &h.plugins,
             &app.id,
