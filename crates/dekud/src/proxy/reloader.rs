@@ -37,6 +37,37 @@ pub async fn validate() -> Result<()> {
     anyhow::bail!("angie config validation failed: {}{}", stdout, stderr);
 }
 
+/// The effective configuration, as Angie resolves it.
+///
+/// `angie -T` writes every included file, each preceded by a marker naming its
+/// path, which is how a caller can tell whether a directory is included at all.
+/// An include that is missing is otherwise invisible: the files sit on disk and
+/// Angie never reads them.
+pub async fn dump() -> Result<String> {
+    let output = tokio::process::Command::new(angie_bin())
+        .args(["-T"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "angie -T failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// The configuration files Angie actually loaded, from `-T` output.
+pub fn loaded_config_files(dump: &str) -> Vec<String> {
+    dump.lines()
+        .filter_map(|line| line.trim().strip_prefix("# configuration file "))
+        .filter_map(|rest| rest.strip_suffix(':'))
+        .map(|path| path.to_string())
+        .collect()
+}
+
 /// Reload Angie configuration.
 ///
 /// Sends SIGHUP to the running angie process found in the standard pid file.
