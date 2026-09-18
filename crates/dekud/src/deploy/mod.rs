@@ -963,9 +963,13 @@ async fn do_deploy(
             let routing: anyhow::Result<()> = async {
                 let extras = proxy::load_extras(pool, app_id).await?;
                 proxy::apply_app_config(
+                    pool,
                     &cfg.angie_conf_dir,
+                    cfg.global_domain.as_deref(),
+                    app_id,
                     app_name,
                     Some(proxy::DesiredAppConfig {
+                        environment_id,
                         domains: &domains,
                         upstreams: &upstreams,
                         tls: tls_enabled,

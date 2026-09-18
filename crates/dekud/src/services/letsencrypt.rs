@@ -24,9 +24,13 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
         .collect();
     let extras = crate::proxy::load_extras(pool, &app.id).await?;
     crate::proxy::apply_app_config(
+        pool,
         &cfg.angie_conf_dir,
+        cfg.global_domain.as_deref(),
+        &app.id,
         app_name,
         Some(crate::proxy::DesiredAppConfig {
+            environment_id: &environment.id,
             domains: &domains,
             upstreams: &upstreams,
             tls: true,
@@ -46,32 +50,34 @@ pub async fn disable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Res
     let domains = queries::list_domain_names(pool, &app.id).await?;
     let environment = queries::ensure_production_environment(pool, &app.id).await?;
     let upstream_ports = queries::list_web_upstream_ports(pool, &app.id, &environment.id).await?;
-    if !domains.is_empty() && !upstream_ports.is_empty() {
-        let upstreams: Vec<Upstream> = upstream_ports
-            .iter()
-            .map(|port| Upstream {
-                host: "127.0.0.1".into(),
-                port: *port,
-            })
-            .collect();
-        let extras = crate::proxy::load_extras(pool, &app.id).await?;
-        crate::proxy::apply_app_config(
-            &cfg.angie_conf_dir,
-            app_name,
-            Some(crate::proxy::DesiredAppConfig {
-                domains: &domains,
-                upstreams: &upstreams,
-                tls: false,
-                auth: extras.auth.as_ref(),
-                maintenance: extras.maintenance,
-                maintenance_message: extras.maintenance_message.as_deref(),
-                redirects: &extras.redirects,
-            }),
-        )
-        .await?;
-    } else {
-        crate::proxy::apply_app_config(&cfg.angie_conf_dir, app_name, None).await?;
-    }
+    // Turning TLS off only rewrites the production vhost to HTTP. Environments
+    // are HTTP already, and one that is still serving keeps its block.
+    let upstreams: Vec<Upstream> = upstream_ports
+        .iter()
+        .map(|port| Upstream {
+            host: "127.0.0.1".into(),
+            port: *port,
+        })
+        .collect();
+    let extras = crate::proxy::load_extras(pool, &app.id).await?;
+    crate::proxy::apply_app_config(
+        pool,
+        &cfg.angie_conf_dir,
+        cfg.global_domain.as_deref(),
+        &app.id,
+        app_name,
+        Some(crate::proxy::DesiredAppConfig {
+            environment_id: &environment.id,
+            domains: &domains,
+            upstreams: &upstreams,
+            tls: false,
+            auth: extras.auth.as_ref(),
+            maintenance: extras.maintenance,
+            maintenance_message: extras.maintenance_message.as_deref(),
+            redirects: &extras.redirects,
+        }),
+    )
+    .await?;
     queries::set_app_tls(pool, &app.id, false).await?;
     Ok(())
 }

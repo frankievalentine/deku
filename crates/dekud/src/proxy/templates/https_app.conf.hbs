@@ -1,4 +1,4 @@
-upstream deku_{{app_name}} {
+upstream deku_{{key}} {
 {{#each upstreams}}    server {{this.host}}:{{this.port}};
 {{/each}}
 }
@@ -14,11 +14,11 @@ server {
     http2  on;
     server_name{{#each domains}} {{this}}{{/each}};
 
-    ssl_certificate     /etc/angie/ssl/deku_{{app_name}}.crt;
-    ssl_certificate_key /etc/angie/ssl/deku_{{app_name}}.key;
+    ssl_certificate     /etc/angie/ssl/deku_{{key}}.crt;
+    ssl_certificate_key /etc/angie/ssl/deku_{{key}}.key;
 
-    access_log /var/log/angie/deku_{{app_name}}_access.log;
-    error_log  /var/log/angie/deku_{{app_name}}_error.log;
+    access_log /var/log/angie/deku_{{key}}_access.log;
+    error_log  /var/log/angie/deku_{{key}}_error.log;
 
 {{#if maintenance}}    location / {
         return 503{{#if maintenance_message}} "{{maintenance_message}}"{{/if}};
@@ -30,7 +30,7 @@ server {
 {{#if auth_basic}}        auth_basic "Deku";
         auth_basic_user_file {{auth_basic_user_file}};
 {{/if}}{{#if forward_auth}}        auth_request /__deku_auth;
-{{/if}}        proxy_pass         http://deku_{{app_name}};
+{{/if}}        proxy_pass         http://deku_{{key}};
         proxy_http_version 1.1;
         proxy_set_header   Upgrade $http_upgrade;
         proxy_set_header   Connection "upgrade";

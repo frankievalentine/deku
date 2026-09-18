@@ -55,57 +55,52 @@ pub fn write_raw_app_config(conf_dir: &Path, app_name: &str, contents: &[u8]) ->
     Ok(())
 }
 
-/// Everything needed to render one app's Angie vhost fragment.
-pub struct VhostConfig<'a> {
-    pub app_name: &'a str,
-    pub domains: &'a [String],
-    pub upstreams: &'a [Upstream],
+/// One vhost inside an app's config file.
+///
+/// `key` is unique within the file: it names the upstream block and the log
+/// files. Production uses the app name, so its rendering is unchanged from when
+/// an app had a single vhost; each environment uses `<app>-<slug>`.
+#[derive(Debug, Clone)]
+pub struct VhostConfig {
+    pub key: String,
+    pub domains: Vec<String>,
+    pub upstreams: Vec<Upstream>,
     pub tls: bool,
+}
+
+/// Directives shared by every vhost of an app.
+///
+/// Auth, maintenance, and redirects are app-scoped: an environment serves the
+/// same policy as production, so only the key, hostnames, upstreams, and TLS
+/// setting differ between vhosts.
+pub struct AppVhostPolicy<'a> {
     pub auth: Option<&'a crate::db::queries::AppAuthRecord>,
     pub maintenance: bool,
     pub maintenance_message: Option<&'a str>,
     pub redirects: &'a [crate::db::queries::Redirect],
 }
 
-/// Render and write an Angie vhost config fragment.
+/// Render and write every vhost of an app into its single `<app>.conf`.
 ///
-/// Uses the HTTPS template when `tls` is `true`, HTTP otherwise. When `auth`
-/// is set, the matching auth directive and (for basic auth) the htpasswd file
-/// are written alongside the vhost config. Maintenance mode replaces the app
-/// with a 503; redirects run before the proxy location.
-pub fn write_app_config(conf_dir: &Path, config: VhostConfig<'_>) -> Result<()> {
-    let VhostConfig {
-        app_name,
-        domains,
-        upstreams,
-        tls,
-        auth,
-        maintenance,
-        maintenance_message,
-        redirects,
-    } = config;
-
+/// All vhosts live in one file on purpose: an environment hostname is derived as
+/// `<app>-<slug>`, which can collide with the name of another app, so per-app
+/// filenames (rather than per-vhost ones) keep the name space from overlapping.
+///
+/// Each vhost uses the HTTPS template when `tls` is `true` and HTTP otherwise.
+/// When the policy carries auth, the matching directive is rendered into every
+/// vhost and (for basic auth) the htpasswd file is written alongside the config.
+/// Maintenance mode replaces the app with a 503; redirects run before the proxy
+/// location.
+pub fn write_app_config(
+    conf_dir: &Path,
+    app_name: &str,
+    vhosts: &[VhostConfig],
+    policy: &AppVhostPolicy<'_>,
+) -> Result<()> {
     let hbs = registry()?;
-    let template = if tls { "https_app" } else { "http_app" };
-
-    let upstream_data: Vec<_> = upstreams
-        .iter()
-        .map(|u| json!({ "host": u.host, "port": u.port }))
-        .collect();
-
-    let redirect_data: Vec<_> = redirects
-        .iter()
-        .map(|redirect| {
-            json!({
-                "source_path": redirect.source_path,
-                "target": redirect.target,
-                "code": redirect.code,
-            })
-        })
-        .collect();
 
     let htpasswd_path = conf_dir.join(format!("{app_name}.htpasswd"));
-    let (auth_basic, auth_basic_user_file, forward_auth) = match auth {
+    let (auth_basic, auth_basic_user_file, forward_auth) = match policy.auth {
         Some(record) if record.mode == "basic" => {
             let (username, hash) =
                 match (record.username.as_deref(), record.password_hash.as_deref()) {
@@ -129,21 +124,49 @@ pub fn write_app_config(conf_dir: &Path, config: VhostConfig<'_>) -> Result<()> 
         }
     };
 
-    let data = json!({
-        "app_name": app_name,
-        "domains": domains,
-        "upstreams": upstream_data,
-        "auth_basic": auth_basic,
-        "auth_basic_user_file": auth_basic_user_file,
-        "forward_auth": forward_auth,
-        "maintenance": maintenance,
-        "maintenance_message": maintenance_message,
-        "redirects": redirect_data,
-    });
+    let redirect_data: Vec<_> = policy
+        .redirects
+        .iter()
+        .map(|redirect| {
+            json!({
+                "source_path": redirect.source_path,
+                "target": redirect.target,
+                "code": redirect.code,
+            })
+        })
+        .collect();
 
-    let rendered = hbs
-        .render(template, &data)
-        .with_context(|| format!("rendering angie config for {app_name}"))?;
+    let mut rendered = String::new();
+    for vhost in vhosts {
+        let template = if vhost.tls { "https_app" } else { "http_app" };
+
+        let upstream_data: Vec<_> = vhost
+            .upstreams
+            .iter()
+            .map(|u| json!({ "host": u.host, "port": u.port }))
+            .collect();
+
+        let data = json!({
+            "key": vhost.key,
+            "domains": vhost.domains,
+            "upstreams": upstream_data,
+            "auth_basic": auth_basic,
+            "auth_basic_user_file": auth_basic_user_file,
+            "forward_auth": forward_auth,
+            "maintenance": policy.maintenance,
+            "maintenance_message": policy.maintenance_message,
+            "redirects": redirect_data,
+        });
+
+        let block = hbs
+            .render(template, &data)
+            .with_context(|| format!("rendering angie config for {}", vhost.key))?;
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        rendered.push_str(&block);
+    }
+
     write_raw_app_config(conf_dir, app_name, rendered.as_bytes())
 }
 
@@ -195,9 +218,50 @@ pub fn remove_app_config(conf_dir: &Path, app_name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        app_config_path, read_app_config, remove_app_config, write_app_config, VhostConfig,
+        app_config_path, read_app_config, remove_app_config, write_app_config, AppVhostPolicy,
+        VhostConfig,
     };
     use deku_core::types::Upstream;
+
+    fn demo_vhost(domains: &[String], upstreams: &[Upstream]) -> VhostConfig {
+        VhostConfig {
+            key: "demo".to_string(),
+            domains: domains.to_vec(),
+            upstreams: upstreams.to_vec(),
+            tls: false,
+        }
+    }
+
+    fn policy<'a>(
+        redirects: &'a [crate::db::queries::Redirect],
+        maintenance: bool,
+        maintenance_message: Option<&'a str>,
+    ) -> AppVhostPolicy<'a> {
+        AppVhostPolicy {
+            auth: None,
+            maintenance,
+            maintenance_message,
+            redirects,
+        }
+    }
+
+    fn upstreams() -> Vec<Upstream> {
+        vec![Upstream {
+            host: "127.0.0.1".to_string(),
+            port: 3000,
+        }]
+    }
+
+    fn read_rendered(conf_dir: &Path) -> String {
+        String::from_utf8(
+            read_app_config(conf_dir, "demo")
+                .expect("config should read")
+                .expect("config should be present"),
+        )
+        .expect("config should be utf8")
+    }
+
+    use std::path::Path;
 
     #[test]
     fn removing_an_app_config_also_removes_its_htpasswd() {
@@ -217,33 +281,22 @@ mod tests {
     fn writes_reads_and_removes_app_config() {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path();
-        let upstreams = vec![Upstream {
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-        }];
+        let upstreams = upstreams();
+        let domains = vec![String::from("example.com")];
 
         write_app_config(
             conf_dir,
-            VhostConfig {
-                app_name: "demo",
-                domains: &[String::from("example.com")],
-                upstreams: &upstreams,
-                tls: false,
-                auth: None,
-                maintenance: false,
-                maintenance_message: None,
-                redirects: &[],
-            },
+            "demo",
+            &[demo_vhost(&domains, &upstreams)],
+            &policy(&[], false, None),
         )
         .expect("config should write");
 
-        let config_path = app_config_path(conf_dir, "demo");
-        assert!(config_path.exists(), "config file should exist");
-
-        let contents = read_app_config(conf_dir, "demo")
-            .expect("config should read")
-            .expect("config should be present");
-        let rendered = String::from_utf8(contents).expect("config should be utf8");
+        assert!(
+            app_config_path(conf_dir, "demo").exists(),
+            "config file should exist"
+        );
+        let rendered = read_rendered(conf_dir);
         assert!(
             rendered.contains("server_name example.com;"),
             "config should include the domain"
@@ -257,6 +310,62 @@ mod tests {
         assert!(
             !app_config_path(conf_dir, "demo").exists(),
             "config file should be removed"
+        );
+    }
+
+    #[test]
+    fn every_vhost_lands_in_one_file_with_its_own_upstream() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let conf_dir = temp.path();
+        let production = VhostConfig {
+            key: "demo".to_string(),
+            domains: vec![String::from("example.com")],
+            upstreams: vec![Upstream {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+            }],
+            tls: false,
+        };
+        let staging = VhostConfig {
+            key: "demo-staging".to_string(),
+            domains: vec![String::from("demo-staging.example.test")],
+            upstreams: vec![Upstream {
+                host: "127.0.0.1".to_string(),
+                port: 3100,
+            }],
+            tls: false,
+        };
+
+        write_app_config(
+            conf_dir,
+            "demo",
+            &[production, staging],
+            &policy(&[], false, None),
+        )
+        .expect("config should write");
+
+        let rendered = read_rendered(conf_dir);
+        assert!(
+            rendered.contains("server_name example.com;"),
+            "production vhost missing"
+        );
+        assert!(
+            rendered.contains("server_name demo-staging.example.test;"),
+            "environment vhost missing"
+        );
+        assert!(
+            rendered.contains("upstream deku_demo-staging {"),
+            "environment upstream must be named after its key"
+        );
+        assert!(
+            rendered.contains("server 127.0.0.1:3100;"),
+            "environment upstream port missing"
+        );
+        // Two vhosts means two upstream blocks, and they must not share a name.
+        assert_eq!(
+            rendered.matches("upstream deku_").count(),
+            2,
+            "each vhost needs its own upstream block"
         );
     }
 
@@ -283,47 +392,22 @@ mod tests {
         }
     }
 
-    fn base_config<'a>(
-        domains: &'a [String],
-        upstreams: &'a [Upstream],
-        redirects: &'a [crate::db::queries::Redirect],
-        maintenance: bool,
-        maintenance_message: Option<&'a str>,
-    ) -> VhostConfig<'a> {
-        VhostConfig {
-            app_name: "demo",
-            domains,
-            upstreams,
-            tls: false,
-            auth: None,
-            maintenance,
-            maintenance_message,
-            redirects,
-        }
-    }
-
     #[test]
     fn maintenance_mode_replaces_the_proxy_location() {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path();
-        let upstreams = vec![Upstream {
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-        }];
+        let upstreams = upstreams();
         let domains = vec![String::from("example.com")];
 
         write_app_config(
             conf_dir,
-            base_config(&domains, &upstreams, &[], true, Some("Back soon")),
+            "demo",
+            &[demo_vhost(&domains, &upstreams)],
+            &policy(&[], true, Some("Back soon")),
         )
         .expect("config should write");
 
-        let rendered = String::from_utf8(
-            read_app_config(conf_dir, "demo")
-                .expect("config should read")
-                .expect("config should exist"),
-        )
-        .expect("utf8");
+        let rendered = read_rendered(conf_dir);
         assert!(
             rendered.contains("return 503 \"Back soon\";"),
             "expected maintenance 503 with message, got:\n{rendered}"
@@ -338,25 +422,19 @@ mod tests {
     fn redirects_render_before_the_proxy_location() {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path();
-        let upstreams = vec![Upstream {
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-        }];
+        let upstreams = upstreams();
         let domains = vec![String::from("example.com")];
         let redirects = vec![redirect("/old", "https://example.com/new", 301)];
 
         write_app_config(
             conf_dir,
-            base_config(&domains, &upstreams, &redirects, false, None),
+            "demo",
+            &[demo_vhost(&domains, &upstreams)],
+            &policy(&redirects, false, None),
         )
         .expect("config should write");
 
-        let rendered = String::from_utf8(
-            read_app_config(conf_dir, "demo")
-                .expect("config should read")
-                .expect("config should exist"),
-        )
-        .expect("utf8");
+        let rendered = read_rendered(conf_dir);
         assert!(
             rendered.contains("location = /old {"),
             "missing redirect location"
@@ -371,33 +449,22 @@ mod tests {
     fn writes_basic_auth_directive_and_htpasswd() {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path();
-        let upstreams = vec![Upstream {
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-        }];
+        let upstreams = upstreams();
         let record = auth_record("basic");
+        let domains = vec![String::from("example.com")];
 
         write_app_config(
             conf_dir,
-            VhostConfig {
-                app_name: "demo",
-                domains: &[String::from("example.com")],
-                upstreams: &upstreams,
-                tls: false,
+            "demo",
+            &[demo_vhost(&domains, &upstreams)],
+            &AppVhostPolicy {
                 auth: Some(&record),
-                maintenance: false,
-                maintenance_message: None,
-                redirects: &[],
+                ..policy(&[], false, None)
             },
         )
         .expect("config should write");
 
-        let rendered = String::from_utf8(
-            read_app_config(conf_dir, "demo")
-                .expect("config should read")
-                .expect("config should exist"),
-        )
-        .expect("utf8");
+        let rendered = read_rendered(conf_dir);
         assert!(
             rendered.contains("auth_basic \"Deku\";"),
             "missing auth_basic directive"
@@ -429,34 +496,23 @@ mod tests {
     fn writes_forward_auth_block_and_removes_htpasswd() {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path();
-        let upstreams = vec![Upstream {
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-        }];
+        let upstreams = upstreams();
         std::fs::write(conf_dir.join("demo.htpasswd"), "stale\n").expect("seed htpasswd");
         let record = auth_record("forward");
+        let domains = vec![String::from("example.com")];
 
         write_app_config(
             conf_dir,
-            VhostConfig {
-                app_name: "demo",
-                domains: &[String::from("example.com")],
-                upstreams: &upstreams,
-                tls: false,
+            "demo",
+            &[demo_vhost(&domains, &upstreams)],
+            &AppVhostPolicy {
                 auth: Some(&record),
-                maintenance: false,
-                maintenance_message: None,
-                redirects: &[],
+                ..policy(&[], false, None)
             },
         )
         .expect("config should write");
 
-        let rendered = String::from_utf8(
-            read_app_config(conf_dir, "demo")
-                .expect("config should read")
-                .expect("config should exist"),
-        )
-        .expect("utf8");
+        let rendered = read_rendered(conf_dir);
         assert!(
             rendered.contains("auth_request /__deku_auth;"),
             "missing auth_request directive"
@@ -468,6 +524,43 @@ mod tests {
         assert!(
             !conf_dir.join("demo.htpasswd").exists(),
             "stale htpasswd should be removed for forward auth"
+        );
+    }
+
+    #[test]
+    fn auth_and_policy_apply_to_every_vhost_in_the_file() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let conf_dir = temp.path();
+        let record = auth_record("basic");
+        let production = VhostConfig {
+            key: "demo".to_string(),
+            domains: vec![String::from("example.com")],
+            upstreams: upstreams(),
+            tls: false,
+        };
+        let staging = VhostConfig {
+            key: "demo-staging".to_string(),
+            domains: vec![String::from("demo-staging.example.test")],
+            upstreams: upstreams(),
+            tls: false,
+        };
+
+        write_app_config(
+            conf_dir,
+            "demo",
+            &[production, staging],
+            &AppVhostPolicy {
+                auth: Some(&record),
+                ..policy(&[], false, None)
+            },
+        )
+        .expect("config should write");
+
+        let rendered = read_rendered(conf_dir);
+        assert_eq!(
+            rendered.matches("auth_basic \"Deku\";").count(),
+            2,
+            "app auth must protect every vhost, not just production"
         );
     }
 }

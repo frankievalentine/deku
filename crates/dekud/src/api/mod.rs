@@ -2922,22 +2922,31 @@ async fn update_routing(
         Ok(extras) => extras,
         Err(e) => return internal_error(e).into_response(),
     };
-    let desired = if domains.is_empty() || body.upstreams.is_empty() {
-        None
-    } else {
-        Some(crate::proxy::DesiredAppConfig {
-            domains: &domains,
-            upstreams: &body.upstreams,
-            tls: app.tls_enabled,
-            auth: extras.auth.as_ref(),
-            maintenance: extras.maintenance,
-            maintenance_message: extras.maintenance_message.as_deref(),
-            redirects: &extras.redirects,
-        })
+    // Manual upstream overrides describe the app's production vhost.
+    let environment = match queries::ensure_production_environment(&state.pool, &app.id).await {
+        Ok(environment) => environment,
+        Err(e) => return internal_error(e).into_response(),
     };
+    let desired = Some(crate::proxy::DesiredAppConfig {
+        environment_id: &environment.id,
+        domains: &domains,
+        upstreams: &body.upstreams,
+        tls: app.tls_enabled,
+        auth: extras.auth.as_ref(),
+        maintenance: extras.maintenance,
+        maintenance_message: extras.maintenance_message.as_deref(),
+        redirects: &extras.redirects,
+    });
 
-    if let Err(e) =
-        crate::proxy::apply_app_config(&state.config.angie_conf_dir, &name, desired).await
+    if let Err(e) = crate::proxy::apply_app_config(
+        &state.pool,
+        &state.config.angie_conf_dir,
+        state.config.global_domain.as_deref(),
+        &app.id,
+        &name,
+        desired,
+    )
+    .await
     {
         return internal_error(e).into_response();
     }
@@ -2972,15 +2981,18 @@ async fn reconcile_proxy_for_app(
     let environment = queries::ensure_production_environment(&state.pool, app_id).await?;
     let upstreams = queries::list_web_upstreams(&state.pool, app_id, &environment.id).await?;
 
-    if domains.is_empty() || upstreams.is_empty() {
-        crate::proxy::apply_app_config(&state.config.angie_conf_dir, app_name, None).await?;
-        return Ok(());
-    }
+    // Empty production state removes only the production vhost: an environment
+    // that is still serving keeps its own block. The file is removed only when
+    // no vhost survives.
     let extras = crate::proxy::load_extras(&state.pool, app_id).await?;
     crate::proxy::apply_app_config(
+        &state.pool,
         &state.config.angie_conf_dir,
+        state.config.global_domain.as_deref(),
+        app_id,
         app_name,
         Some(crate::proxy::DesiredAppConfig {
+            environment_id: &environment.id,
             domains: &domains,
             upstreams: &upstreams,
             tls,
