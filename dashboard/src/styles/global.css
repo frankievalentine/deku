@@ -213,13 +213,11 @@
   --sidebar-item-active-soft: oklch(0.8 0.006 95);
 }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* Tailwind preflight already resets `box-sizing`, `margin`, `padding`, and
+   borders on `@layer base`. Restating that reset here would be unlayered, and
+   unlayered rules outrank every `@layer components` rule, which would strip the
+   padding Basecoat's components depend on (select options, tabs, sidebar
+   groups, dialogs). */
 
 html {
   font-size: 16px;

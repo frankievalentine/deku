@@ -47,13 +47,28 @@ const dashboardBuildVersion = import.meta.env.PUBLIC_DEKU_RELEASE_VERSION ?? 'v0
     <slot />
     <ShellController client:load />
     <script>
-      import 'basecoat-css/basecoat';
-      import 'basecoat-css/sidebar';
-      import 'basecoat-css/command';
-      import 'basecoat-css/toast';
-      import { installBasecoatEventBridges } from '../lib/basecoat-compat';
+      // `basecoat` is the runtime: it defines `window.basecoat`, and every
+      // component script registers itself behind an `if (window.basecoat)`
+      // guard, so it must finish evaluating before any component is imported.
+      // Sibling `import` statements are hoisted and evaluated together, which
+      // left the components racing the runtime and silently no-op-ing, so the
+      // runtime is awaited first and the components are loaded after it.
+      await import('basecoat-css/basecoat');
+
+      await Promise.all([
+        import('basecoat-css/select'),
+        import('basecoat-css/popover'),
+        import('basecoat-css/sidebar'),
+        import('basecoat-css/tabs'),
+        import('basecoat-css/command'),
+        import('basecoat-css/toast'),
+      ]);
+
+      const { installBasecoatEventBridges } = await import('../lib/basecoat-compat');
 
       installBasecoatEventBridges();
+      window.basecoat.initAll();
+      window.basecoat.start();
     </script>
   </body>
 </html>

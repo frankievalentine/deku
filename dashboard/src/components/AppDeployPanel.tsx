@@ -7,6 +7,7 @@ import {
   triggerRollback,
 } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
+import SelectField from './SelectField';
 import StatusBadge from './StatusBadge';
 import TableScroll from './TableScroll';
 
@@ -157,22 +158,19 @@ export default function AppDeployPanel({
           <label className="form-label" htmlFor="deploy-environment">
             Deploy into
           </label>
-          <select
+          <SelectField
             id="deploy-environment"
-            className="input"
             value={environment}
-            onChange={(event) => onEnvironmentChange(event.target.value)}
+            onChange={onEnvironmentChange}
+            placeholder="Production"
             disabled={locked || busyAction !== null}
-          >
-            <option value="">production</option>
-            {environments
-              .filter((entry) => !entry.is_production)
-              .map((entry) => (
-                <option key={entry.id} value={entry.slug}>
-                  {entry.name} ({entry.slug})
-                </option>
-              ))}
-          </select>
+            options={[
+              { value: '', label: 'Production' },
+              ...environments
+                .filter((entry) => !entry.is_production)
+                .map((entry) => ({ value: entry.slug, label: entry.name })),
+            ]}
+          />
         </div>
 
         {notice ? <p className="callout callout-success">{notice}</p> : null}

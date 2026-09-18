@@ -9,6 +9,7 @@ import {
   type LogLine,
 } from '../lib/api';
 import { type AppLogEntry, queryKeys, useAppLogsQuery } from '../lib/query';
+import SelectField from './SelectField';
 
 interface LogStreamProps {
   appName: string;
@@ -227,19 +228,20 @@ export default function LogStream({ appName }: LogStreamProps) {
           placeholder="Search stored logs…"
           aria-label={`Search logs for ${appName}`}
         />
-        <select
-          className="input"
+        <SelectField
+          id="log-source-filter"
+          label="Filter logs by source"
           value={source}
-          onChange={(event) => {
-            setSource(event.target.value);
+          onChange={(next) => {
+            setSource(next);
             setClearedCount(0);
           }}
-          aria-label="Filter logs by source"
-        >
-          <option value="">Build and runtime</option>
-          <option value="runtime">Runtime only</option>
-          <option value="build">Build only</option>
-        </select>
+          options={[
+            { value: '', label: 'Build and runtime' },
+            { value: 'runtime', label: 'Runtime only' },
+            { value: 'build', label: 'Build only' },
+          ]}
+        />
         <button className="btn btn-secondary btn-sm" type="submit">
           Search
         </button>
