@@ -15,6 +15,7 @@ import type {
   ConfigVar,
   Deployment,
   Domain,
+  Environment,
   PortMapping,
   ProcessRecord,
   ScaleMap,
@@ -27,6 +28,7 @@ import {
   useAppConfigQuery,
   useAppDeploymentsQuery,
   useAppDomainsQuery,
+  useAppEnvironmentsQuery,
   useAppPortsQuery,
   useAppProcessesQuery,
   useAppScaleQuery,
@@ -48,6 +50,7 @@ import TableScroll from './TableScroll';
 interface AppDataState {
   app: App;
   deployments: Deployment[];
+  environments: Environment[];
   domains: Domain[];
   ports: PortMapping[];
   config: ConfigVar[];
@@ -99,6 +102,9 @@ function AppDetailInner() {
   const [scaleCount, setScaleCount] = useState('1');
   const [scaleError, setScaleError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Empty means app-wide for config and production for deploys, which is what
+  // the API does when no environment is named.
+  const [environment, setEnvironment] = useState('');
   const [tabsScrollable, setTabsScrollable] = useState(false);
   const tabRefs = useRef(new Map<AppTabId, HTMLButtonElement>());
   const tabStripRef = useRef<HTMLDivElement | null>(null);
@@ -112,7 +118,10 @@ function AppDetailInner() {
   });
   const domainsQuery = useAppDomainsQuery(appName, { enabled: Boolean(appName) });
   const portsQuery = useAppPortsQuery(appName, { enabled: Boolean(appName) });
-  const configQuery = useAppConfigQuery(appName, { enabled: Boolean(appName) });
+  const environmentsQuery = useAppEnvironmentsQuery(appName, { enabled: Boolean(appName) });
+  const configQuery = useAppConfigQuery(appName, environment || undefined, {
+    enabled: Boolean(appName),
+  });
   const scaleQuery = useAppScaleQuery(appName, {
     enabled: Boolean(appName),
     refetchInterval: 15_000,
@@ -123,8 +132,8 @@ function AppDetailInner() {
   });
   const addDomainMutation = useAddDomainMutation(appName);
   const removeDomainMutation = useRemoveDomainMutation(appName);
-  const setConfigMutation = useSetConfigVarMutation(appName);
-  const deleteConfigMutation = useDeleteConfigVarMutation(appName);
+  const setConfigMutation = useSetConfigVarMutation(appName, environment || undefined);
+  const deleteConfigMutation = useDeleteConfigVarMutation(appName, environment || undefined);
   const setScaleMutation = useSetScaleMutation(appName);
 
   useEffect(() => {
@@ -150,6 +159,7 @@ function AppDetailInner() {
       !domainsQuery.data ||
       !portsQuery.data ||
       !configQuery.data ||
+      !environmentsQuery.data ||
       !scaleQuery.data ||
       !processesQuery.data
     ) {
@@ -159,6 +169,7 @@ function AppDetailInner() {
     return {
       app: appQuery.data,
       deployments: deploymentsQuery.data,
+      environments: environmentsQuery.data,
       domains: domainsQuery.data,
       ports: portsQuery.data,
       config: configQuery.data,
@@ -170,6 +181,7 @@ function AppDetailInner() {
     configQuery.data,
     deploymentsQuery.data,
     domainsQuery.data,
+    environmentsQuery.data,
     portsQuery.data,
     processesQuery.data,
     scaleQuery.data,
@@ -184,6 +196,7 @@ function AppDetailInner() {
       domainsQuery,
       portsQuery,
       configQuery,
+      environmentsQuery,
       scaleQuery,
       processesQuery,
     ].some((query) => query.isPending);
@@ -195,6 +208,7 @@ function AppDetailInner() {
       domainsQuery.error,
       portsQuery.error,
       configQuery.error,
+      environmentsQuery.error,
       scaleQuery.error,
       processesQuery.error,
     ],
@@ -559,6 +573,9 @@ function AppDetailInner() {
               appName={state.app.name}
               locked={state.app.locked}
               deployments={state.deployments}
+              environments={state.environments}
+              environment={environment}
+              onEnvironmentChange={setEnvironment}
               onRefresh={refreshApp}
             />
             <DeploymentHistoryPanel appName={state.app.name} deployments={state.deployments} />
@@ -607,6 +624,9 @@ function AppDetailInner() {
         {activeTab === 'config' ? (
           <ConfigPanel
             config={state.config}
+            environments={state.environments}
+            environment={environment}
+            onEnvironmentChange={setEnvironment}
             locked={state.app.locked}
             configKey={configKey}
             configValue={configValue}
@@ -923,6 +943,9 @@ function RuntimePanel({
 
 interface ConfigPanelProps {
   config: ConfigVar[];
+  environments: Environment[];
+  environment: string;
+  onEnvironmentChange: (value: string) => void;
   locked: boolean;
   configKey: string;
   configValue: string;
@@ -937,6 +960,9 @@ interface ConfigPanelProps {
 
 function ConfigPanel({
   config,
+  environments,
+  environment,
+  onEnvironmentChange,
   locked,
   configKey,
   configValue,
@@ -959,6 +985,33 @@ function ConfigPanel({
           </p>
         </div>
         <span className="inventory-summary">{config.length} visible</span>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label" htmlFor="config-environment">
+          Viewing
+        </label>
+        <select
+          id="config-environment"
+          className="input"
+          value={environment}
+          onChange={(event) => onEnvironmentChange(event.target.value)}
+          disabled={busy !== null}
+        >
+          <option value="">App-wide values</option>
+          {environments
+            .filter((entry) => !entry.is_production)
+            .map((entry) => (
+              <option key={entry.id} value={entry.slug}>
+                {entry.name} ({entry.slug})
+              </option>
+            ))}
+        </select>
+        <p className="text-muted">
+          {environment
+            ? `Values below are what ${environment} deploys with. Saving writes an override that applies only here.`
+            : 'Saving here writes values every environment inherits.'}
+        </p>
       </div>
 
       <form onSubmit={onSubmit} className="stack-md">
@@ -1035,7 +1088,9 @@ function ConfigPanel({
                       item.value
                     )}
                   </td>
-                  <td>{item.is_global ? 'Global' : 'App'}</td>
+                  <td>
+                    {item.source === 'environment' ? 'Override' : item.is_global ? 'Global' : 'App'}
+                  </td>
                   <td>{item.encrypted ? 'Encrypted' : 'Plain'}</td>
                   <td>
                     <button

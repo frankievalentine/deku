@@ -1,6 +1,7 @@
 import { type SubmitEvent, useMemo, useRef, useState } from 'react';
 import {
   type Deployment,
+  type Environment,
   triggerArchiveDeploy,
   triggerImageDeploy,
   triggerRollback,
@@ -9,10 +10,19 @@ import ConfirmModal from './ConfirmModal';
 import StatusBadge from './StatusBadge';
 import TableScroll from './TableScroll';
 
+/** Names the environment in a notice, or nothing when deploying to production. */
+function deployTargetSuffix(environment: string): string {
+  return environment ? ` into ${environment}` : '';
+}
+
 interface AppDeployPanelProps {
   appName: string;
   locked: boolean;
   deployments: Deployment[];
+  environments: Environment[];
+  /** Slug to deploy into; empty targets production. */
+  environment: string;
+  onEnvironmentChange: (value: string) => void;
   onRefresh: () => Promise<void>;
 }
 
@@ -20,6 +30,9 @@ export default function AppDeployPanel({
   appName,
   locked,
   deployments,
+  environments,
+  environment,
+  onEnvironmentChange,
   onRefresh,
 }: AppDeployPanelProps) {
   const [imageRef, setImageRef] = useState('');
@@ -57,9 +70,11 @@ export default function AppDeployPanel({
       setBusyAction('image-deploy');
       setError(null);
       setNotice(null);
-      await triggerImageDeploy(appName, trimmedImage);
+      await triggerImageDeploy(appName, trimmedImage, environment || undefined);
       setImageRef('');
-      await refreshAfterAction(`Started image deploy for ${trimmedImage}.`);
+      await refreshAfterAction(
+        `Started image deploy for ${trimmedImage}${deployTargetSuffix(environment)}.`
+      );
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to start image deploy.');
     } finally {
@@ -83,13 +98,15 @@ export default function AppDeployPanel({
       setBusyAction('archive-deploy');
       setError(null);
       setNotice(null);
-      await triggerArchiveDeploy(appName, archiveFile);
+      await triggerArchiveDeploy(appName, archiveFile, environment || undefined);
       const fileName = archiveFile.name;
       setArchiveFile(null);
       if (archiveInputRef.current) {
         archiveInputRef.current.value = '';
       }
-      await refreshAfterAction(`Started archive deploy for ${fileName}.`);
+      await refreshAfterAction(
+        `Started archive deploy for ${fileName}${deployTargetSuffix(environment)}.`
+      );
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to upload archive.');
     } finally {
@@ -135,6 +152,28 @@ export default function AppDeployPanel({
             This app is locked. Deploy and rollback controls are disabled until it is unlocked.
           </p>
         ) : null}
+
+        <div className="form-group">
+          <label className="form-label" htmlFor="deploy-environment">
+            Deploy into
+          </label>
+          <select
+            id="deploy-environment"
+            className="input"
+            value={environment}
+            onChange={(event) => onEnvironmentChange(event.target.value)}
+            disabled={locked || busyAction !== null}
+          >
+            <option value="">production</option>
+            {environments
+              .filter((entry) => !entry.is_production)
+              .map((entry) => (
+                <option key={entry.id} value={entry.slug}>
+                  {entry.name} ({entry.slug})
+                </option>
+              ))}
+          </select>
+        </div>
 
         {notice ? <p className="callout callout-success">{notice}</p> : null}
         {error ? <p className="callout callout-danger">{error}</p> : null}

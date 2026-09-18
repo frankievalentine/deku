@@ -26,6 +26,7 @@ import {
   fetchConfig,
   fetchDeployments,
   fetchDomains,
+  fetchEnvironments,
   fetchLetsEncryptConfig,
   fetchLogs,
   fetchManagedService,
@@ -103,7 +104,10 @@ export const queryKeys = {
     deployments: (appName: string) => ['apps', 'detail', appName, 'deployments'] as const,
     domains: (appName: string) => ['apps', 'detail', appName, 'domains'] as const,
     ports: (appName: string) => ['apps', 'detail', appName, 'ports'] as const,
-    config: (appName: string) => ['apps', 'detail', appName, 'config'] as const,
+    configRoot: (appName: string) => ['apps', 'detail', appName, 'config'] as const,
+    config: (appName: string, environment?: string) =>
+      ['apps', 'detail', appName, 'config', environment ?? 'app'] as const,
+    environments: (appName: string) => ['apps', 'detail', appName, 'environments'] as const,
     scale: (appName: string) => ['apps', 'detail', appName, 'scale'] as const,
     processes: (appName: string) => ['apps', 'detail', appName, 'processes'] as const,
   },
@@ -233,10 +237,22 @@ export function appPortsQueryOptions(appName: string, options?: QueryEnabledOnly
   });
 }
 
-export function appConfigQueryOptions(appName: string, options?: QueryEnabledOnly) {
+export function appConfigQueryOptions(
+  appName: string,
+  environment?: string,
+  options?: QueryEnabledOnly
+) {
   return queryOptions({
-    queryKey: queryKeys.apps.config(appName),
-    queryFn: () => fetchConfig(appName),
+    queryKey: queryKeys.apps.config(appName, environment),
+    queryFn: () => fetchConfig(appName, environment),
+    enabled: options?.enabled ?? Boolean(appName),
+  });
+}
+
+export function appEnvironmentsQueryOptions(appName: string, options?: QueryEnabledOnly) {
+  return queryOptions({
+    queryKey: queryKeys.apps.environments(appName),
+    queryFn: () => fetchEnvironments(appName),
     enabled: options?.enabled ?? Boolean(appName),
   });
 }
@@ -484,8 +500,16 @@ export function useAppPortsQuery(appName: string, options?: QueryEnabledOnly) {
   return useQuery(appPortsQueryOptions(appName, options));
 }
 
-export function useAppConfigQuery(appName: string, options?: QueryEnabledOnly) {
-  return useQuery(appConfigQueryOptions(appName, options));
+export function useAppConfigQuery(
+  appName: string,
+  environment?: string,
+  options?: QueryEnabledOnly
+) {
+  return useQuery(appConfigQueryOptions(appName, environment, options));
+}
+
+export function useAppEnvironmentsQuery(appName: string, options?: QueryEnabledOnly) {
+  return useQuery(appEnvironmentsQueryOptions(appName, options));
 }
 
 export function useAppScaleQuery(appName: string, options?: QueryHookOptions) {
@@ -631,36 +655,48 @@ export function removeDomainMutationOptions(queryClient: QueryClientType, appNam
   });
 }
 
-export function useSetConfigVarMutation(appName: string) {
+export function useSetConfigVarMutation(appName: string, environment?: string) {
   const queryClient = useQueryClient();
 
-  return useMutation(setConfigVarMutationOptions(queryClient, appName));
+  return useMutation(setConfigVarMutationOptions(queryClient, appName, environment));
 }
 
-export function setConfigVarMutationOptions(queryClient: QueryClientType, appName: string) {
+export function setConfigVarMutationOptions(
+  queryClient: QueryClientType,
+  appName: string,
+  environment?: string
+) {
   return mutationOptions({
     mutationFn: ({ key, value }: { key: string; value: string }) =>
-      setConfigVar(appName, key, value),
+      setConfigVar(appName, key, value, environment),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.config(appName) });
+      // An app-wide write changes what every environment inherits, so the whole
+      // config branch is invalidated rather than only the key being viewed.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.configRoot(appName) });
     },
   });
 }
 
-export function useDeleteConfigVarMutation(appName: string) {
+export function useDeleteConfigVarMutation(appName: string, environment?: string) {
   const queryClient = useQueryClient();
 
-  return useMutation(deleteConfigVarMutationOptions(queryClient, appName));
+  return useMutation(deleteConfigVarMutationOptions(queryClient, appName, environment));
 }
 
-export function deleteConfigVarMutationOptions(queryClient: QueryClientType, appName: string) {
-  return mutationOptions({
-    mutationFn: (key: string) => deleteConfigVar(appName, key),
-    onMutate: async (key) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.apps.config(appName) });
-      const previousConfig = queryClient.getQueryData<ConfigVar[]>(queryKeys.apps.config(appName));
+export function deleteConfigVarMutationOptions(
+  queryClient: QueryClientType,
+  appName: string,
+  environment?: string
+) {
+  const configKey = queryKeys.apps.config(appName, environment);
 
-      queryClient.setQueryData<ConfigVar[]>(queryKeys.apps.config(appName), (current = []) =>
+  return mutationOptions({
+    mutationFn: (key: string) => deleteConfigVar(appName, key, environment),
+    onMutate: async (key) => {
+      await queryClient.cancelQueries({ queryKey: configKey });
+      const previousConfig = queryClient.getQueryData<ConfigVar[]>(configKey);
+
+      queryClient.setQueryData<ConfigVar[]>(configKey, (current = []) =>
         current.filter((entry) => entry.key !== key)
       );
 
@@ -668,11 +704,11 @@ export function deleteConfigVarMutationOptions(queryClient: QueryClientType, app
     },
     onError: (_error, _key, context) => {
       if (context?.previousConfig) {
-        queryClient.setQueryData(queryKeys.apps.config(appName), context.previousConfig);
+        queryClient.setQueryData(configKey, context.previousConfig);
       }
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.config(appName) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.configRoot(appName) });
     },
   });
 }

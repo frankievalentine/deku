@@ -42,6 +42,18 @@ export interface ConfigVar {
   encrypted?: boolean;
   /** The value could not be decrypted, e.g. the key is not configured. */
   error?: string | null;
+  /** Where the value came from: the app-wide set or an environment override. */
+  source?: 'app' | 'environment' | string;
+}
+
+export interface Environment {
+  id: string;
+  app_id: string;
+  name: string;
+  slug: string;
+  branch: string | null;
+  is_production: boolean;
+  created_at: string;
 }
 
 export interface Domain {
@@ -389,21 +401,40 @@ export function fetchDeployments(appName: string): Promise<Deployment[]> {
   return apiFetch<Deployment[]>(`/api/apps/${encodeURIComponent(appName)}/deployments`);
 }
 
-export function triggerImageDeploy(appName: string, image: string): Promise<{ message: string }> {
+export function fetchEnvironments(appName: string): Promise<Environment[]> {
+  return apiFetch<Environment[]>(`/api/apps/${encodeURIComponent(appName)}/environments`);
+}
+
+export function triggerImageDeploy(
+  appName: string,
+  image: string,
+  environment?: string
+): Promise<{ message: string }> {
+  const body: Record<string, string> = { source: 'image', image };
+  if (environment) body.environment = environment;
+
   return apiFetch<{ message: string }>(`/api/apps/${encodeURIComponent(appName)}/deploy`, {
     method: 'POST',
-    body: JSON.stringify({ source: 'image', image }),
+    body: JSON.stringify(body),
   });
 }
 
-export function triggerArchiveDeploy(appName: string, archive: File): Promise<{ message: string }> {
+export function triggerArchiveDeploy(
+  appName: string,
+  archive: File,
+  environment?: string
+): Promise<{ message: string }> {
   const formData = new FormData();
   formData.append('archive', archive);
+  const query = environment ? `?environment=${encodeURIComponent(environment)}` : '';
 
-  return apiFetch<{ message: string }>(`/api/apps/${encodeURIComponent(appName)}/deploy/archive`, {
-    method: 'POST',
-    body: formData,
-  });
+  return apiFetch<{ message: string }>(
+    `/api/apps/${encodeURIComponent(appName)}/deploy/archive${query}`,
+    {
+      method: 'POST',
+      body: formData,
+    }
+  );
 }
 
 export function triggerRollback(
@@ -416,20 +447,30 @@ export function triggerRollback(
   });
 }
 
-export function fetchConfig(appName: string): Promise<ConfigVar[]> {
-  return apiFetch<ConfigVar[]>(`/api/apps/${encodeURIComponent(appName)}/config`);
+export function fetchConfig(appName: string, environment?: string): Promise<ConfigVar[]> {
+  const query = environment ? `?environment=${encodeURIComponent(environment)}` : '';
+  return apiFetch<ConfigVar[]>(`/api/apps/${encodeURIComponent(appName)}/config${query}`);
 }
 
-export function setConfigVar(appName: string, key: string, value: string): Promise<void> {
+export function setConfigVar(
+  appName: string,
+  key: string,
+  value: string,
+  environment?: string
+): Promise<void> {
+  const body: Record<string, string> = { key, value };
+  if (environment) body.environment = environment;
+
   return apiFetch<void>(`/api/apps/${encodeURIComponent(appName)}/config`, {
     method: 'POST',
-    body: JSON.stringify({ key, value }),
+    body: JSON.stringify(body),
   });
 }
 
-export function deleteConfigVar(appName: string, key: string): Promise<void> {
+export function deleteConfigVar(appName: string, key: string, environment?: string): Promise<void> {
+  const query = environment ? `?environment=${encodeURIComponent(environment)}` : '';
   return apiFetch<void>(
-    `/api/apps/${encodeURIComponent(appName)}/config/${encodeURIComponent(key)}`,
+    `/api/apps/${encodeURIComponent(appName)}/config/${encodeURIComponent(key)}${query}`,
     {
       method: 'DELETE',
     }
