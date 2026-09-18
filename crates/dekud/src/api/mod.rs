@@ -727,7 +727,11 @@ async fn rotate_dashboard_token_inner(state: &SharedState) -> anyhow::Result<Str
         *auth = Some(dashboard_auth.clone());
     }
 
-    let mut cfg = state.config.clone();
+    // Read the settings that can change while the daemon runs rather than
+    // saving the snapshot from startup: this write replaces the whole file, so
+    // anything the snapshot predates would be silently undone — an ACME client
+    // the dashboard had just configured among it.
+    let mut cfg = current_config(state);
     cfg.dashboard_auth = Some(dashboard_auth);
     crate::config::save(&cfg)?;
 
