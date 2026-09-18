@@ -35,6 +35,11 @@ struct Zone {
 }
 
 #[derive(Deserialize)]
+struct TokenStatus {
+    status: String,
+}
+
+#[derive(Deserialize)]
 struct RecordId {
     id: String,
 }
@@ -128,6 +133,24 @@ impl CloudflareClient {
             .map_err(|error| anyhow!("{what}: Cloudflare returned an unexpected result: {error}"))
     }
 
+    /// Confirm the token works, so a bad one is reported before it is relied on.
+    pub async fn verify_token(&self) -> Result<()> {
+        let status: TokenStatus = self
+            .send(
+                self.http.get(self.endpoint("/user/tokens/verify", &[])?),
+                "verifying the Cloudflare token",
+            )
+            .await?;
+
+        if status.status != "active" {
+            anyhow::bail!(
+                "verifying the Cloudflare token: token status is '{}', expected 'active'",
+                status.status
+            );
+        }
+        Ok(())
+    }
+
     /// The zone id for a domain, looked up so the operator never pastes one.
     pub async fn zone_id(&self, zone: &str) -> Result<String> {
         let zones: Vec<Zone> = self
@@ -215,6 +238,14 @@ mod tests {
             .push((method.to_string(), path.to_string()));
     }
 
+    async fn verify(State(state): State<Arc<Mutex<Calls>>>) -> Json<serde_json::Value> {
+        record(&state, "GET", "/user/tokens/verify").await;
+        Json(serde_json::json!({
+            "success": true,
+            "result": { "id": "token-1", "status": "active" },
+        }))
+    }
+
     async fn zones(
         State(state): State<Arc<Mutex<Calls>>>,
         Query(params): Query<HashMap<String, String>>,
@@ -273,6 +304,7 @@ mod tests {
     async fn mock_cloudflare() -> (String, Arc<Mutex<Calls>>) {
         let state: Arc<Mutex<Calls>> = Arc::default();
         let app = Router::new()
+            .route("/user/tokens/verify", get(verify))
             .route("/zones", get(zones))
             .route(
                 "/zones/{zone_id}/dns_records",
@@ -302,9 +334,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolves_a_zone() {
+    async fn verifies_the_token_and_resolves_a_zone() {
         let (client, _calls) = client().await;
 
+        client.verify_token().await.expect("token verifies");
         assert_eq!(client.zone_id("apps.test").await.expect("zone"), "zone-1");
     }
 

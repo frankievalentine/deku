@@ -536,22 +536,47 @@ impl Default for DekuConfig {
     }
 }
 
+/// Where a resolved ACME API token was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenSource {
+    Environment,
+    Inline,
+    File,
+}
+
+/// An ACME API token and where it came from, so a surface can report its origin
+/// without ever returning the secret.
+#[derive(Debug, Clone)]
+pub struct AcmeToken {
+    pub value: String,
+    pub source: TokenSource,
+}
+
 impl DekuConfig {
     /// Resolve the ACME DNS provider token, if one is configured.
     ///
     /// Precedence is `DEKU_ACME_API_TOKEN`, then `[acme] api_token`, then
     /// `api_token_file`. `Ok(None)` means the token has not been provided yet,
     /// which is only an error once ACME is enabled.
-    pub fn acme_api_token(&self) -> Result<Option<String>> {
+    pub fn acme_api_token(&self) -> Result<Option<AcmeToken>> {
         if let Ok(value) = std::env::var("DEKU_ACME_API_TOKEN") {
-            if !value.trim().is_empty() {
-                return Ok(Some(value.trim().to_string()));
+            let value = value.trim();
+            if !value.is_empty() {
+                return Ok(Some(AcmeToken {
+                    value: value.to_string(),
+                    source: TokenSource::Environment,
+                }));
             }
         }
 
         if let Some(token) = self.acme.api_token.as_deref() {
-            if !token.trim().is_empty() {
-                return Ok(Some(token.trim().to_string()));
+            let token = token.trim();
+            if !token.is_empty() {
+                return Ok(Some(AcmeToken {
+                    value: token.to_string(),
+                    source: TokenSource::Inline,
+                }));
             }
         }
 
@@ -567,7 +592,10 @@ impl DekuConfig {
                 if value.is_empty() {
                     anyhow::bail!("ACME API token file {} is empty", path.display());
                 }
-                Ok(Some(value.to_string()))
+                Ok(Some(AcmeToken {
+                    value: value.to_string(),
+                    source: TokenSource::File,
+                }))
             }
             None => Ok(None),
         }
@@ -625,7 +653,7 @@ pub(crate) fn secure_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
     use std::io::Write;
 
     #[cfg(unix)]
@@ -781,7 +809,9 @@ mod tests {
             .to_string()
             .contains("failed to read encryption key file"));
     }
-    use super::{secure_dir, write_private_file, AcmeConfig, DekuConfig, EncryptionConfig};
+    use super::{
+        secure_dir, write_private_file, AcmeConfig, DekuConfig, EncryptionConfig, TokenSource,
+    };
     use std::path::PathBuf;
 
     #[cfg(unix)]
@@ -979,10 +1009,9 @@ mod tests {
             },
             ..DekuConfig::default()
         };
-        assert_eq!(
-            inline.acme_api_token().expect("token").as_deref(),
-            Some("inline-token")
-        );
+        let token = inline.acme_api_token().expect("token").expect("token");
+        assert_eq!(token.value, "inline-token");
+        assert_eq!(token.source, TokenSource::Inline);
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("cloudflare.token");
@@ -996,10 +1025,9 @@ mod tests {
             },
             ..DekuConfig::default()
         };
-        assert_eq!(
-            from_file.acme_api_token().expect("token").as_deref(),
-            Some("file-token")
-        );
+        let token = from_file.acme_api_token().expect("token").expect("token");
+        assert_eq!(token.value, "file-token");
+        assert_eq!(token.source, TokenSource::File);
     }
 
     #[test]

@@ -8,6 +8,7 @@
 //! Handlers are annotated with `#[utoipa::path]` incrementally; `ApiDoc` lists
 //! the annotated subset and the completeness test guards that list.
 
+use super::acme::{__path_get_acme, __path_put_acme, __path_verify_acme};
 use super::console::{__path_exec, __path_run};
 use super::services::{
     __path_cron_add, __path_cron_list, __path_cron_remove, __path_delete_backup_schedule,
@@ -373,6 +374,9 @@ pub struct PluginRuntimeSchema {
         delete_backup_schedule,
         get_backup_schedule,
         le_config,
+        get_acme,
+        put_acme,
+        verify_acme,
         le_disable,
         le_enable,
         le_get_config,
@@ -592,6 +596,7 @@ mod tests {
         ("get", "/api/openapi.json"),
         ("get", "/api/events"),
         ("get", "/api/events/stream"),
+        ("get", "/api/acme"),
         ("get", "/api/letsencrypt/config"),
         ("get", "/api/letsencrypt/status/{app}"),
         ("get", "/api/mysql/services"),
@@ -612,6 +617,7 @@ mod tests {
         ("get", "/api/redis/services/{name}/logs"),
         ("get", "/api/registry"),
         ("get", "/api/routing"),
+        ("put", "/api/acme"),
         ("get", "/api/routing/status"),
         ("get", "/api/routing/status/{name}"),
         ("get", "/api/services/{type}"),
@@ -652,6 +658,7 @@ mod tests {
         ("post", "/api/build-host/init"),
         ("post", "/api/dashboard/session"),
         ("post", "/api/dashboard/token"),
+        ("post", "/api/acme/verify"),
         ("post", "/api/letsencrypt/config"),
         ("post", "/api/letsencrypt/disable/{app}"),
         ("post", "/api/letsencrypt/enable/{app}"),

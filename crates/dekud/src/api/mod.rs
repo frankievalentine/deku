@@ -25,17 +25,20 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use crate::config::{BuildHostConfig, DekuConfig, RegistryConfig};
+
 use crate::container::DockerClient;
 use crate::db::queries;
 use crate::deploy::{DeployRequest, DeploySource};
 use crate::events::EventSender;
 use crate::version::{self, CachedVersionStatus};
+use acme as acme_settings;
 use deku_core::{
     auth::{issue_dashboard_token, DashboardTokenState},
     types::{NewApp, ObjectStoreConfig, Upstream},
 };
 use deku_plugin_sdk::context::AppContext;
 
+mod acme;
 pub mod auth;
 mod console;
 pub mod openapi;
@@ -317,6 +320,12 @@ fn build_api_router(state: SharedState) -> Router {
             "/api/letsencrypt/config",
             get(services::le_get_config).post(services::le_config),
         )
+        // Automatic certificates
+        .route(
+            "/api/acme",
+            get(acme_settings::get_acme).put(acme_settings::put_acme),
+        )
+        .route("/api/acme/verify", post(acme_settings::verify_acme))
         // Networks
         .route(
             "/api/networks",
@@ -419,22 +428,24 @@ async fn acme_dns_hook(
         return bad_request("missing x-deku-acme-keyauth header").into_response();
     };
 
+    // Read the config fresh: a token or provider saved from the dashboard takes
+    // effect without restarting the daemon.
+    let cfg = current_config(&state);
+
     // Anything that can write to the socket can reach this, so the domain is
     // checked before any record is touched.
-    if let Err(error) =
-        crate::acme::authorize_domain(state.config.global_domain.as_deref(), &domain)
-    {
+    if let Err(error) = crate::acme::authorize_domain(cfg.global_domain.as_deref(), &domain) {
         tracing::warn!(%domain, "rejected an ACME challenge: {error}");
         return bad_request(error.to_string()).into_response();
     }
 
-    let client = match crate::acme::provider_client(&state.config) {
+    let client = match crate::acme::provider_client(&cfg) {
         Ok(Some(client)) => client,
         Ok(None) => return bad_request("ACME is not enabled").into_response(),
         Err(error) => return internal_error(error).into_response(),
     };
 
-    let Some(zone) = state.config.global_domain.as_deref() else {
+    let Some(zone) = cfg.global_domain.as_deref() else {
         return bad_request("no global_domain is configured").into_response();
     };
 
@@ -1186,6 +1197,7 @@ fn current_config(state: &SharedState) -> DekuConfig {
             cfg.registry = fresh.registry;
             cfg.build_host = fresh.build_host;
             cfg.hooks = fresh.hooks;
+            cfg.acme = fresh.acme;
             cfg
         }
         Err(_) => state.config.clone(),

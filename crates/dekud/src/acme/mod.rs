@@ -14,7 +14,7 @@ use anyhow::{anyhow, Result};
 
 use crate::config::DekuConfig;
 
-use cloudflare::CloudflareClient;
+pub use cloudflare::CloudflareClient;
 
 /// Which half of a DNS-01 challenge Angie is asking for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +81,26 @@ pub async fn apply_challenge(
     Ok(())
 }
 
+/// Where the provider API token is stored when it is set from a UI.
+///
+/// The token lives in its own `0600` file rather than in the daemon config, so
+/// a copy of `config.toml` never carries the secret.
+pub fn api_token_path(cfg: &DekuConfig) -> std::path::PathBuf {
+    cfg.data_dir.join("acme-api-token")
+}
+
+/// Store the provider API token, returning the path it was written to.
+pub fn store_api_token(cfg: &DekuConfig, token: &str) -> Result<std::path::PathBuf> {
+    let token = token.trim();
+    if token.is_empty() {
+        anyhow::bail!("the API token cannot be empty");
+    }
+
+    let path = api_token_path(cfg);
+    crate::config::write_private_file(&path, token.as_bytes())?;
+    Ok(path)
+}
+
 /// The provider client for the configured provider, when ACME is enabled.
 ///
 /// `Ok(None)` means the operator has not turned ACME on, which is not an error.
@@ -97,7 +117,7 @@ pub fn provider_client(cfg: &DekuConfig) -> Result<Option<CloudflareClient>> {
     })?;
 
     match cfg.acme.provider.as_str() {
-        "cloudflare" => Ok(Some(CloudflareClient::new(token)?)),
+        "cloudflare" => Ok(Some(CloudflareClient::new(token.value)?)),
         other => Err(anyhow!(
             "unknown ACME DNS provider '{other}'; supported providers: cloudflare"
         )),
