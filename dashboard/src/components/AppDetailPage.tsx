@@ -1,10 +1,12 @@
+// biome-ignore-all lint/a11y/noNoninteractiveElementToInteractiveRole: Basecoat's documented tabs contract is <nav role="tablist">, with each tab button carrying role="tab".
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  type KeyboardEvent,
+  type ReactNode,
   type RefObject,
   type SubmitEvent,
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -38,12 +40,20 @@ import {
   useSetConfigVarMutation,
   useSetScaleMutation,
 } from '../lib/query';
+import AppConsolePanel from './AppConsolePanel';
 import AppDeployPanel from './AppDeployPanel';
+import AppDeployTokensPanel from './AppDeployTokensPanel';
+import AppEnvironmentsPanel from './AppEnvironmentsPanel';
+import AppHealthChecksPanel from './AppHealthChecksPanel';
 import AppInfrastructurePanel from './AppInfrastructurePanel';
+import AppLimitsPanel from './AppLimitsPanel';
+import AppObjectStorePanel from './AppObjectStorePanel';
 import AppOperationsPanel from './AppOperationsPanel';
 import AppRoutingPanel from './AppRoutingPanel';
+import AppTrafficPanel from './AppTrafficPanel';
 import ConnectScreen from './ConnectScreen';
 import LogStream from './LogStream';
+import SelectField from './SelectField';
 import StatusBadge from './StatusBadge';
 import TableScroll from './TableScroll';
 
@@ -58,7 +68,15 @@ interface AppDataState {
   processes: ProcessRecord[];
 }
 
-type AppTabId = 'deploy' | 'proxy' | 'runtime' | 'config' | 'infra' | 'logs' | 'settings';
+type AppTabId =
+  | 'deploy'
+  | 'proxy'
+  | 'traffic'
+  | 'runtime'
+  | 'config'
+  | 'infra'
+  | 'logs'
+  | 'settings';
 type FlashTone = 'success' | 'danger';
 
 interface FlashMessage {
@@ -69,7 +87,6 @@ interface FlashMessage {
 interface AppTabDefinition {
   id: AppTabId;
   label: string;
-  summary: string;
 }
 
 const DEFAULT_TAB: AppTabId = 'deploy';
@@ -106,8 +123,9 @@ function AppDetailInner() {
   // the API does when no environment is named.
   const [environment, setEnvironment] = useState('');
   const [tabsScrollable, setTabsScrollable] = useState(false);
-  const tabRefs = useRef(new Map<AppTabId, HTMLButtonElement>());
   const tabStripRef = useRef<HTMLDivElement | null>(null);
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
   const domainInputRef = useRef<HTMLInputElement | null>(null);
   const configKeyInputRef = useRef<HTMLInputElement | null>(null);
   const scaleCountInputRef = useRef<HTMLInputElement | null>(null);
@@ -151,6 +169,13 @@ function AppDetailInner() {
       window.removeEventListener('popstate', syncFromLocation);
     };
   }, []);
+
+  // Basecoat's tabs own keyboard navigation and selection on the DOM, and it
+  // exposes no change event, so mirror the selected tab back into React state
+  // and the hash. Without this, a re-render would reset Basecoat's selection.
+  const syncTabFromList = useEffectEvent((nextTab: AppTabId) => {
+    handleTabChange(nextTab);
+  });
 
   const state = useMemo<AppDataState | null>(() => {
     if (
@@ -240,7 +265,7 @@ function AppDetailInner() {
     if (!state) return;
 
     const strip = tabStripRef.current?.querySelector('.app-tabs-track');
-    const tab = tabRefs.current.get(activeTab);
+    const tab = document.getElementById(`tab-${activeTab}`);
     if (!strip || !tab) return;
 
     const stripStart = strip.scrollLeft;
@@ -256,57 +281,45 @@ function AppDetailInner() {
     });
   }, [activeTab, state]);
 
-  const tabs = useMemo<AppTabDefinition[]>(() => {
-    if (!state) {
-      return [
-        { id: 'deploy', label: 'Deploy', summary: 'Deployment history' },
-        { id: 'proxy', label: 'Proxy', summary: 'Domains and TLS' },
-        { id: 'runtime', label: 'Runtime', summary: 'Scale and processes' },
-        { id: 'config', label: 'Config', summary: 'Environment vars' },
-        { id: 'infra', label: 'Infra', summary: 'Networks and storage' },
-        { id: 'logs', label: 'Logs', summary: 'Live output' },
-        { id: 'settings', label: 'Settings', summary: 'Metadata and delete' },
-      ];
-    }
+  useEffect(() => {
+    if (!state) return;
 
-    return [
-      {
-        id: 'deploy',
-        label: 'Deploy',
-        summary: `${state.deployments.length} deployment${state.deployments.length === 1 ? '' : 's'}`,
-      },
-      {
-        id: 'proxy',
-        label: 'Proxy',
-        summary: `${state.domains.length} domain${state.domains.length === 1 ? '' : 's'}`,
-      },
-      {
-        id: 'runtime',
-        label: 'Runtime',
-        summary: `${state.processes.length} process${state.processes.length === 1 ? '' : 'es'}`,
-      },
-      {
-        id: 'config',
-        label: 'Config',
-        summary: `${state.config.length} var${state.config.length === 1 ? '' : 's'}`,
-      },
-      {
-        id: 'infra',
-        label: 'Infra',
-        summary: `${state.ports.length} published port${state.ports.length === 1 ? '' : 's'}`,
-      },
-      {
-        id: 'logs',
-        label: 'Logs',
-        summary: state.app.status === 'deployed' ? 'Streaming live' : 'Recent events',
-      },
-      {
-        id: 'settings',
-        label: 'Settings',
-        summary: state.app.locked ? 'Locked' : 'Writable',
-      },
-    ];
+    const list = tabStripRef.current?.querySelector('[role="tablist"]');
+    if (!list) return;
+
+    const observer = new MutationObserver(() => {
+      const selected = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      const nextTab = selected?.id.replace(/^tab-/, '') as AppTabId | undefined;
+      if (!nextTab || !tabOrder.includes(nextTab) || nextTab === activeTabRef.current) return;
+      syncTabFromList(nextTab);
+    });
+    observer.observe(list, { subtree: true, attributeFilter: ['aria-selected'] });
+    return () => observer.disconnect();
   }, [state]);
+
+  const tabs = useMemo<AppTabDefinition[]>(() => {
+    const labels: AppTabId[] = [
+      'deploy',
+      'proxy',
+      'traffic',
+      'runtime',
+      'config',
+      'infra',
+      'logs',
+      'settings',
+    ];
+    const names: Record<AppTabId, string> = {
+      deploy: 'Deploy',
+      proxy: 'Domains',
+      traffic: 'Traffic',
+      runtime: 'Processes',
+      config: 'Config',
+      infra: 'Infrastructure',
+      logs: 'Logs',
+      settings: 'Settings',
+    };
+    return labels.map((id) => ({ id, label: names[id] }));
+  }, []);
 
   async function handleAddDomain(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -442,42 +455,6 @@ function AppDetailInner() {
     window.history.replaceState({}, '', nextUrl);
   }
 
-  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, tabId: AppTabId) {
-    const currentIndex = tabOrder.indexOf(tabId);
-    let nextIndex: number;
-
-    switch (event.key) {
-      case 'ArrowRight':
-      case 'ArrowDown':
-        nextIndex = (currentIndex + 1) % tabOrder.length;
-        break;
-      case 'ArrowLeft':
-      case 'ArrowUp':
-        nextIndex = (currentIndex - 1 + tabOrder.length) % tabOrder.length;
-        break;
-      case 'Home':
-        nextIndex = 0;
-        break;
-      case 'End':
-        nextIndex = tabOrder.length - 1;
-        break;
-      default:
-        return;
-    }
-
-    event.preventDefault();
-    selectTab(tabOrder[nextIndex], true);
-  }
-
-  function selectTab(nextTab: AppTabId, focusTab: boolean) {
-    handleTabChange(nextTab);
-    if (focusTab) {
-      window.requestAnimationFrame(() => {
-        tabRefs.current.get(nextTab)?.focus();
-      });
-    }
-  }
-
   if (!appName) {
     return (
       <div className="panel empty-state">
@@ -521,8 +498,13 @@ function AppDetailInner() {
       </header>
 
       <section className="panel stack-md">
-        <div className={`app-tabs${tabsScrollable ? ' is-scrollable' : ''}`} ref={tabStripRef}>
-          <div className="app-tabs-track" role="tablist" aria-label={`${state.app.name} sections`}>
+        <div className={`tabs app-tabs${tabsScrollable ? ' is-scrollable' : ''}`} ref={tabStripRef}>
+          <nav
+            className="app-tabs-track"
+            role="tablist"
+            aria-orientation="horizontal"
+            aria-label={`${state.app.name} sections`}
+          >
             {tabs.map((tab) => (
               <button
                 key={tab.id}
@@ -532,142 +514,171 @@ function AppDetailInner() {
                 aria-selected={activeTab === tab.id}
                 aria-controls={`panel-${tab.id}`}
                 tabIndex={activeTab === tab.id ? 0 : -1}
-                ref={(element) => {
-                  if (element) {
-                    tabRefs.current.set(tab.id, element);
-                  } else {
-                    tabRefs.current.delete(tab.id);
-                  }
-                }}
-                className={`app-tab${activeTab === tab.id ? ' is-selected' : ''}`}
-                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
-                onClick={() => selectTab(tab.id, false)}
+                className="app-tab"
+                onClick={() => handleTabChange(tab.id)}
               >
-                <span className="app-tab-label">{tab.label}</span>
-                <span className="app-tab-summary">{tab.summary}</span>
+                {tab.label}
               </button>
             ))}
-          </div>
-        </div>
+          </nav>
 
-        {state.app.locked ? (
-          <p className="callout callout-warning">
-            This app is locked. Mutation controls remain visible, but writes are disabled until the
-            lock is lifted.
-          </p>
-        ) : null}
-        {loadError ? <p className="callout callout-danger">{loadError}</p> : null}
-        {flash ? <p className={`callout callout-${flash.tone}`}>{flash.text}</p> : null}
-      </section>
+          {state.app.locked ? (
+            <p className="callout callout-warning">
+              This app is locked. Changes stay visible but are disabled until it is unlocked.
+            </p>
+          ) : null}
+          {loadError ? <p className="callout callout-danger">{loadError}</p> : null}
+          {flash ? <p className={`callout callout-${flash.tone}`}>{flash.text}</p> : null}
 
-      <div
-        id={`panel-${activeTab}`}
-        role="tabpanel"
-        aria-labelledby={`tab-${activeTab}`}
-        className="section-fade"
-      >
-        {activeTab === 'deploy' ? (
-          <div className="stack-lg">
-            <AppDeployPanel
-              key={state.app.name}
-              appName={state.app.name}
-              locked={state.app.locked}
-              deployments={state.deployments}
-              environments={state.environments}
-              environment={environment}
-              onEnvironmentChange={setEnvironment}
-              onRefresh={refreshApp}
-            />
-            <DeploymentHistoryPanel appName={state.app.name} deployments={state.deployments} />
-          </div>
-        ) : null}
+          <TabPanel id="deploy" active={activeTab}>
+            <div className="stack-lg">
+              <AppDeployPanel
+                key={state.app.name}
+                appName={state.app.name}
+                locked={state.app.locked}
+                deployments={state.deployments}
+                environments={state.environments}
+                environment={environment}
+                onEnvironmentChange={setEnvironment}
+                onRefresh={refreshApp}
+              />
+              <DeploymentHistoryPanel appName={state.app.name} deployments={state.deployments} />
+              <AppHealthChecksPanel appName={state.app.name} locked={state.app.locked} />
+              <AppEnvironmentsPanel
+                appName={state.app.name}
+                locked={state.app.locked}
+                environments={state.environments}
+                onRefresh={refreshApp}
+              />
+              <AppDeployTokensPanel appName={state.app.name} locked={state.app.locked} />
+            </div>
+          </TabPanel>
 
-        {activeTab === 'proxy' ? (
-          <div className="stack-lg">
-            <DomainPanel
-              domains={state.domains}
-              locked={state.app.locked}
-              busy={busy}
-              value={domainDraft}
-              error={domainError}
-              inputRef={domainInputRef}
-              onDraftChange={setDomainDraft}
-              onSubmit={handleAddDomain}
-              onRemove={handleRemoveDomain}
-            />
-            <AppRoutingPanel
-              key={`${state.app.name}:${state.domains.length}:${state.app.tls_enabled}`}
+          <TabPanel id="proxy" active={activeTab}>
+            <div className="stack-lg">
+              <DomainPanel
+                domains={state.domains}
+                locked={state.app.locked}
+                busy={busy}
+                value={domainDraft}
+                error={domainError}
+                inputRef={domainInputRef}
+                onDraftChange={setDomainDraft}
+                onSubmit={handleAddDomain}
+                onRemove={handleRemoveDomain}
+              />
+              <AppRoutingPanel
+                key={`${state.app.name}:${state.domains.length}:${state.app.tls_enabled}`}
+                appName={state.app.name}
+                locked={state.app.locked}
+                onAppRefresh={refreshApp}
+              />
+            </div>
+          </TabPanel>
+
+          <TabPanel id="traffic" active={activeTab}>
+            <AppTrafficPanel
               appName={state.app.name}
               locked={state.app.locked}
               onAppRefresh={refreshApp}
             />
-          </div>
-        ) : null}
+          </TabPanel>
 
-        {activeTab === 'runtime' ? (
-          <RuntimePanel
-            appName={state.app.name}
-            locked={state.app.locked}
-            scales={state.scales}
-            processes={state.processes}
-            scaleProcess={scaleProcess}
-            scaleCount={scaleCount}
-            error={scaleError}
-            countInputRef={scaleCountInputRef}
-            busy={busy}
-            onScaleProcessChange={setScaleProcess}
-            onScaleCountChange={setScaleCount}
-            onSubmit={handleSetScale}
-          />
-        ) : null}
+          <TabPanel id="runtime" active={activeTab}>
+            <section className="panel-grid">
+              <RuntimePanel
+                locked={state.app.locked}
+                scales={state.scales}
+                scaleProcess={scaleProcess}
+                scaleCount={scaleCount}
+                error={scaleError}
+                countInputRef={scaleCountInputRef}
+                busy={busy}
+                onScaleProcessChange={setScaleProcess}
+                onScaleCountChange={setScaleCount}
+                onSubmit={handleSetScale}
+              />
+              <AppLimitsPanel appName={state.app.name} locked={state.app.locked} />
+              <ProcessInventory appName={state.app.name} processes={state.processes} />
+              <AppConsolePanel
+                appName={state.app.name}
+                locked={state.app.locked}
+                className="panel-span-full"
+              />
+            </section>
+          </TabPanel>
 
-        {activeTab === 'config' ? (
-          <ConfigPanel
-            config={state.config}
-            environments={state.environments}
-            environment={environment}
-            onEnvironmentChange={setEnvironment}
-            locked={state.app.locked}
-            configKey={configKey}
-            configValue={configValue}
-            error={configError}
-            keyInputRef={configKeyInputRef}
-            busy={busy}
-            onConfigKeyChange={setConfigKey}
-            onConfigValueChange={setConfigValue}
-            onSubmit={handleSetConfig}
-            onRemove={handleRemoveConfig}
-          />
-        ) : null}
-
-        {activeTab === 'infra' ? (
-          <AppInfrastructurePanel
-            key={state.app.name}
-            appName={state.app.name}
-            locked={state.app.locked}
-          />
-        ) : null}
-
-        {activeTab === 'logs' ? (
-          <article className="panel stack-md">
-            <div className="stack-sm">
-              <p className="eyebrow">Streaming output</p>
-              <h2 className="section-title">Live events and logs</h2>
+          <TabPanel id="config" active={activeTab}>
+            <div className="stack-lg">
+              <ConfigPanel
+                config={state.config}
+                environments={state.environments}
+                environment={environment}
+                onEnvironmentChange={setEnvironment}
+                locked={state.app.locked}
+                configKey={configKey}
+                configValue={configValue}
+                error={configError}
+                keyInputRef={configKeyInputRef}
+                busy={busy}
+                onConfigKeyChange={setConfigKey}
+                onConfigValueChange={setConfigValue}
+                onSubmit={handleSetConfig}
+                onRemove={handleRemoveConfig}
+              />
+              <AppObjectStorePanel appName={state.app.name} locked={state.app.locked} />
             </div>
-            <LogStream appName={state.app.name} />
-          </article>
-        ) : null}
+          </TabPanel>
 
-        {activeTab === 'settings' ? (
-          <AppOperationsPanel
-            appId={state.app.id}
-            appName={state.app.name}
-            createdAt={state.app.created_at}
-            locked={state.app.locked}
-            status={state.app.status}
-          />
-        ) : null}
-      </div>
+          <TabPanel id="infra" active={activeTab}>
+            <AppInfrastructurePanel
+              key={state.app.name}
+              appName={state.app.name}
+              locked={state.app.locked}
+            />
+          </TabPanel>
+
+          <TabPanel id="logs" active={activeTab}>
+            <article className="panel stack-md">
+              <div className="stack-sm">
+                <p className="eyebrow">Streaming output</p>
+                <h2 className="section-title">Live events and logs</h2>
+              </div>
+              <LogStream appName={state.app.name} />
+            </article>
+          </TabPanel>
+
+          <TabPanel id="settings" active={activeTab}>
+            <AppOperationsPanel
+              appId={state.app.id}
+              appName={state.app.name}
+              createdAt={state.app.created_at}
+              locked={state.app.locked}
+              status={state.app.status}
+            />
+          </TabPanel>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+interface TabPanelProps {
+  id: AppTabId;
+  active: AppTabId;
+  children: ReactNode;
+}
+
+function TabPanel({ id, active, children }: TabPanelProps) {
+  return (
+    <div
+      id={`panel-${id}`}
+      role="tabpanel"
+      aria-labelledby={`tab-${id}`}
+      tabIndex={-1}
+      hidden={active !== id}
+    >
+      {active === id ? <div className="section-fade">{children}</div> : null}
     </div>
   );
 }
@@ -781,10 +792,8 @@ function DomainPanel({
 }
 
 interface RuntimePanelProps {
-  appName: string;
   locked: boolean;
   scales: ScaleMap;
-  processes: ProcessRecord[];
   scaleProcess: string;
   scaleCount: string;
   error: string | null;
@@ -796,10 +805,8 @@ interface RuntimePanelProps {
 }
 
 function RuntimePanel({
-  appName,
   locked,
   scales,
-  processes,
   scaleProcess,
   scaleCount,
   error,
@@ -810,13 +817,13 @@ function RuntimePanel({
   onSubmit,
 }: RuntimePanelProps) {
   return (
-    <section className="panel-grid">
+    <>
       <article className="panel stack-md">
         <div className="stack-sm">
           <p className="eyebrow">Runtime</p>
           <h2 className="section-title">Scale</h2>
           <p className="page-copy">
-            Set desired replica counts per process type. Actual container state appears beside it.
+            Set desired replica counts per process type. Actual container state appears below.
           </p>
         </div>
 
@@ -879,65 +886,74 @@ function RuntimePanel({
           </dl>
         )}
       </article>
+    </>
+  );
+}
 
-      <article className="panel stack-md">
-        <div className="panel-heading panel-heading-top">
-          <div className="stack-sm panel-heading-copy">
-            <p className="eyebrow">Live runtime</p>
-            <h2 className="section-title">Process inventory</h2>
-          </div>
-          <span className="inventory-summary">
-            {processes.length} container{processes.length === 1 ? '' : 's'}
-          </span>
+interface ProcessInventoryProps {
+  appName: string;
+  processes: ProcessRecord[];
+}
+
+function ProcessInventory({ appName, processes }: ProcessInventoryProps) {
+  return (
+    <article className="panel stack-md panel-span-full">
+      <div className="panel-heading panel-heading-top">
+        <div className="stack-sm panel-heading-copy">
+          <p className="eyebrow">Live runtime</p>
+          <h2 className="section-title">Process inventory</h2>
         </div>
+        <span className="inventory-summary">
+          {processes.length} container{processes.length === 1 ? '' : 's'}
+        </span>
+      </div>
 
-        {processes.length === 0 ? (
-          <p className="text-muted">
-            No containers are currently recorded for this app. Deploy or scale the app to inspect
-            runtime process state here.
-          </p>
-        ) : (
-          <TableScroll>
-            <table className="table">
-              <caption className="sr-only">Running containers for this app</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Process</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Port</th>
-                  <th scope="col">Container</th>
-                  <th scope="col">Deployment</th>
-                  <th scope="col">Started</th>
+      {processes.length === 0 ? (
+        <p className="text-muted">
+          No containers are currently recorded for this app. Deploy or scale the app to inspect
+          runtime process state here.
+        </p>
+      ) : (
+        <TableScroll>
+          <table className="table">
+            <caption className="sr-only">Running containers for this app</caption>
+            <thead>
+              <tr>
+                <th scope="col">Process</th>
+                <th scope="col">Status</th>
+                <th scope="col">Port</th>
+                <th scope="col">Container</th>
+                <th scope="col">Deployment</th>
+                <th scope="col">Started</th>
+              </tr>
+            </thead>
+            <tbody>
+              {processes.map((process) => (
+                <tr key={process.container_id}>
+                  <td className="font-mono">{process.process_type}</td>
+                  <td>
+                    <StatusBadge status={processStatus(process.status)} size="sm" />
+                  </td>
+                  <td className="font-mono">
+                    {process.host_port > 0 ? String(process.host_port) : 'internal'}
+                  </td>
+                  <td className="font-mono">{truncateId(process.container_id)}</td>
+                  <td>
+                    <a
+                      href={`/deployments?app=${encodeURIComponent(appName)}&id=${process.deployment_id}`}
+                      className="font-mono"
+                    >
+                      {truncateId(process.deployment_id)}
+                    </a>
+                  </td>
+                  <td className="font-mono">{formatDate(process.created_at)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {processes.map((process) => (
-                  <tr key={process.container_id}>
-                    <td className="font-mono">{process.process_type}</td>
-                    <td>
-                      <StatusBadge status={processStatus(process.status)} size="sm" />
-                    </td>
-                    <td className="font-mono">
-                      {process.host_port > 0 ? String(process.host_port) : 'internal'}
-                    </td>
-                    <td className="font-mono">{truncateId(process.container_id)}</td>
-                    <td>
-                      <a
-                        href={`/deployments?app=${encodeURIComponent(appName)}&id=${process.deployment_id}`}
-                        className="font-mono"
-                      >
-                        {truncateId(process.deployment_id)}
-                      </a>
-                    </td>
-                    <td className="font-mono">{formatDate(process.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
-        )}
-      </article>
-    </section>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
+      )}
+    </article>
   );
 }
 
@@ -991,22 +1007,19 @@ function ConfigPanel({
         <label className="form-label" htmlFor="config-environment">
           Viewing
         </label>
-        <select
+        <SelectField
           id="config-environment"
-          className="input"
           value={environment}
-          onChange={(event) => onEnvironmentChange(event.target.value)}
+          onChange={onEnvironmentChange}
+          placeholder="App-wide values"
           disabled={busy !== null}
-        >
-          <option value="">App-wide values</option>
-          {environments
-            .filter((entry) => !entry.is_production)
-            .map((entry) => (
-              <option key={entry.id} value={entry.slug}>
-                {entry.name} ({entry.slug})
-              </option>
-            ))}
-        </select>
+          options={[
+            { value: '', label: 'App-wide values' },
+            ...environments
+              .filter((entry) => !entry.is_production)
+              .map((entry) => ({ value: entry.slug, label: entry.name })),
+          ]}
+        />
         <p className="text-muted">
           {environment
             ? `Values below are what ${environment} deploys with. Saving writes an override that applies only here.`
@@ -1248,10 +1261,20 @@ function renderAppDetailTabSkeleton(activeTab: AppTabId) {
       );
     case 'runtime':
       return (
-        <section className="panel-grid">
-          <SkeletonPanelHeaderCard titleWidth="w-24" bodyLines={2} />
-          <SkeletonPanelHeaderCard summaryWidth="w-28" titleWidth="w-40" bodyLines={0} />
+        <section className="stack-lg">
+          <div className="panel-grid">
+            <SkeletonPanelHeaderCard titleWidth="w-24" bodyLines={2} />
+            <SkeletonPanelHeaderCard summaryWidth="w-28" titleWidth="w-40" bodyLines={0} />
+          </div>
+          <SkeletonPanelHeaderCard summaryWidth="w-24" titleWidth="w-40" bodyLines={2} />
         </section>
+      );
+    case 'traffic':
+      return (
+        <div className="stack-lg">
+          <SkeletonPanelHeaderCard summaryWidth="w-20" titleWidth="w-40" bodyLines={2} />
+          <SkeletonPanelHeaderCard summaryWidth="w-20" titleWidth="w-40" bodyLines={2} />
+        </div>
       );
     case 'config':
       return <SkeletonPanelHeaderCard summaryWidth="w-20" titleWidth="w-32" bodyLines={2} />;
@@ -1397,7 +1420,16 @@ function SkeletonBlock({ className }: { className: string }) {
   return <div className={`app-skeleton-block animate-pulse rounded-md ${className}`} />;
 }
 
-const tabOrder: AppTabId[] = ['deploy', 'proxy', 'runtime', 'config', 'infra', 'logs', 'settings'];
+const tabOrder: AppTabId[] = [
+  'deploy',
+  'proxy',
+  'traffic',
+  'runtime',
+  'config',
+  'infra',
+  'logs',
+  'settings',
+];
 
 function skeletonItems(prefix: string, count: number): string[] {
   return Array.from({ length: count }, (_, index) => `${prefix}-${index}`);

@@ -23,6 +23,8 @@ import {
 import { SERVICE_KIND_DESCRIPTIONS, SERVICE_KIND_LABELS } from '../lib/service-meta';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
+import SelectField, { type SelectFieldHandle } from './SelectField';
+import ServiceBackupSchedule from './ServiceBackupSchedule';
 import ServiceStateBadge from './ServiceStateBadge';
 import Spinner from './Spinner';
 import TableScroll from './TableScroll';
@@ -70,6 +72,7 @@ function ServicesInner() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [activeKind, setActiveKind] = useState<ManagedServiceKind>('postgres');
+  const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -77,7 +80,7 @@ function ServicesInner() {
   const [unlinkTarget, setUnlinkTarget] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null);
   const nameInput = useRef<HTMLInputElement>(null);
-  const linkSelect = useRef<HTMLSelectElement>(null);
+  const linkSelect = useRef<SelectFieldHandle>(null);
   const overviewQuery = useServicesOverviewQuery();
   const createManagedServiceMutation = useCreateManagedServiceMutation();
   const deleteManagedServiceMutation = useDeleteManagedServiceMutation();
@@ -118,11 +121,6 @@ function ServicesInner() {
     setSelectedNames((current) => chooseSelectedNames(current, servicesByKind));
   }, [servicesByKind]);
 
-  const totalServices = useMemo(
-    () => SERVICE_KINDS.reduce((count, kind) => count + servicesByKind[kind].length, 0),
-    [servicesByKind]
-  );
-
   const linkedAppNames = useMemo(
     () => new Set((activeDetail?.links ?? []).map((link) => link.name)),
     [activeDetail]
@@ -150,6 +148,7 @@ function ServicesInner() {
       const created = await createManagedServiceMutation.mutateAsync({ kind: activeKind, name });
       setCreateDrafts((current) => ({ ...current, [activeKind]: '' }));
       setSelectedNames((current) => ({ ...current, [activeKind]: created.name }));
+      setShowCreate(false);
       setNotice(`${KIND_LABELS[activeKind]} service ${created.name} created.`);
     } catch (nextError) {
       setActionError(getErrorMessage(nextError, 'Unable to create managed service.'));
@@ -315,41 +314,32 @@ function ServicesInner() {
     <div className="stack-lg">
       <section className="hero-panel">
         <div className="stack-md">
-          <h1 className="page-title">Managed services</h1>
+          <h1 className="page-title">Databases and caches</h1>
           <p className="page-copy">
-            Provision Postgres, MySQL, MariaDB, Redis, or MongoDB, then connect them to apps.
+            Create a Postgres, MySQL, MariaDB, Redis, or MongoDB service, then connect it to an app.
           </p>
-        </div>
-        <div className="metrics-grid">
-          {SERVICE_KINDS.map((kind) => (
-            <Metric
-              key={kind}
-              label={KIND_LABELS[kind]}
-              value={String(servicesByKind[kind].length)}
-            />
-          ))}
-          <Metric label="Total" value={String(totalServices)} />
         </div>
       </section>
 
       <section className="panel stack-md">
         <h2 className="section-title">Service engines</h2>
 
-        <fieldset className="segment-control min-w-0" aria-label="Service engines">
+        <fieldset className="engine-tabs" aria-label="Service engines">
           {SERVICE_KINDS.map((kind) => (
             <button
               key={kind}
               type="button"
               aria-pressed={activeKind === kind}
-              className={`segment-button${activeKind === kind ? ' is-selected' : ''}`}
+              className={`engine-tab${activeKind === kind ? ' is-selected' : ''}`}
               onClick={() => {
                 setActiveKind(kind);
                 setCreateError(null);
                 setLinkError(null);
+                setShowCreate(false);
               }}
             >
               <span>{KIND_LABELS[kind]}</span>
-              <strong>{servicesByKind[kind].length}</strong>
+              <span className="engine-tab-count">{servicesByKind[kind].length}</span>
             </button>
           ))}
         </fieldset>
@@ -370,47 +360,64 @@ function ServicesInner() {
 
       <section className="panel-grid">
         <article className="panel stack-md">
-          <h2 className="section-title">Create {KIND_LABELS[activeKind]}</h2>
-
-          <form onSubmit={handleCreate} className="stack-md" noValidate>
-            <div className="form-group">
-              <label className="form-label" htmlFor="service-name">
-                Service name
-              </label>
-              <input
-                id="service-name"
-                ref={nameInput}
-                className="input"
-                value={createDrafts[activeKind]}
-                onChange={(event) => {
-                  setCreateDrafts((current) => ({ ...current, [activeKind]: event.target.value }));
-                  if (createError) setCreateError(null);
-                }}
-                placeholder={`${activeKind}-main`}
-                autoComplete="off"
-                required
-                aria-invalid={createError ? true : undefined}
-                aria-describedby={createError ? 'service-name-error' : undefined}
-              />
-              {createError ? (
-                <p id="service-name-error" className="text-danger">
-                  {createError}
-                </p>
-              ) : null}
-            </div>
-            <div className="form-actions">
+          <div className="cluster justify-between align-center">
+            <h2 className="section-title">{KIND_LABELS[activeKind]} services</h2>
+            {activeServices.length === 0 ? null : (
               <button
-                className="btn btn-primary"
-                type="submit"
-                disabled={busy === `create-${activeKind}`}
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  setShowCreate((current) => !current);
+                  setCreateError(null);
+                }}
               >
-                {busy === `create-${activeKind}` ? <span className="loading-spinner" /> : null}
-                <span>Create {KIND_LABELS[activeKind]}</span>
+                {showCreate ? 'Cancel' : `New ${KIND_LABELS[activeKind]}`}
               </button>
-            </div>
-          </form>
+            )}
+          </div>
 
-          <h3 className="deploy-title">Existing {KIND_LABELS[activeKind]} services</h3>
+          {showCreate || activeServices.length === 0 ? (
+            <form onSubmit={handleCreate} className="stack-md" noValidate>
+              <div className="form-group">
+                <label className="form-label" htmlFor="service-name">
+                  Service name
+                </label>
+                <input
+                  id="service-name"
+                  ref={nameInput}
+                  className="input"
+                  value={createDrafts[activeKind]}
+                  onChange={(event) => {
+                    setCreateDrafts((current) => ({
+                      ...current,
+                      [activeKind]: event.target.value,
+                    }));
+                    if (createError) setCreateError(null);
+                  }}
+                  placeholder={`${activeKind}-main`}
+                  autoComplete="off"
+                  required
+                  aria-invalid={createError ? true : undefined}
+                  aria-describedby={createError ? 'service-name-error' : undefined}
+                />
+                {createError ? (
+                  <p id="service-name-error" className="text-danger">
+                    {createError}
+                  </p>
+                ) : null}
+              </div>
+              <div className="form-actions">
+                <button
+                  className="btn btn-primary"
+                  type="submit"
+                  disabled={busy === `create-${activeKind}`}
+                >
+                  {busy === `create-${activeKind}` ? <span className="loading-spinner" /> : null}
+                  <span>Create {KIND_LABELS[activeKind]}</span>
+                </button>
+              </div>
+            </form>
+          ) : null}
 
           {activeServices.length === 0 ? (
             <p className="text-muted">
@@ -516,29 +523,25 @@ function ServicesInner() {
                     <label className="form-label" htmlFor="link-app">
                       Link to app
                     </label>
-                    <select
+                    <SelectField
                       id="link-app"
-                      ref={linkSelect}
-                      className="input"
                       value={linkDrafts[activeKind]}
-                      onChange={(event) => {
+                      onChange={(next) => {
                         setLinkDrafts((current) => ({
                           ...current,
-                          [activeKind]: event.target.value,
+                          [activeKind]: next,
                         }));
                         if (linkError) setLinkError(null);
                       }}
-                      required
-                      aria-invalid={linkError ? true : undefined}
-                      aria-describedby={linkError ? 'link-app-error' : undefined}
-                    >
-                      <option value="">Select app</option>
-                      {availableApps.map((app) => (
-                        <option key={app.id} value={app.name}>
-                          {app.name}
-                        </option>
-                      ))}
-                    </select>
+                      invalid={Boolean(linkError)}
+                      describedBy={linkError ? 'link-app-error' : undefined}
+                      placeholder="Select app"
+                      handleRef={linkSelect}
+                      options={availableApps.map((app) => ({
+                        value: app.name,
+                        label: app.name,
+                      }))}
+                    />
                     {linkError ? (
                       <p id="link-app-error" className="text-danger">
                         {linkError}
@@ -706,6 +709,10 @@ function ServicesInner() {
                 </div>
               ) : null}
 
+              {supportsBackups(activeKind) ? (
+                <ServiceBackupSchedule name={activeServiceName} locked={false} />
+              ) : null}
+
               <div className="form-actions">
                 <button
                   type="button"
@@ -720,69 +727,6 @@ function ServicesInner() {
           )}
         </article>
       </section>
-
-      <article className="panel stack-md">
-        <div className="cluster justify-between align-center">
-          <h2 className="section-title">{KIND_LABELS[activeKind]} inventory</h2>
-          <span className="text-muted">
-            {activeServices.length} {activeServices.length === 1 ? 'service' : 'services'}
-          </span>
-        </div>
-
-        {activeServices.length === 0 ? (
-          <p className="text-muted">
-            No {KIND_LABELS[activeKind]} services yet. Create one to see it here.
-          </p>
-        ) : (
-          <TableScroll>
-            <table className="table">
-              <caption className="sr-only">
-                Every {KIND_LABELS[activeKind]} service on this host
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Container</th>
-                  <th scope="col">Created</th>
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeServices.map((service) => (
-                  <tr key={service.id}>
-                    <td>{service.name}</td>
-                    <td>
-                      <ServiceStateBadge status={service.status} />
-                    </td>
-                    <td className="font-mono">
-                      {service.container_id ? truncateId(service.container_id) : 'pending'}
-                    </td>
-                    <td className="font-mono">{formatDate(service.created_at)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        aria-label={`Inspect ${service.name}`}
-                        onClick={() =>
-                          setSelectedNames((current) => ({
-                            ...current,
-                            [activeKind]: service.name,
-                          }))
-                        }
-                      >
-                        Inspect
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableScroll>
-        )}
-      </article>
 
       <ConfirmModal
         open={deleteTarget !== null}
@@ -839,15 +783,6 @@ function ServicesInner() {
           if (busy === null) setRestoreTarget(null);
         }}
       />
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric-card">
-      <p>{label}</p>
-      <strong>{value}</strong>
     </div>
   );
 }

@@ -1008,3 +1008,353 @@ export function restoreServiceBackup(
     }
   );
 }
+
+// --- App traffic control, limits, checks, deploy access, backups, metrics ---
+
+export type AppAuthMode = 'basic' | 'forward';
+
+export interface AppAuthStatus {
+  configured: boolean;
+  mode: AppAuthMode | string | null;
+  username: string | null;
+  forward_url: string | null;
+}
+
+export interface AppAuthInput {
+  mode: AppAuthMode;
+  username?: string | null;
+  password?: string | null;
+  forward_url?: string | null;
+}
+
+export interface MaintenanceState {
+  enabled: boolean;
+  message: string | null;
+}
+
+export interface RedirectRecord {
+  id: string;
+  source_path: string;
+  target: string;
+  code: number;
+  created_at: string;
+}
+
+export interface AppLimit {
+  process_type: string | null;
+  memory: string | null;
+  cpu: string | null;
+}
+
+export interface AppHealthProbe {
+  target: string;
+  path: string;
+  status_code: number | null;
+  latency_ms: number | null;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface AppHealthContainer {
+  id: string;
+  process_type: string;
+  status: string;
+  host_port: number;
+  deployment_id: string;
+  created_at: string;
+}
+
+export interface AppHealthCheck {
+  app: string;
+  status: string;
+  issues: string[];
+  probe: AppHealthProbe | null;
+  probes: AppHealthProbe[];
+  containers: AppHealthContainer[];
+}
+
+export interface DeployToken {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface NewDeployToken extends DeployToken {
+  /** Plaintext token, shown only once, at creation. */
+  token: string;
+}
+
+export interface ConsoleOutputFrame {
+  stream: 'stdout' | 'stderr';
+  line: string;
+}
+
+export interface BackupSchedule {
+  service: string;
+  plugin?: string;
+  enabled: boolean;
+  interval_hours?: number;
+  retention?: number;
+  last_run_at?: string | null;
+  last_status?: string | null;
+  next_run_at?: string | null;
+}
+
+export interface CreateEnvironmentInput {
+  name: string;
+  slug?: string | null;
+  branch?: string | null;
+}
+
+export function fetchAppAuth(appName: string): Promise<AppAuthStatus> {
+  return apiFetch<AppAuthStatus>(`/api/apps/${encodeURIComponent(appName)}/auth`);
+}
+
+export function setAppAuth(appName: string, input: AppAuthInput): Promise<void> {
+  return apiFetch<void>(`/api/apps/${encodeURIComponent(appName)}/auth`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function clearAppAuth(appName: string): Promise<void> {
+  return apiFetch<void>(`/api/apps/${encodeURIComponent(appName)}/auth`, { method: 'DELETE' });
+}
+
+export function fetchMaintenance(appName: string): Promise<MaintenanceState> {
+  return apiFetch<MaintenanceState>(`/api/apps/${encodeURIComponent(appName)}/maintenance`);
+}
+
+export function setMaintenance(appName: string, state: MaintenanceState): Promise<void> {
+  return apiFetch<void>(`/api/apps/${encodeURIComponent(appName)}/maintenance`, {
+    method: 'POST',
+    body: JSON.stringify(state),
+  });
+}
+
+export function fetchRedirects(appName: string): Promise<RedirectRecord[]> {
+  return apiFetch<RedirectRecord[]>(`/api/apps/${encodeURIComponent(appName)}/redirects`);
+}
+
+export function addRedirect(
+  appName: string,
+  input: { source_path: string; target: string; code?: number | null }
+): Promise<RedirectRecord> {
+  return apiFetch<RedirectRecord>(`/api/apps/${encodeURIComponent(appName)}/redirects`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeRedirect(appName: string, redirectId: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/redirects/${encodeURIComponent(redirectId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+export function fetchAppLimits(appName: string): Promise<AppLimit[]> {
+  return apiFetch<AppLimit[]>(`/api/apps/${encodeURIComponent(appName)}/limits`);
+}
+
+export function setAppLimit(appName: string, limit: AppLimit): Promise<AppLimit> {
+  return apiFetch<AppLimit>(`/api/apps/${encodeURIComponent(appName)}/limits`, {
+    method: 'POST',
+    body: JSON.stringify(limit),
+  });
+}
+
+export function runAppChecks(appName: string): Promise<AppHealthCheck> {
+  return apiFetch<AppHealthCheck>(`/api/apps/${encodeURIComponent(appName)}/checks`);
+}
+
+export function fetchDeployTokens(appName: string): Promise<DeployToken[]> {
+  return apiFetch<DeployToken[]>(`/api/apps/${encodeURIComponent(appName)}/deploy-tokens`);
+}
+
+export function createDeployToken(appName: string, name: string): Promise<NewDeployToken> {
+  return apiFetch<NewDeployToken>(`/api/apps/${encodeURIComponent(appName)}/deploy-tokens`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function revokeDeployToken(appName: string, tokenId: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/deploy-tokens/${encodeURIComponent(tokenId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+export function createEnvironment(
+  appName: string,
+  input: CreateEnvironmentInput
+): Promise<Environment> {
+  return apiFetch<Environment>(`/api/apps/${encodeURIComponent(appName)}/environments`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteEnvironment(appName: string, slug: string): Promise<void> {
+  return apiFetch<void>(
+    `/api/apps/${encodeURIComponent(appName)}/environments/${encodeURIComponent(slug)}`,
+    { method: 'DELETE' }
+  );
+}
+
+/**
+ * `run` and `exec` stream server-sent `{stream,line}` frames ending with
+ * `{exit_code}`. `EventSource` cannot POST, so this reads the response body
+ * directly and parses the SSE frames by hand. Returns an abort function.
+ */
+export function streamConsoleCommand(
+  appName: string,
+  mode: 'run' | 'exec',
+  command: string[],
+  handlers: {
+    onOutput?: (frame: ConsoleOutputFrame) => void;
+    onExit?: (exitCode: number) => void;
+    onError?: (message: string) => void;
+  }
+): () => void {
+  const controller = new AbortController();
+
+  void (async () => {
+    try {
+      const token = getToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const response = await fetch(`${BASE_URL}/api/apps/${encodeURIComponent(appName)}/${mode}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ command }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        let message = `Console command failed (${response.status})`;
+        try {
+          const parsed: unknown = JSON.parse(text);
+          if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+            message = String((parsed as { error: unknown }).error);
+          }
+        } catch {
+          // Non-JSON error body; keep the transport message.
+        }
+        handlers.onError?.(message);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const rawEvent = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = rawEvent
+            .split('\n')
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trimStart())
+            .join('\n');
+          if (data) {
+            try {
+              const frame: unknown = JSON.parse(data);
+              if (frame && typeof frame === 'object' && 'line' in frame && 'stream' in frame) {
+                const parsed = frame as { line: string; stream: string };
+                handlers.onOutput?.({
+                  stream: parsed.stream === 'stderr' ? 'stderr' : 'stdout',
+                  line: parsed.line,
+                });
+              } else if (frame && typeof frame === 'object' && 'exit_code' in frame) {
+                handlers.onExit?.(Number((frame as { exit_code: number }).exit_code));
+              }
+            } catch {
+              // Ignore malformed frames and keep streaming.
+            }
+          }
+          boundary = buffer.indexOf('\n\n');
+        }
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      handlers.onError?.(error instanceof Error ? error.message : 'Console command failed.');
+    }
+  })();
+
+  return () => controller.abort();
+}
+
+export async function fetchMetricsText(): Promise<string> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(`${BASE_URL}/api/metrics`, { headers });
+  if (!response.ok) {
+    throw new Error(`Unable to load metrics (${response.status})`);
+  }
+  return response.text();
+}
+
+export interface MetricSample {
+  value: number;
+  labels: Record<string, string>;
+}
+
+/** Parses the Prometheus text exposition format into metric name -> samples. */
+export function parseMetrics(text: string): Map<string, MetricSample[]> {
+  const metrics = new Map<string, MetricSample[]>();
+  for (const line of text.split('\n')) {
+    if (!line || line.startsWith('#')) continue;
+    const match = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+(-?[\d.eE+]+)$/);
+    if (!match) continue;
+    const name = match[1];
+    const labels: Record<string, string> = {};
+    if (match[2]) {
+      for (const pair of match[2].slice(1, -1).split(',')) {
+        const [key, value] = pair.split('=');
+        if (key) labels[key.trim()] = (value ?? '').replace(/^"|"$/g, '');
+      }
+    }
+    const samples = metrics.get(name) ?? [];
+    samples.push({ value: Number(match[3]), labels });
+    metrics.set(name, samples);
+  }
+  return metrics;
+}
+
+export function fetchBackupSchedules(): Promise<BackupSchedule[]> {
+  return apiFetch<BackupSchedule[]>('/api/backup-schedules');
+}
+
+export function fetchServiceBackupSchedule(name: string): Promise<BackupSchedule> {
+  return apiFetch<BackupSchedule>(`/api/services/${encodeURIComponent(name)}/backup-schedule`);
+}
+
+export function setServiceBackupSchedule(
+  name: string,
+  schedule: { interval_hours: number; retention: number }
+): Promise<BackupSchedule> {
+  return apiFetch<BackupSchedule>(`/api/services/${encodeURIComponent(name)}/backup-schedule`, {
+    method: 'POST',
+    body: JSON.stringify(schedule),
+  });
+}
+
+export function deleteServiceBackupSchedule(name: string): Promise<void> {
+  return apiFetch<void>(`/api/services/${encodeURIComponent(name)}/backup-schedule`, {
+    method: 'DELETE',
+  });
+}

@@ -4,8 +4,6 @@ import {
   addCronEntry,
   addStorageMount,
   attachAppNetwork,
-  createNetwork,
-  deleteNetwork,
   detachAppNetwork,
   ensureStorageDirectory,
   fetchAppNetworks,
@@ -15,6 +13,7 @@ import {
   removeCronEntry,
   removeStorageMount,
 } from '../lib/api';
+import SelectField from './SelectField';
 import TableScroll from './TableScroll';
 
 interface AppInfrastructurePanelProps {
@@ -35,7 +34,6 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [networkName, setNetworkName] = useState('');
   const [attachNetworkName, setAttachNetworkName] = useState('');
   const [hostPath, setHostPath] = useState('');
   const [containerPath, setContainerPath] = useState('');
@@ -79,31 +77,6 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
     document.getElementById(field)?.focus();
   }
 
-  async function handleCreateNetwork(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const name = networkName.trim();
-    if (!name) {
-      flagFieldError('network-name', 'Enter a network name.');
-      return;
-    }
-
-    setFieldError(null);
-
-    try {
-      setBusy('network-create');
-      setError(null);
-      setNotice(null);
-      await createNetwork(name);
-      setNetworkName('');
-      await load();
-      setNotice(`Created network ${name}.`);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to create network.');
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function handleAttachNetwork(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = attachNetworkName.trim();
@@ -139,21 +112,6 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
       setNotice(`Detached ${appName} from network ${name}.`);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Unable to detach network.');
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function handleDeleteNetwork(name: string) {
-    try {
-      setBusy(`network-delete-${name}`);
-      setError(null);
-      setNotice(null);
-      await deleteNetwork(name);
-      await load();
-      setNotice(`Deleted network ${name}.`);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Unable to delete network.');
     } finally {
       setBusy(null);
     }
@@ -298,137 +256,80 @@ export default function AppInfrastructurePanel({ appName, locked }: AppInfrastru
 
       <div className="panel-grid">
         <article className="panel stack-md">
-          <div className="cluster justify-between align-start">
-            <div className="stack-sm">
+          <div className="panel-heading panel-heading-top">
+            <div className="stack-sm panel-heading-copy">
               <p className="eyebrow">Networks</p>
-              <h2 className="section-title">Create and attach</h2>
+              <h2 className="section-title">Attached networks</h2>
               <p className="page-copy">
-                Manage Docker networks for this app, including global network creation and app
-                attachment.
+                Shared Docker networks this app can reach. Create or remove networks from the
+                overview.
               </p>
             </div>
             <span className="inventory-summary">{state.attachedNetworks.length} attached</span>
           </div>
 
-          <form onSubmit={handleCreateNetwork} className="stack-md">
-            <div className="form-group">
-              <label className="form-label" htmlFor="network-name">
-                New network
-              </label>
-              <input
-                id="network-name"
-                className="input"
-                value={networkName}
-                onChange={(event) => {
-                  setNetworkName(event.target.value);
-                  if (fieldError?.field === 'network-name') setFieldError(null);
-                }}
-                placeholder="private-backplane"
-                aria-invalid={fieldError?.field === 'network-name' ? true : undefined}
-                aria-describedby={
-                  fieldError?.field === 'network-name' ? 'network-name-error' : undefined
-                }
-                disabled={locked || busy !== null}
-              />
-              <FieldError field="network-name" error={fieldError} />
-            </div>
-            <div className="form-actions">
-              <button className="btn btn-primary" type="submit" disabled={locked || busy !== null}>
-                {busy === 'network-create' ? 'Creating…' : 'Create network'}
-              </button>
-            </div>
-          </form>
+          {state.attachedNetworks.length === 0 ? (
+            <p className="text-muted">This app is not on any shared network yet.</p>
+          ) : (
+            <ul className="network-list">
+              {state.attachedNetworks.map((network) => (
+                <li key={network.id} className="network-row">
+                  <span className="font-mono network-row-name">{network.name}</span>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-danger-outline btn-sm"
+                    disabled={locked || busy === `network-detach-${network.name}`}
+                    onClick={() => handleDetachNetwork(network.name)}
+                  >
+                    {busy === `network-detach-${network.name}` ? 'Detaching…' : 'Detach'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
 
-          <form onSubmit={handleAttachNetwork} className="stack-md">
-            <div className="form-group">
-              <label className="form-label" htmlFor="attach-network">
-                Attach existing network
-              </label>
-              <select
-                id="attach-network"
-                className="input"
-                value={attachNetworkName}
-                onChange={(event) => {
-                  setAttachNetworkName(event.target.value);
-                  if (fieldError?.field === 'attach-network') setFieldError(null);
-                }}
-                aria-invalid={fieldError?.field === 'attach-network' ? true : undefined}
-                aria-describedby={
-                  fieldError?.field === 'attach-network' ? 'attach-network-error' : undefined
-                }
-                disabled={locked || busy !== null}
-              >
-                <option value="">Select network</option>
-                {attachableNetworks.map((network) => (
-                  <option key={network.id} value={network.name}>
-                    {network.name}
-                  </option>
-                ))}
-              </select>
-              <FieldError field="attach-network" error={fieldError} />
-            </div>
-            <div className="form-actions">
+          {attachableNetworks.length > 0 ? (
+            <form onSubmit={handleAttachNetwork} className="network-attach-form" noValidate>
+              <div className="form-group">
+                <label className="form-label" htmlFor="attach-network">
+                  Attach a network
+                </label>
+                <SelectField
+                  id="attach-network"
+                  value={attachNetworkName}
+                  onChange={(next) => {
+                    setAttachNetworkName(next);
+                    if (fieldError?.field === 'attach-network') setFieldError(null);
+                  }}
+                  invalid={fieldError?.field === 'attach-network'}
+                  describedBy={
+                    fieldError?.field === 'attach-network' ? 'attach-network-error' : undefined
+                  }
+                  disabled={locked || busy !== null}
+                  placeholder="Select network"
+                  emptyMessage="No other host networks are available"
+                  options={attachableNetworks.map((network) => ({
+                    value: network.name,
+                    label: network.name,
+                  }))}
+                />
+                <FieldError field="attach-network" error={fieldError} />
+              </div>
               <button
                 className="btn btn-secondary"
                 type="submit"
                 disabled={locked || busy !== null}
               >
-                {busy?.startsWith('network-attach-') ? 'Attaching…' : 'Attach network'}
+                {busy?.startsWith('network-attach-') ? 'Attaching…' : 'Attach'}
               </button>
-            </div>
-          </form>
-
-          <TableScroll>
-            <table className="table">
-              <caption className="sr-only">Docker networks</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">State</th>
-                  <th scope="col">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.networks.map((network) => {
-                  const attached = state.attachedNetworks.some(
-                    (item) => item.name === network.name
-                  );
-                  return (
-                    <tr key={network.id}>
-                      <td>{network.name}</td>
-                      <td>{attached ? 'Attached' : 'Available'}</td>
-                      <td>
-                        <div className="button-row">
-                          {attached ? (
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              aria-label={`Detach network ${network.name}`}
-                              disabled={locked || busy === `network-detach-${network.name}`}
-                              onClick={() => handleDetachNetwork(network.name)}
-                            >
-                              Detach
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="btn btn-outline btn-danger-outline btn-sm"
-                            aria-label={`Delete network ${network.name}`}
-                            disabled={locked || busy === `network-delete-${network.name}`}
-                            onClick={() => handleDeleteNetwork(network.name)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </TableScroll>
+            </form>
+          ) : (
+            <p className="text-muted">
+              {state.networks.length === 0
+                ? 'No shared networks exist on this host yet.'
+                : 'Every shared network on this host is already attached.'}
+            </p>
+          )}
         </article>
 
         <article className="panel stack-md">
@@ -694,7 +595,7 @@ function InfrastructurePanelSkeleton() {
           </div>
 
           <div className="stack-md">
-            {skeletonItems('network-field', 2).map((item) => (
+            {skeletonItems('network-field', 1).map((item) => (
               <div key={item} className="form-group">
                 <SkeletonBlock className="h-3 w-28" />
                 <SkeletonBlock className="h-11 w-full" />

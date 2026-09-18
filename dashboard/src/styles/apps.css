@@ -156,22 +156,28 @@
 
 .btn-outline.btn-danger-outline:hover,
 .btn-outline.btn-danger-outline:focus-visible {
-  color: var(--app-danger-outline-fg);
   border-color: var(--app-danger-outline-fg);
   background: var(--tone-danger-bg);
 }
 
 .app-tabs {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .app-tabs-track {
   display: flex;
+  width: 100%;
+  height: auto;
+  justify-content: flex-start;
   gap: var(--space-2);
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
   padding: 0 var(--space-6) var(--space-2) 0;
+  border-radius: 0;
+  background: transparent;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -187,9 +193,10 @@
 .app-tabs::after {
   content: "";
   position: absolute;
-  inset-block: 0;
+  top: 0;
   inset-inline-end: 0;
   width: var(--space-8);
+  height: 3.25rem;
   pointer-events: none;
   background: linear-gradient(to right, transparent, var(--color-bg-surface));
   opacity: 0;
@@ -201,36 +208,26 @@
 }
 
 .app-tab {
-  display: grid;
-  gap: 0.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   min-height: 2.75rem;
-  padding: 0.55rem 0.9rem;
+  padding: 0.5rem 1rem;
   scroll-snap-align: start;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border-subtle);
   background: var(--color-surface-subtle);
+  box-shadow: none;
   color: var(--color-text-soft);
-  text-align: left;
+  font-family: var(--font-heading);
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
   transition:
     color var(--transition-fast),
     background var(--transition-fast),
     border-color var(--transition-fast);
-}
-
-.app-tab-label {
-  font-family: var(--font-heading);
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-}
-
-.app-tab-summary {
-  color: var(--color-text-muted);
-  font-size: 0.74rem;
-  line-height: 1.3;
-  white-space: nowrap;
 }
 
 .app-tab:hover,
@@ -239,13 +236,16 @@
   background: var(--color-surface-subtle-strong);
 }
 
+.app-tab:hover,
+.app-tab[aria-selected="true"],
+.app-tab.is-selected {
+  color: var(--color-text-primary);
+}
+
+.app-tab[aria-selected="true"],
 .app-tab.is-selected {
   border-color: var(--color-surface-selection-border);
   background: var(--color-surface-selection);
-}
-
-.app-tab.is-selected .app-tab-summary {
-  color: var(--color-text-soft);
 }
 
 .form-error {
