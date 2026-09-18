@@ -39,6 +39,11 @@ enum DeployCommands {
         app: String,
         #[arg(long, help = "Specific deployment ID to roll back to")]
         to: Option<String>,
+        #[arg(
+            long,
+            help = "Environment slug to roll back within; defaults to production"
+        )]
+        environment: Option<String>,
     },
     /// Manage per-app deploy tokens for CI and provider webhooks
     Token {
@@ -208,10 +213,17 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
             }
         },
 
-        DeployCommands::Rollback { app, to } => {
+        DeployCommands::Rollback {
+            app,
+            to,
+            environment,
+        } => {
             let mut body = serde_json::json!({});
             if let Some(id) = to {
                 body["deployment_id"] = serde_json::Value::String(id);
+            }
+            if let Some(slug) = environment {
+                body["environment"] = serde_json::Value::String(slug);
             }
             client
                 .post(&format!("/api/apps/{app}/rollback"), body)

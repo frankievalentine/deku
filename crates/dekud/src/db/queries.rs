@@ -380,28 +380,45 @@ pub async fn get_latest_deployment(pool: &SqlitePool, app_id: &str) -> Result<Op
     Ok(dep)
 }
 
-pub async fn get_previous_deployment(
+/// The newest live deployment of one environment.
+///
+/// Scoped, because "the latest deployment" of an app is ambiguous once an app
+/// has more than one environment: a production rollback must not follow a newer
+/// preview deployment, or the other way round.
+pub async fn get_latest_deployment_in_environment(
     pool: &SqlitePool,
     app_id: &str,
+    environment_id: &str,
+) -> Result<Option<Deployment>> {
+    let dep = sqlx::query_as::<_, Deployment>(
+        "SELECT id, app_id, status, builder, image_tag, created_at, finished_at \
+         FROM deployments \
+         WHERE app_id = ?1 AND environment_id = ?2 AND status = 'live' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(app_id)
+    .bind(environment_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(dep)
+}
+
+/// The deployment before `exclude_id` within one environment.
+pub async fn get_previous_deployment_in_environment(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
     exclude_id: &str,
 ) -> Result<Option<Deployment>> {
-    let dep = sqlx::query_as!(
-        Deployment,
-        r#"SELECT
-            id            as "id!",
-            app_id        as "app_id!",
-            status        as "status!: DeployStatus",
-            builder       as "builder!: BuilderType",
-            image_tag     as "image_tag",
-            created_at    as "created_at!: _",
-            finished_at   as "finished_at: _"
-           FROM deployments
-           WHERE app_id = ?1 AND id != ?2 AND status = 'live'
-           ORDER BY created_at DESC
-           LIMIT 1"#,
-        app_id,
-        exclude_id
+    let dep = sqlx::query_as::<_, Deployment>(
+        "SELECT id, app_id, status, builder, image_tag, created_at, finished_at \
+         FROM deployments \
+         WHERE app_id = ?1 AND environment_id = ?2 AND id != ?3 \
+         ORDER BY created_at DESC LIMIT 1",
     )
+    .bind(app_id)
+    .bind(environment_id)
+    .bind(exclude_id)
     .fetch_optional(pool)
     .await?;
     Ok(dep)
@@ -968,6 +985,30 @@ pub async fn list_containers_for_app(
            ORDER BY created_at DESC"#,
         app_id
     )
+    .fetch_all(pool)
+    .await?;
+    Ok(containers)
+}
+
+/// Running containers belonging to one environment's deployments.
+///
+/// The retire step needs this scoped: environments share the host, so an
+/// app-wide list would hand a deploy the containers of every other environment,
+/// and retiring them would take a serving environment down.
+pub async fn list_containers_for_environment(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
+) -> Result<Vec<ContainerRecord>> {
+    let containers = sqlx::query_as::<_, ContainerRecord>(
+        "SELECT c.id, c.app_id, c.deployment_id, c.process_type, c.status, c.host_port, \
+                c.created_at \
+         FROM containers c JOIN deployments d ON d.id = c.deployment_id \
+         WHERE c.app_id = ?1 AND d.environment_id = ?2 AND c.status = 'running' \
+         ORDER BY c.created_at DESC",
+    )
+    .bind(app_id)
+    .bind(environment_id)
     .fetch_all(pool)
     .await?;
     Ok(containers)
@@ -2777,6 +2818,79 @@ mod upstream_port_tests {
             .await
             .expect("ports")
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_retire_set_is_scoped_to_one_environment() {
+        let pool = test_pool().await;
+        let production = insert_app(&pool, "app-1", "one", "dep-prod").await;
+        let staging = insert_environment(&pool, "app-1", "staging", "dep-staging").await;
+
+        insert_container_in(&pool, "prod", "app-1", "dep-prod", Some(33001)).await;
+        insert_container_in(&pool, "stage", "app-1", "dep-staging", Some(33002)).await;
+
+        // A deploy retires this set. Listing the whole app would hand a staging
+        // deploy production's containers to stop.
+        let retire = super::list_containers_for_environment(&pool, "app-1", &staging)
+            .await
+            .expect("staging containers");
+        assert_eq!(retire.len(), 1);
+        assert_eq!(retire[0].id, "stage");
+
+        let retire = super::list_containers_for_environment(&pool, "app-1", &production)
+            .await
+            .expect("production containers");
+        assert_eq!(retire.len(), 1);
+        assert_eq!(retire[0].id, "prod");
+    }
+
+    #[tokio::test]
+    async fn a_rollback_looks_back_only_within_its_environment() {
+        let pool = test_pool().await;
+        let production = insert_app(&pool, "app-1", "one", "dep-prod-1").await;
+        let staging = insert_environment(&pool, "app-1", "staging", "dep-staging").await;
+
+        // A newer production deployment, so production has a previous one.
+        sqlx::query(
+            "INSERT INTO deployments (id, app_id, environment_id, status, builder, image_tag, created_at) \
+             VALUES ('dep-prod-2', 'app-1', ?1, 'live', 'dockerfile', 'deku/x:2', ?2)",
+        )
+        .bind(&production)
+        .bind((chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339())
+        .execute(&pool)
+        .await
+        .expect("insert newer production deployment");
+
+        let previous = super::get_previous_deployment_in_environment(
+            &pool,
+            "app-1",
+            &production,
+            "dep-prod-2",
+        )
+        .await
+        .expect("previous")
+        .expect("a previous production deployment");
+        assert_eq!(
+            previous.id, "dep-prod-1",
+            "production must step back through production's own history"
+        );
+
+        // Staging holds a single deployment, so it has nothing to step back to.
+        // Production's deployments must not fill that gap.
+        let staging_previous =
+            super::get_previous_deployment_in_environment(&pool, "app-1", &staging, "dep-staging")
+                .await
+                .expect("previous");
+        assert!(
+            staging_previous.is_none(),
+            "a staging rollback must not reach into production's history"
+        );
+
+        let latest = super::get_latest_deployment_in_environment(&pool, "app-1", &production)
+            .await
+            .expect("latest")
+            .expect("a live production deployment");
+        assert_eq!(latest.id, "dep-prod-2");
     }
 
     #[tokio::test]

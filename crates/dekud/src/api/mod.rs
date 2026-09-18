@@ -3253,6 +3253,8 @@ async fn trigger_deploy(
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct RollbackBody {
     deployment_id: Option<String>,
+    /// Environment slug to roll back within. Omit for production.
+    environment: Option<String>,
 }
 
 #[utoipa::path(
@@ -3282,6 +3284,36 @@ async fn trigger_rollback(
     let logs = state.logs.clone();
     let cfg = state.config.clone();
     let plugins = state.plugins.clone();
+    // Resolve before spawning so an unknown environment fails the request.
+    let environment_id =
+        match resolve_deploy_environment(&state, &app.id, body.environment.as_deref()).await {
+            Ok(id) => id,
+            Err(response) => return response.into_response(),
+        };
+
+    // An explicit target must belong to the environment being rolled back.
+    // Checked here so the caller hears about it, instead of the spawned job
+    // rejecting it after the response has already said the rollback started.
+    if let Some(target_id) = body.deployment_id.as_deref() {
+        match queries::get_deployment(&state.pool, target_id).await {
+            Ok(target) => {
+                let target_environment =
+                    queries::get_deployment_environment_id(&state.pool, &target.id)
+                        .await
+                        .unwrap_or(None);
+                if target_environment.as_deref() != Some(environment_id.as_str()) {
+                    return bad_request(format!(
+                        "deployment {target_id} does not belong to that environment"
+                    ))
+                    .into_response();
+                }
+            }
+            Err(_) => {
+                return not_found(format!("deployment '{target_id}' not found")).into_response();
+            }
+        }
+    }
+
     let app_id = app.id.clone();
     let to_id = body.deployment_id.clone();
     let deploy_lock = state.deploy_locks.for_app(&app.id);
@@ -3297,6 +3329,7 @@ async fn trigger_rollback(
             plugins.as_ref(),
             &app_id,
             &name,
+            Some(&environment_id),
             to_id.as_deref(),
         )
         .await

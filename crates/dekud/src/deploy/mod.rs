@@ -449,9 +449,10 @@ pub async fn run_deploy(
         }
         Err(ref e) => {
             let _ = queries::update_deployment(pool, &deploy_id, DeployStatus::Failed, None).await;
-            let still_serving = queries::get_latest_deployment(pool, app_id)
-                .await?
-                .is_some();
+            let still_serving =
+                queries::get_latest_deployment_in_environment(pool, app_id, &environment.id)
+                    .await?
+                    .is_some();
             let app_status = if still_serving {
                 AppStatus::Deployed
             } else {
@@ -728,8 +729,12 @@ async fn do_deploy(
     )
     .await?;
 
-    // Collect previous containers for retirement
-    let previous_containers = queries::list_containers_for_app(pool, app_id).await?;
+    // Collect this environment's previous containers for retirement. Scoping to
+    // the environment matters: an app-wide list would include the containers of
+    // every other environment, and retiring them would take those environments
+    // down. Collected before the new containers exist, so it is the retiring set.
+    let previous_containers =
+        queries::list_containers_for_environment(pool, app_id, environment_id).await?;
 
     // Load per-environment config: app-wide values with this environment's
     // overrides applied.
@@ -1222,18 +1227,48 @@ pub async fn rollback(
     plugins: &crate::plugins::PluginRegistry,
     app_id: &str,
     app_name: &str,
+    environment_id: Option<&str>,
     to_deployment_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let current = queries::get_latest_deployment(pool, app_id)
+    // A rollback happens inside one environment: the one named, or production.
+    // Scoping the lookups keeps a preview deployment out of a production
+    // rollback and the other way round.
+    let environment = match environment_id {
+        Some(id) => queries::get_environment_by_id(pool, id).await?,
+        None => queries::ensure_production_environment(pool, app_id).await?,
+    };
+
+    let current = queries::get_latest_deployment_in_environment(pool, app_id, &environment.id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("no live deployment to roll back from"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no live deployment in '{}' to roll back from",
+                environment.slug
+            )
+        })?;
 
     let target = if let Some(id) = to_deployment_id {
-        queries::get_deployment(pool, id).await?
+        let target = queries::get_deployment(pool, id).await?;
+        // Rolling back to an explicit deployment still happens in the
+        // environment being rolled back, never in the target's own.
+        let target_environment = queries::get_deployment_environment_id(pool, &target.id).await?;
+        if target_environment.as_deref() != Some(environment.id.as_str()) {
+            anyhow::bail!(
+                "deployment {} does not belong to environment '{}'",
+                &target.id[..8.min(target.id.len())],
+                environment.slug
+            );
+        }
+        target
     } else {
-        queries::get_previous_deployment(pool, app_id, &current.id)
+        queries::get_previous_deployment_in_environment(pool, app_id, &environment.id, &current.id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("no previous deployment to roll back to"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no previous deployment in '{}' to roll back to",
+                    environment.slug
+                )
+            })?
     };
 
     let image_tag = target
@@ -1247,11 +1282,6 @@ pub async fn rollback(
         Some(serde_json::json!({ "to_deploy_id": target.id, "image": image_tag })),
     );
 
-    // Roll back within the environment the target deployment came from; a
-    // production rollback must not redeploy into whichever environment happens
-    // to hold the newest deployment.
-    let environment_id = queries::get_deployment_environment_id(pool, &target.id).await?;
-
     let req = DeployRequest {
         app_id: app_id.to_string(),
         app_name: app_name.to_string(),
@@ -1260,7 +1290,7 @@ pub async fn rollback(
         },
         force_builder: Some("image".to_string()),
         build_host: Some("local".to_string()),
-        environment_id,
+        environment_id: Some(environment.id.clone()),
     };
 
     run_deploy(pool, docker, events, logs, cfg, plugins, req).await?;
@@ -1480,6 +1510,7 @@ mod tests {
             &h.plugins,
             &app.id,
             &app.name,
+            None,
             Some(&first_id),
         )
         .await
