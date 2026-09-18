@@ -2505,6 +2505,29 @@ select:focus-visible {
   color: var(--color-accent);
 }
 
+/* Level is inferred from the line, so surface it: an error should be findable by
+   eye, not only by the severity filter. */
+.log-source[data-level="ERROR"],
+.log-source[data-level="CRITICAL"] {
+  color: var(--tone-danger-fg);
+}
+
+.log-source[data-level="WARNING"] {
+  color: var(--tone-warning-fg);
+}
+
+.log-source[data-level="DEBUG"] {
+  color: var(--color-text-muted);
+  opacity: 0.75;
+}
+
+.log-message mark {
+  background: color-mix(in oklab, var(--tone-warning-fg) 35%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 .log-message {
   color: var(--color-log-text);
   white-space: pre-wrap;

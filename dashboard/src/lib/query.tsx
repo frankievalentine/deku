@@ -82,6 +82,8 @@ export interface AppLogEntry {
   /** Inferred level for stored lines; absent for event-derived lines. */
   level?: string;
   stream?: string;
+  /** FTS5 match context for a search result, with the match in [brackets]. */
+  snippet?: string | null;
 }
 
 interface QueryHookOptions {
@@ -455,6 +457,7 @@ export function appLogsQueryOptions(
         message: line.message,
         level: line.level,
         stream: line.stream,
+        snippet: line.snippet ?? null,
       }));
     },
     enabled: options?.enabled ?? Boolean(appName),

@@ -74,6 +74,7 @@ export default function LogStream({ appName }: LogStreamProps) {
             message: line.message,
             level: line.level,
             stream: line.stream,
+            snippet: null,
           },
         ];
       }
@@ -274,17 +275,96 @@ export default function LogStream({ appName }: LogStreamProps) {
             <span className="log-timestamp">
               {entry.createdAt ? formatTimestamp(entry.createdAt) : '--:--:--'}
             </span>
-            <span className="log-source">
+            <span className="log-source" data-level={entry.level}>
               [{entry.eventType}
               {entry.level ? ` ${entry.level}` : ''}]
             </span>
-            <span className="log-message">{entry.message}</span>
+            <span className="log-message">
+              <LogText entry={entry} search={filters.search} />
+            </span>
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
     </div>
   );
+}
+
+/**
+ * Render a log line with the matching text marked.
+ *
+ * Stored search results carry an FTS5 snippet with the match in brackets, which
+ * is exact; live lines have no snippet, so the search terms are highlighted
+ * client-side. Parts are keyed by their character offset, which is stable for a
+ * given line and avoids indexing into the array.
+ */
+function LogText({ entry, search }: { entry: AppLogEntry; search?: string }) {
+  const parts = entry.snippet
+    ? snippetParts(entry.snippet)
+    : termParts(
+        entry.message,
+        (search ?? '')
+          .split(/\s+/)
+          .map((term) => term.trim())
+          .filter(Boolean)
+      );
+
+  return (
+    <>
+      {parts.map((part) =>
+        part.match ? (
+          <mark key={part.key}>{part.text}</mark>
+        ) : (
+          <span key={part.key}>{part.text}</span>
+        )
+      )}
+    </>
+  );
+}
+
+interface HighlightPart {
+  key: string;
+  text: string;
+  match: boolean;
+}
+
+function snippetParts(snippet: string): HighlightPart[] {
+  return toParts(
+    snippet.split(/(\[[^\]]*\])/g),
+    (segment) => segment.startsWith('[') && segment.endsWith(']')
+  );
+}
+
+function termParts(message: string, terms: string[]): HighlightPart[] {
+  if (terms.length === 0) {
+    return [{ key: '0', text: message, match: false }];
+  }
+  const pattern = new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'gi');
+  return toParts(message.split(pattern), (segment) =>
+    terms.some((term) => term.toLowerCase() === segment.toLowerCase())
+  );
+}
+
+function toParts(segments: string[], isMatch: (segment: string) => boolean): HighlightPart[] {
+  const parts: HighlightPart[] = [];
+  let offset = 0;
+  for (const segment of segments) {
+    if (segment.length === 0) continue;
+    const match = isMatch(segment);
+    parts.push({
+      key: String(offset),
+      // Snippet matches arrive wrapped in brackets; drop them when rendering.
+      text:
+        match && segment.startsWith('[') && segment.endsWith(']') ? segment.slice(1, -1) : segment,
+      match,
+    });
+    offset += segment.length;
+  }
+  return parts;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function parseEvent(data: string): EventRecord | null {
