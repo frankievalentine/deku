@@ -181,6 +181,12 @@ pub fn render(config: &FileConfig<'_>) -> Result<String> {
     let socket_shown = config.deku_socket.display().to_string();
     let socket = directive_value(&socket_shown, "the daemon socket")?;
 
+    // Rendered from the table the handler also reads, so the two cannot drift.
+    let hook_headers = crate::acme::headers::SENT
+        .iter()
+        .map(|(header, variable)| format!("        proxy_set_header {header} {variable};\n"))
+        .collect::<String>();
+
     let email = match config
         .email
         .map(str::trim)
@@ -216,12 +222,7 @@ server {{
         acme_hook {client} uri=/internal/acme/dns-hook;
 
         proxy_pass http://unix:{socket};
-        proxy_set_header X-Deku-Acme-Hook      $acme_hook_name;
-        proxy_set_header X-Deku-Acme-Domain    $acme_hook_domain;
-        proxy_set_header X-Deku-Acme-Keyauth   $acme_hook_keyauth;
-        proxy_set_header X-Deku-Acme-Challenge $acme_hook_challenge;
-        proxy_set_header X-Deku-Acme-Client    $acme_hook_client;
-    }}
+{hook_headers}    }}
 }}
 "
     ))
@@ -340,17 +341,12 @@ mod tests {
             contents.contains("proxy_pass http://unix:/run/deku/deku.sock;"),
             "{contents}"
         );
-        // The daemon needs the action, the name, and the value to write, and it
-        // reads them from these headers.
-        for header in [
-            "$acme_hook_name",
-            "$acme_hook_domain",
-            "$acme_hook_keyauth",
-            "$acme_hook_challenge",
-        ] {
+        // The handler reads these headers and takes the value from the variable
+        // beside it, so both halves of each pair have to be sent.
+        for (header, variable) in crate::acme::headers::SENT {
             assert!(
-                contents.contains(header),
-                "{header} is missing from {contents}"
+                contents.contains(&format!("proxy_set_header {header} {variable};")),
+                "{header} with {variable} is missing from {contents}"
             );
         }
     }

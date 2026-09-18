@@ -11,6 +11,40 @@
 pub mod cloudflare;
 pub mod file;
 
+/// The headers the hook location sends and the hook handler reads.
+///
+/// Spelled once because the two sides are written in different files: the
+/// rendered Angie configuration sets these, and the daemon's hook handler reads
+/// them. A mismatch between two separate literals would fail only at the moment
+/// a certificate is requested, and nothing about it is obvious in either place.
+///
+/// HTTP header names are case-insensitive; these are lower case because that is
+/// how the handler looks them up.
+pub mod headers {
+    /// Whether the challenge record should be added or removed.
+    pub const ACTION: &str = "x-deku-acme-hook";
+    /// The name being validated, without the `*.` prefix.
+    pub const DOMAIN: &str = "x-deku-acme-domain";
+    /// The value to publish for a DNS challenge.
+    pub const KEYAUTH: &str = "x-deku-acme-keyauth";
+    /// The validation type, which has to be `dns` here.
+    pub const CHALLENGE: &str = "x-deku-acme-challenge";
+    /// The ACME client that is asking.
+    pub const CLIENT: &str = "x-deku-acme-client";
+
+    /// Each header with the Angie variable it carries.
+    ///
+    /// The hook location is rendered from this, so a header cannot be sent
+    /// without the variable that gives it a value.
+    pub const SENT: &[(&str, &str)] = &[
+        (ACTION, "$acme_hook_name"),
+        (DOMAIN, "$acme_hook_domain"),
+        (KEYAUTH, "$acme_hook_keyauth"),
+        (CHALLENGE, "$acme_hook_challenge"),
+        (CLIENT, "$acme_hook_client"),
+    ];
+}
+
 use anyhow::{anyhow, Result};
 
 use crate::config::DekuConfig;

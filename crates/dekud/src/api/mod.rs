@@ -405,7 +405,9 @@ async fn acme_dns_hook(
             .map(str::to_owned)
     };
 
-    let challenge = header("x-deku-acme-challenge").unwrap_or_default();
+    use crate::acme::headers;
+
+    let challenge = header(headers::CHALLENGE).unwrap_or_default();
     if challenge != "dns" {
         return bad_request(format!(
             "unsupported ACME challenge '{challenge}'; only dns is handled"
@@ -413,21 +415,22 @@ async fn acme_dns_hook(
         .into_response();
     }
 
-    let action = match header("x-deku-acme-hook")
+    let action = match header(headers::ACTION)
         .as_deref()
         .map(crate::acme::ChallengeAction::parse)
     {
         Some(Ok(action)) => action,
         Some(Err(error)) => return bad_request(error.to_string()).into_response(),
-        None => return bad_request("missing x-deku-acme-hook header").into_response(),
+        None => return bad_request(format!("missing {} header", headers::ACTION)).into_response(),
     };
 
-    let Some(domain) = header("x-deku-acme-domain") else {
-        return bad_request("missing x-deku-acme-domain header").into_response();
+    let Some(domain) = header(headers::DOMAIN) else {
+        return bad_request(format!("missing {} header", headers::DOMAIN)).into_response();
     };
-    let Some(keyauth) = header("x-deku-acme-keyauth") else {
-        return bad_request("missing x-deku-acme-keyauth header").into_response();
+    let Some(keyauth) = header(headers::KEYAUTH) else {
+        return bad_request(format!("missing {} header", headers::KEYAUTH)).into_response();
     };
+    let client_name = header(headers::CLIENT).unwrap_or_default();
 
     // Read the config fresh: a token or provider saved from the dashboard takes
     // effect without restarting the daemon.
@@ -460,7 +463,7 @@ async fn acme_dns_hook(
 
     match crate::acme::apply_challenge(&client, &zone_id, &domain, action, &keyauth).await {
         Ok(()) => {
-            tracing::info!(%domain, ?action, "answered an ACME challenge");
+            tracing::info!(%domain, ?action, %client_name, "answered an ACME challenge");
             StatusCode::OK.into_response()
         }
         Err(error) => {
