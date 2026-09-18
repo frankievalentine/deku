@@ -29,8 +29,8 @@ import { SERVICE_KIND_LABELS } from '../lib/service-meta';
 import { showToast } from '../lib/shell';
 import ConnectScreen from './ConnectScreen';
 import ServiceStateBadge from './ServiceStateBadge';
-import TableScroll from './TableScroll';
 import Spinner from './Spinner';
+import TableScroll from './TableScroll';
 
 interface HostState {
   apps: App[];

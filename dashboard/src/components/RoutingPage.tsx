@@ -7,8 +7,8 @@ import {
   useRoutingTableQuery,
 } from '../lib/query';
 import ConnectScreen from './ConnectScreen';
-import TableScroll from './TableScroll';
 import Spinner from './Spinner';
+import TableScroll from './TableScroll';
 
 const EMPTY_ROUTING_STATUS: RoutingStatusResponse = {
   angie: {

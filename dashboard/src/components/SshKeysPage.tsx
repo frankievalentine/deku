@@ -3,8 +3,8 @@ import { useTokenAccess } from '../hooks/useHasToken';
 import { addSshKey, deleteSshKey, fetchSshKeys, type SshKey } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
-import TableScroll from './TableScroll';
 import Spinner from './Spinner';
+import TableScroll from './TableScroll';
 
 export default function SshKeysPage() {
   const tokenAccess = useTokenAccess();

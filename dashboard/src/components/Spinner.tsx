@@ -49,7 +49,13 @@ export default function Spinner({ size, className }: SpinnerProps) {
       aria-hidden="true"
       focusable="false"
     >
-      <g fill="none" fillRule="evenodd" transform="translate(1 1)" strokeWidth="2" stroke="currentColor">
+      <g
+        fill="none"
+        fillRule="evenodd"
+        transform="translate(1 1)"
+        strokeWidth="2"
+        stroke="currentColor"
+      >
         <circle cx="22" cy="22" r="6" strokeOpacity="0">
           <animate
             attributeName="r"

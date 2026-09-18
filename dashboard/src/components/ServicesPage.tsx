@@ -24,8 +24,8 @@ import { SERVICE_KIND_DESCRIPTIONS, SERVICE_KIND_LABELS } from '../lib/service-m
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import ServiceStateBadge from './ServiceStateBadge';
-import TableScroll from './TableScroll';
 import Spinner from './Spinner';
+import TableScroll from './TableScroll';
 
 const SERVICE_KINDS: ManagedServiceKind[] = [...MANAGED_SERVICE_KINDS];
 

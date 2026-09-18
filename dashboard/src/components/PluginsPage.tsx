@@ -3,8 +3,8 @@ import { useTokenAccess } from '../hooks/useHasToken';
 import { deletePlugin, fetchPlugins, installPlugin, type Plugin } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
-import TableScroll from './TableScroll';
 import Spinner from './Spinner';
+import TableScroll from './TableScroll';
 
 export default function PluginsPage() {
   const tokenAccess = useTokenAccess();
