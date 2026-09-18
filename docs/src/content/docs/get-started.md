@@ -5,25 +5,7 @@ description: Install Deku, open the dashboard, deploy an app, and manage it.
 
 Start here for the first app, first deploy, and first dashboard sign-in after install.
 
-## 1. Get Dashboard Access Details
-
-During `deku setup`, Deku prints a one-time dashboard token. Save it before continuing.
-
-```bash
-deku dashboard
-```
-
-This prints:
-
-- The server-reachable dashboard URL
-- The local loopback dashboard URL
-- Whether dashboard access is configured
-- SSH tunnel and firewall guidance for remote access
-- The reset command if you need a new token
-
-If your browser is on another machine, either make TCP port `2810` reachable or use the SSH tunnel command printed by `deku dashboard`. Then open the dashboard URL in your browser and sign in with the one-time token from setup. If you lost it, run `deku dashboard reset-token`.
-
-## 2. Create Your First App
+## 1. Create Your First App
 
 Create an app from the CLI:
 
@@ -32,7 +14,7 @@ deku apps create my-app
 deku apps info my-app
 ```
 
-## 3. Deploy from the CLI
+## 2. Deploy from the CLI
 
 Deploy a source directory:
 
@@ -54,6 +36,24 @@ deku apps info my-app
 deku logs my-app -n 100
 deku ps list my-app
 ```
+
+## 3. Get Dashboard Access Details
+
+During `deku setup`, Deku prints a one-time dashboard token. Save it before continuing.
+
+```bash
+deku dashboard
+```
+
+This prints:
+
+- The server-reachable dashboard URL
+- The local loopback dashboard URL
+- Whether dashboard access is configured
+- SSH tunnel and firewall guidance for remote access
+- The reset command if you need a new token
+
+If your browser is on another machine, either make TCP port `2810` reachable or use the SSH tunnel command printed by `deku dashboard`. Then open the dashboard URL in your browser and sign in with the one-time token from setup. If you lost it, run `deku dashboard reset-token`.
 
 ## 4. Manage the App in the Dashboard
 

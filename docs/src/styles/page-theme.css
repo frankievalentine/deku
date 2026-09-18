@@ -34,6 +34,24 @@ body {
    theme's component <style> blocks, so each override out-specifies the theme (extra `html` or
    container class) rather than relying on source order. Keep those prefixes when editing. */
 
+/* The theme spaces sidebar groups twice: a 32px gap on the container and a 24px bottom margin on
+   every group, which reads as an inconsistent ~56px between sections. Keep one rhythm. */
+html .page-sidebar-container {
+  gap: 0;
+}
+
+html .page-sidebar-group {
+  margin-bottom: var(--page-space-6);
+}
+
+html .page-sidebar-group:last-child {
+  margin-bottom: 0;
+}
+
+html .page-sidebar-group-title {
+  margin-bottom: 0;
+}
+
 @media (min-width: 769px) {
   /* Brand aligns with the sidebar link text column: sidebar padding (space-6) + link padding (space-4).
      Full width so those insets hold on any large screen instead of drifting with the theme's 1440px cap. */

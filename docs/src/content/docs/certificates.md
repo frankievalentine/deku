@@ -18,7 +18,7 @@ every app.
 
 ## Enabling it
 
-In the dashboard, **Settings → Automatic certificates**: turn it on, switch the wildcard on, paste
+In the dashboard, **Routing → Automatic certificates**: turn it on, switch the wildcard on, paste
 the token, and save. Or write the daemon config directly:
 
 ```toml

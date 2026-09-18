@@ -112,7 +112,6 @@ export default defineConfig({
             { label: 'Installation', link: '/installation/' },
             { label: 'Get Started', link: '/get-started/' },
             { label: 'Dashboard Overview', link: '/dashboard-overview/' },
-            { label: 'Architecture', link: '/architecture/' },
           ],
         },
         {
@@ -152,6 +151,7 @@ export default defineConfig({
         {
           label: 'Project',
           items: [
+            { label: 'Architecture', link: '/architecture/' },
             { label: 'Contributing', link: '/contributing/' },
           ],
         },
