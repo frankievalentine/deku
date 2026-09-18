@@ -1,6 +1,55 @@
 import { type SubmitEvent, useEffect, useState } from 'react';
-import { verifyAcmeToken } from '../lib/api';
-import { getErrorMessage, useAcmeSettingsQuery, useSaveAcmeSettingsMutation } from '../lib/query';
+import { type AcmeStatus, verifyAcmeToken } from '../lib/api';
+import {
+  getErrorMessage,
+  useAcmeSettingsQuery,
+  useAcmeStatusQuery,
+  useSaveAcmeSettingsMutation,
+} from '../lib/query';
+
+/** What the daemon reports about the certificate, in one line. */
+function statusLine(status: AcmeStatus): { tone: 'success' | 'warning' | 'danger'; text: string } {
+  const { certificate } = status;
+
+  if (!status.enabled) {
+    return {
+      tone: 'warning',
+      text: 'Automatic certificates are off, so nothing is requested.',
+    };
+  }
+
+  if (!certificate.exists) {
+    return {
+      tone: 'warning',
+      text: status.request_file.written
+        ? 'Requested from the proxy. No certificate has been issued yet, so environment and per-deployment hostnames are served over HTTP until one is. The next deploy puts it in front of them.'
+        : 'Enabled, but the request is not in place yet. Saving these settings writes it.',
+    };
+  }
+
+  switch (certificate.lifecycle) {
+    case 'ok':
+      return {
+        tone: 'success',
+        text: `Issued, and it expires in ${certificate.days_remaining} day(s) at ${certificate.expires_at}. Environment and per-deployment hostnames are served over HTTPS.`,
+      };
+    case 'expiring':
+      return {
+        tone: 'warning',
+        text: `Issued but close to expiry (${certificate.days_remaining} day(s) left). Angie renews it before it lapses.`,
+      };
+    case 'expired':
+      return {
+        tone: 'danger',
+        text: 'The certificate has expired. Angie requests a new one on its next reload.',
+      };
+    default:
+      return {
+        tone: 'danger',
+        text: `A certificate file exists at ${certificate.path} but could not be read.`,
+      };
+  }
+}
 
 const DEFAULT_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
 const STAGING_DIRECTORY = 'https://acme-staging-v02.api.letsencrypt.org/directory';
@@ -20,6 +69,7 @@ function tokenSourceLabel(source: string | null | undefined): string {
 
 export default function AcmeSettingsPanel() {
   const settingsQuery = useAcmeSettingsQuery();
+  const statusQuery = useAcmeStatusQuery();
   const saveMutation = useSaveAcmeSettingsMutation();
 
   const [enabled, setEnabled] = useState(false);
@@ -91,11 +141,13 @@ export default function AcmeSettingsPanel() {
         certificate authority can verify the domain.
       </p>
 
-      <p className="callout callout-warning">
-        These settings are saved and validated, but certificates are not requested yet: the proxy
-        configuration that asks the certificate authority is not in place. Nothing is issued from
-        this screen for now.
-      </p>
+      {/* What was asked for, and what happened: the two differ while a
+          certificate is being issued, which is the state worth showing. */}
+      {statusQuery.data ? (
+        <p className={`callout callout-${statusLine(statusQuery.data).tone}`}>
+          {statusLine(statusQuery.data).text}
+        </p>
+      ) : null}
 
       {settingsQuery.isPending ? <p className="text-muted">Loading settings…</p> : null}
 

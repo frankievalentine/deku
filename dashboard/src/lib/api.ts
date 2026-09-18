@@ -834,6 +834,22 @@ export interface AcmeSettingsInput {
   api_token?: string;
 }
 
+export interface AcmeStatus extends AcmeSettings {
+  /** The file that asks Angie for the certificate. */
+  request_file: { path: string; written: boolean };
+  certificate: {
+    path: string;
+    exists: boolean;
+    expires_at: string | null;
+    days_remaining: number | null;
+    lifecycle: 'ok' | 'expiring' | 'expired' | 'missing' | 'unknown';
+  };
+}
+
+export function fetchAcmeStatus(): Promise<AcmeStatus> {
+  return apiFetch<AcmeStatus>('/api/acme/status');
+}
+
 export function fetchAcmeSettings(): Promise<AcmeSettings> {
   return apiFetch<AcmeSettings>('/api/acme');
 }

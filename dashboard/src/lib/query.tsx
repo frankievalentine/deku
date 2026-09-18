@@ -23,6 +23,7 @@ import {
   deleteConfigVar,
   deleteManagedService,
   fetchAcmeSettings,
+  fetchAcmeStatus,
   fetchApp,
   fetchAppRoutingStatus,
   fetchApps,
@@ -138,6 +139,7 @@ export const queryKeys = {
   },
   acme: {
     settings: ['acme', 'settings'] as const,
+    status: ['acme', 'status'] as const,
   },
   settings: {
     summary: ['settings', 'summary'] as const,
@@ -531,6 +533,18 @@ export function useAcmeSettingsQuery(options?: QueryEnabledOnly) {
   return useQuery(acmeSettingsQueryOptions(options));
 }
 
+export function acmeStatusQueryOptions(options?: QueryEnabledOnly) {
+  return queryOptions({
+    queryKey: queryKeys.acme.status,
+    queryFn: () => fetchAcmeStatus(),
+    enabled: options?.enabled ?? true,
+  });
+}
+
+export function useAcmeStatusQuery(options?: QueryEnabledOnly) {
+  return useQuery(acmeStatusQueryOptions(options));
+}
+
 export function useSaveAcmeSettingsMutation() {
   const queryClient = useQueryClient();
 
@@ -539,6 +553,9 @@ export function useSaveAcmeSettingsMutation() {
       mutationFn: (input: AcmeSettingsInput) => saveAcmeSettings(input),
       onSuccess: async (settings: AcmeSettings) => {
         queryClient.setQueryData(queryKeys.acme.settings, settings);
+        // Saving turns the request on or off, so what the daemon reports about
+        // it is stale the moment this succeeds.
+        await queryClient.invalidateQueries({ queryKey: queryKeys.acme.status });
       },
     })
   );
