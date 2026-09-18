@@ -978,7 +978,7 @@ async fn do_deploy(
             .await
             .map(|app| app.tls_enabled)
             .unwrap_or(false);
-        if !domains.is_empty() {
+        if proxy::has_routable_hosts(&domains, cfg.global_domain.as_deref()) {
             // One upstream per web replica, so scaling the web process actually
             // spreads traffic instead of leaving extra replicas idle.
             let upstreams: Vec<deku_core::types::Upstream> = web_replicas

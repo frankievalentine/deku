@@ -59,6 +59,16 @@ pub fn key_path(app_name: &str) -> PathBuf {
     PathBuf::from(format!("/etc/angie/ssl/deku_{app_name}.key"))
 }
 
+/// Whether an app has anything to route.
+///
+/// An app with no domain of its own is still reachable through the derived
+/// environment and per-deployment hostnames under the global domain, so the
+/// absence of app domains alone must not stop the proxy from being configured:
+/// the deploy output and the routing view both report those hostnames.
+pub fn has_routable_hosts(domains: &[String], global_domain: Option<&str>) -> bool {
+    !domains.is_empty() || global_domain.is_some_and(|domain| !domain.trim().is_empty())
+}
+
 /// The hostname an environment is reachable at.
 ///
 /// `None` without a global domain: there is no name to route on. Production is
@@ -789,6 +799,27 @@ mod tests {
             "without a global domain there is no name to route an environment on"
         );
         assert_eq!(vhosts[0].key, "demo");
+    }
+
+    #[test]
+    fn a_global_domain_is_enough_to_have_something_to_route() {
+        // The deploy output names an environment hostname for any app under the
+        // global domain, so the proxy has to be configured for it even when the
+        // app has no domain of its own.
+        assert!(super::has_routable_hosts(&[], Some("apps.test")));
+        assert!(super::has_routable_hosts(
+            &[String::from("example.com")],
+            None
+        ));
+        assert!(super::has_routable_hosts(
+            &[String::from("example.com")],
+            Some("apps.test")
+        ));
+        // Nothing to route on: no domain and no global domain.
+        assert!(!super::has_routable_hosts(&[], None));
+        // A global domain that is only whitespace is no global domain, which is
+        // the same rule the hostname helpers apply.
+        assert!(!super::has_routable_hosts(&[], Some("   ")));
     }
 
     fn write_executable(path: &std::path::Path, body: &str) {
