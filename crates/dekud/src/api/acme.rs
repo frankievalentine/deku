@@ -123,6 +123,21 @@ pub async fn put_acme(
         return internal_error(error).into_response();
     }
 
+    // The certificate request Angie reads is part of the settings, so it is
+    // written here too rather than waiting for a deploy. The settings are
+    // already saved when this fails, which is why the message names the file
+    // rather than claiming nothing changed.
+    let email = match crate::services::letsencrypt::get_global_email(&cfg).await {
+        Ok(email) => email,
+        Err(error) => {
+            tracing::warn!("could not read the certificate account email: {error}");
+            None
+        }
+    };
+    if let Err(error) = crate::acme::file::sync(&cfg, email.as_deref()).await {
+        return internal_error(error).into_response();
+    }
+
     state.events.emit(
         None,
         "acme.configured",

@@ -62,6 +62,23 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Angie requests the wildcard certificate from a file of its own, so the
+    // client exists from startup rather than from the next deploy. A failure is
+    // reported, not fatal: a host that has not configured a certificate still
+    // runs, and a rejected file is rolled back before Angie ever reads it.
+    let acme_email = match services::letsencrypt::get_global_email(&cfg).await {
+        Ok(email) => email,
+        Err(error) => {
+            warn!("could not read the certificate account email: {error}");
+            None
+        }
+    };
+    match acme::file::sync(&cfg, acme_email.as_deref()).await {
+        Ok(acme::file::Outcome::Unchanged) => {}
+        Ok(outcome) => info!(?outcome, "synced the ACME configuration"),
+        Err(error) => warn!("could not apply the ACME configuration: {error}"),
+    }
+
     let pool = db::connect(&cfg).await?;
     db::migrate(&pool).await?;
 

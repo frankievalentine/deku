@@ -9,6 +9,7 @@
 //! certificate is requested and used stays in the proxy configuration.
 
 pub mod cloudflare;
+pub mod file;
 
 use anyhow::{anyhow, Result};
 

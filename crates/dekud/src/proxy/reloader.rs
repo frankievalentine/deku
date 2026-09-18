@@ -119,6 +119,13 @@ pub fn app_config_files(conf_dir: &Path) -> Vec<String> {
         // A directory can be named `something.conf`; only files are configs.
         .filter(|entry| entry.path().is_file())
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "conf"))
+        // The ACME configuration shares the directory but belongs to no app.
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .is_some_and(|name| crate::acme::file::is_app_config_file(&name.to_string_lossy()))
+        })
         .filter_map(|entry| {
             entry
                 .path()
