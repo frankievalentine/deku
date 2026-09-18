@@ -110,6 +110,13 @@ pub async fn derived_hostnames(
         return Ok(Vec::new());
     };
 
+    // Read once, outside the loop: whether the app has domains of its own
+    // decides whether production has an environment hostname, and that is a
+    // property of the app rather than of any one environment.
+    let app_has_domains = !crate::db::queries::list_domain_names(pool, app_id)
+        .await?
+        .is_empty();
+
     let mut hostnames = Vec::new();
     for environment in crate::db::queries::list_environments(pool, app_id).await? {
         let serving = !crate::db::queries::list_web_upstreams(pool, app_id, &environment.id)
@@ -119,7 +126,10 @@ pub async fn derived_hostnames(
             continue;
         }
 
-        if !environment.is_production {
+        // Production is reached at the app's own domains, so it has no
+        // environment hostname — except without any, where the proxy serves it
+        // one and this view has to report the hostname that is actually written.
+        if !environment.is_production || !app_has_domains {
             if let Some(hostname) =
                 environment_hostname(app_name, &environment.slug, Some(global_domain))
             {
@@ -206,11 +216,23 @@ async fn build_vhosts(
         let from_caller = environment.id == desired.environment_id;
 
         let (key, domains) = if environment.is_production {
-            let domains = if from_caller {
+            let mut domains = if from_caller {
                 desired.domains.to_vec()
             } else {
                 crate::db::queries::list_domain_names(pool, app_id).await?
             };
+            // Production is normally reached at the app's own domains, so it has
+            // no environment hostname of its own. An app with no domains would
+            // then have no stable production hostname at all, only the
+            // per-deployment URLs below that change with every deploy, so it
+            // takes the same environment hostname the others get.
+            if domains.is_empty() {
+                domains.extend(environment_hostname(
+                    app_name,
+                    &environment.slug,
+                    global_domain,
+                ));
+            }
             (app_name.to_string(), domains)
         } else {
             let Some(global_domain) = global_domain else {
@@ -681,6 +703,73 @@ mod tests {
                 .map(|upstream| upstream.port)
                 .collect::<Vec<_>>(),
             vec![3000]
+        );
+    }
+
+    async fn pool_without_domains(app_id: &str) -> sqlx::SqlitePool {
+        let pool = pool_with_app_and_domain(app_id).await;
+        sqlx::query("DELETE FROM domains WHERE app_id = ?1")
+            .bind(app_id)
+            .execute(&pool)
+            .await
+            .expect("clear domains");
+        pool
+    }
+
+    #[tokio::test]
+    async fn a_domain_less_app_is_served_at_a_production_hostname() {
+        let pool = pool_without_domains("app-1").await;
+        let production = seed_environment(&pool, "app-1", "production", true, 3000).await;
+
+        let desired = DesiredAppConfig {
+            environment_id: &production,
+            domains: &[],
+            upstreams: &[Upstream {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+            }],
+            tls: false,
+            auth: None,
+            maintenance: false,
+            maintenance_message: None,
+            redirects: &[],
+        };
+
+        let vhosts = super::build_vhosts(&pool, Some("apps.test"), "app-1", "demo", &desired)
+            .await
+            .expect("vhosts");
+
+        let served = vhosts
+            .iter()
+            .find(|vhost| vhost.key == "demo")
+            .expect("production vhost");
+        assert_eq!(
+            served.domains,
+            vec![String::from("demo-production.apps.test")],
+            "without a domain of its own, production serves its environment hostname"
+        );
+        assert!(
+            !vhosts.iter().any(|vhost| vhost.domains.is_empty()),
+            "no vhost is written that has nothing to route on"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_domain_less_app_lists_its_production_hostname() {
+        let pool = pool_without_domains("app-1").await;
+        seed_environment(&pool, "app-1", "production", true, 3000).await;
+
+        let hostnames = super::derived_hostnames(&pool, "app-1", "demo", Some("apps.test"))
+            .await
+            .expect("hostnames");
+        let names: Vec<&str> = hostnames
+            .iter()
+            .map(|entry| entry.hostname.as_str())
+            .collect();
+
+        assert!(
+            names.contains(&"demo-production.apps.test"),
+            "the proxy serves this hostname, so the view has to report it: {names:?}"
         );
     }
 
