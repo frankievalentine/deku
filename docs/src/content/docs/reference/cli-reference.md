@@ -91,9 +91,12 @@ those would conflict with the source or duplicate work. The command prints both 
 
 ### `deku config`
 
-- `config list <app>` — KEY=VALUE output, with `(global)` marking global vars
-- `config set <app> KEY=VAL [KEY=VAL ...]` — batch set via per-key API writes
-- `config unset <app> KEY`
+- `config list <app> [--environment <slug>]` — KEY=VALUE output, with `(global)` marking global vars
+  and `(override)` marking a value that applies to one environment
+- `config set <app> KEY=VAL [KEY=VAL ...] [--environment <slug>]` — batch set via per-key API
+  writes; with `--environment` the value overrides the app-wide one inside that environment only
+- `config unset <app> KEY [--environment <slug>]` — without `--environment` the app-wide value is
+  removed; with it, only that environment's override is
 - `config import <app> --file .env [--overwrite]` — import a `.env` file, skipping vars that already exist unless `--overwrite` is passed
 
 ### `deku deploy token`
@@ -106,7 +109,7 @@ A deploy token can only trigger deploys for its own app. See [Deploy tokens](/de
 
 ### `deku deploy`
 
-- `deploy run <app> [--path .] [--image img] [--builder b] [--build-host local|name]`
+- `deploy run <app> [--path .] [--image img] [--builder b] [--build-host local|name] [--environment <slug>]`
 - `deploy token create|list|revoke` — CI credentials scoped to one app
 - With `--image`: POST to `/api/apps/:name/deploy`
 - Without: Tar.gz source directory, POST multipart to `/api/apps/:name/deploy/archive`
@@ -301,16 +304,19 @@ See [Backups](/backups/).
 
 ### `deku env`
 
-Every app has a `production` environment, which is what `deku deploy run <app>` targets. Additional
-environments are named deployment targets for the same app.
+Every app has a `production` environment, which is what a plain `deku deploy run <app>` targets.
+Additional environments are named deployment targets for the same app, served on derived
+`<app>-<slug>.<global_domain>` hostnames over HTTP.
 
 - `env list <app>` — slug, display name, tracked branch, and whether it is production
 - `env create <app> <name> [--slug <slug>] [--branch <ref>]` — create one; the slug is derived from
   the name unless given, and an explicit slug must be lowercase letters, digits, and `-`
 - `env remove <app> <slug>` — remove one; production cannot be removed
 
-`--branch` records the git ref an environment tracks. Nothing auto-deploys on push yet, so it is
-metadata used for display and for choosing a target.
+Target one with `deku deploy run <app> --environment <slug>`, and set values that apply only there
+with `deku config set <app> KEY=VAL --environment <slug>`. `--branch` records the git ref an
+environment tracks; it is metadata today, and nothing auto-deploys on push. See
+[Environments](/environments/).
 
 ### `deku alerts`
 

@@ -128,6 +128,7 @@ export default defineConfig({
           label: 'Workflows',
           items: [
             { label: 'App templates', link: '/app-templates/' },
+            { label: 'Environments', link: '/environments/' },
             { label: 'App authentication', link: '/app-authentication/' },
             { label: 'Build server', link: '/build-server/' },
             { label: 'AGENTS.md', link: '/agents/' },
