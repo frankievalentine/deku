@@ -171,9 +171,21 @@ export interface Upstream {
   port: number;
 }
 
+/**
+ * A hostname Angie serves for an app beyond the app's own domains: one per
+ * environment and one per retained deployment.
+ */
+export interface DerivedHostname {
+  hostname: string;
+  environment: string;
+  /** Set when the hostname pins a single deployment. */
+  deployment_id?: string;
+}
+
 export interface RoutingTableEntry {
   app: string;
   domains: string[];
+  hostnames: DerivedHostname[];
   upstreams: Upstream[];
 }
 
@@ -192,6 +204,7 @@ export interface RoutingAppStatus {
   app: string;
   status: string;
   domains: string[];
+  hostnames: DerivedHostname[];
   upstreams: Upstream[];
   tls_enabled: boolean;
   proxy_config_path: string;

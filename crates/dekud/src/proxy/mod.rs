@@ -56,6 +56,90 @@ pub fn key_path(app_name: &str) -> PathBuf {
     PathBuf::from(format!("/etc/angie/ssl/deku_{app_name}.key"))
 }
 
+/// The hostname an environment is reachable at.
+///
+/// `None` without a global domain: there is no name to route on. Production is
+/// reached at the app's own domains, so only other environments have one of
+/// these.
+pub fn environment_hostname(
+    app_name: &str,
+    environment_slug: &str,
+    global_domain: Option<&str>,
+) -> Option<String> {
+    let global_domain = global_domain?;
+    Some(format!("{app_name}-{environment_slug}.{global_domain}"))
+}
+
+/// A hostname Angie serves for an app beyond the app's own domains.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DerivedHostname {
+    pub hostname: String,
+    /// The environment slug this hostname belongs to.
+    pub environment: String,
+    /// The deployment this hostname pins, when it is a per-deployment URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
+}
+
+/// The hostnames an app is reachable at beyond its own domains.
+///
+/// Derived from the same rules the proxy writes, so a view of routing cannot
+/// disagree with what is actually served. Only hostnames with something behind
+/// them are listed, matching the proxy's rule of not writing a vhost that has
+/// nothing to serve.
+pub async fn derived_hostnames(
+    pool: &sqlx::SqlitePool,
+    app_id: &str,
+    app_name: &str,
+    global_domain: Option<&str>,
+) -> Result<Vec<DerivedHostname>> {
+    let Some(global_domain) = global_domain.filter(|domain| !domain.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+
+    let mut hostnames = Vec::new();
+    for environment in crate::db::queries::list_environments(pool, app_id).await? {
+        let serving = !crate::db::queries::list_web_upstreams(pool, app_id, &environment.id)
+            .await?
+            .is_empty();
+        if !serving {
+            continue;
+        }
+
+        if !environment.is_production {
+            if let Some(hostname) =
+                environment_hostname(app_name, &environment.slug, Some(global_domain))
+            {
+                hostnames.push(DerivedHostname {
+                    hostname,
+                    environment: environment.slug.clone(),
+                    deployment_id: None,
+                });
+            }
+        }
+
+        for (deployment_id, _) in
+            crate::db::queries::list_deployment_upstream_ports(pool, app_id, &environment.id)
+                .await?
+        {
+            if let Some(hostname) = deployment_hostname(
+                app_name,
+                &environment.slug,
+                &deployment_id,
+                Some(global_domain),
+            ) {
+                hostnames.push(DerivedHostname {
+                    hostname,
+                    environment: environment.slug.clone(),
+                    deployment_id: Some(deployment_id),
+                });
+            }
+        }
+    }
+
+    Ok(hostnames)
+}
+
 /// The hostname a retained deployment is reachable at.
 ///
 /// `None` when no global domain is configured: a per-deployment URL is a
@@ -119,7 +203,8 @@ async fn build_vhosts(
             let Some(global_domain) = global_domain else {
                 continue;
             };
-            let hostname = format!("{app_name}-{}.{global_domain}", environment.slug);
+            let hostname = environment_hostname(app_name, &environment.slug, Some(global_domain))
+                .expect("a global domain is in hand");
             (format!("{app_name}-{}", environment.slug), vec![hostname])
         };
 
@@ -583,6 +668,91 @@ mod tests {
                 .map(|upstream| upstream.port)
                 .collect::<Vec<_>>(),
             vec![3000]
+        );
+    }
+
+    #[tokio::test]
+    async fn derived_hostnames_cover_environments_and_retained_deployments() {
+        let pool = pool_with_app_and_domain("app-1").await;
+        seed_environment(&pool, "app-1", "production", true, 3000).await;
+        seed_environment(&pool, "app-1", "staging", false, 3100).await;
+
+        let hostnames = super::derived_hostnames(&pool, "app-1", "demo", Some("apps.test"))
+            .await
+            .expect("hostnames");
+        let names: Vec<&str> = hostnames
+            .iter()
+            .map(|entry| entry.hostname.as_str())
+            .collect();
+
+        // Production is reached at the app's own domains, so it has no derived
+        // environment hostname; a per-deployment URL exists for every environment.
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.starts_with("demo-production.")),
+            "production must not claim a derived environment hostname: {names:?}"
+        );
+        assert!(names.contains(&"demo-staging.apps.test"), "{names:?}");
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with("demo-production-") && name.ends_with(".apps.test")),
+            "production deployments keep their own URLs: {names:?}"
+        );
+
+        let environment = hostnames
+            .iter()
+            .find(|entry| entry.hostname == "demo-staging.apps.test")
+            .expect("the staging hostname");
+        assert_eq!(environment.environment, "staging");
+        assert!(environment.deployment_id.is_none());
+
+        let preview = hostnames
+            .iter()
+            .find(|entry| entry.deployment_id.is_some())
+            .expect("a per-deployment hostname");
+        assert!(
+            preview
+                .hostname
+                .contains(&preview.deployment_id.clone().expect("id")[..8]),
+            "a deployment hostname names its deployment: {preview:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_environment_that_serves_nothing_is_not_listed() {
+        let pool = pool_with_app_and_domain("app-1").await;
+        seed_environment(&pool, "app-1", "production", true, 3000).await;
+        // Staging exists but has never been deployed to.
+        sqlx::query(
+            "INSERT INTO environments (id, app_id, name, slug, is_production, created_at) \
+             VALUES ('env-staging', 'app-1', 'staging', 'staging', 0, CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert staging");
+
+        let hostnames = super::derived_hostnames(&pool, "app-1", "demo", Some("apps.test"))
+            .await
+            .expect("hostnames");
+        assert!(
+            hostnames.iter().all(|entry| entry.environment != "staging"),
+            "a hostname with nothing behind it must not be reported: {hostnames:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn derived_hostnames_are_empty_without_a_global_domain() {
+        let pool = pool_with_app_and_domain("app-1").await;
+        seed_environment(&pool, "app-1", "production", true, 3000).await;
+
+        let hostnames = super::derived_hostnames(&pool, "app-1", "demo", None)
+            .await
+            .expect("hostnames");
+        assert!(
+            hostnames.is_empty(),
+            "no domain means no hostname to route on"
         );
     }
 

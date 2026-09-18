@@ -2923,6 +2923,7 @@ struct RoutingAppStatus {
     app: String,
     status: String,
     domains: Vec<String>,
+    hostnames: Vec<crate::proxy::DerivedHostname>,
     upstreams: Vec<Upstream>,
     tls_enabled: bool,
     proxy_config_path: String,
@@ -4190,9 +4191,20 @@ async fn build_routing_table(state: &AppState) -> anyhow::Result<Vec<serde_json:
         let domains = queries::list_domain_names(&state.pool, &app.id).await?;
         let environment = queries::ensure_production_environment(&state.pool, &app.id).await?;
         let upstreams = queries::list_web_upstreams(&state.pool, &app.id, &environment.id).await?;
+        // Environment and per-deployment hostnames are served too, and are
+        // derived rather than stored, so they are read from the same place the
+        // proxy writes them.
+        let hostnames = crate::proxy::derived_hostnames(
+            &state.pool,
+            &app.id,
+            &app.name,
+            state.config.global_domain.as_deref(),
+        )
+        .await?;
         table.push(serde_json::json!({
             "app": app.name,
             "domains": domains,
+            "hostnames": hostnames,
             "upstreams": upstreams.iter().map(|upstream| serde_json::json!({
                 "host": upstream.host,
                 "port": upstream.port,
@@ -4225,6 +4237,13 @@ async fn build_routing_status_for_app(
     let domains = queries::list_domain_names(&state.pool, &app.id).await?;
     let environment = queries::ensure_production_environment(&state.pool, &app.id).await?;
     let upstreams = queries::list_web_upstreams(&state.pool, &app.id, &environment.id).await?;
+    let hostnames = crate::proxy::derived_hostnames(
+        &state.pool,
+        &app.id,
+        &app.name,
+        state.config.global_domain.as_deref(),
+    )
+    .await?;
     let proxy_config_path = crate::proxy::app_config_path(&state.config.angie_conf_dir, &app.name);
     let proxy_config_present = proxy_config_path.exists();
     let tls_status = crate::services::letsencrypt::status(&state.pool, &app.name).await?;
@@ -4271,6 +4290,7 @@ async fn build_routing_status_for_app(
         app: app.name.clone(),
         status: status.to_string(),
         domains,
+        hostnames,
         upstreams,
         tls_enabled: app.tls_enabled,
         proxy_config_path: proxy_config_path.display().to_string(),

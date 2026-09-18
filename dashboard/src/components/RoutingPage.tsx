@@ -148,6 +148,7 @@ function RoutingInner() {
                 <tr>
                   <th scope="col">App</th>
                   <th scope="col">Domains</th>
+                  <th scope="col">Environment and preview hostnames</th>
                   <th scope="col">Upstreams</th>
                 </tr>
               </thead>
@@ -157,6 +158,17 @@ function RoutingInner() {
                     <td>{entry.app}</td>
                     <td className="font-mono">
                       {entry.domains.length === 0 ? 'None' : entry.domains.join(', ')}
+                    </td>
+                    <td className="font-mono">
+                      {entry.hostnames.length === 0
+                        ? 'None'
+                        : entry.hostnames
+                            .map((hostname) =>
+                              hostname.deployment_id
+                                ? `${hostname.hostname} (preview, ${hostname.environment})`
+                                : `${hostname.hostname} (${hostname.environment})`
+                            )
+                            .join(', ')}
                     </td>
                     <td className="font-mono">
                       {entry.upstreams.length === 0
@@ -187,6 +199,7 @@ function RoutingInner() {
                 <tr>
                   <th scope="col">App</th>
                   <th scope="col">Status</th>
+                  <th scope="col">Hostnames</th>
                   <th scope="col">TLS</th>
                   <th scope="col">Proxy config</th>
                   <th scope="col">Issues</th>
@@ -201,6 +214,7 @@ function RoutingInner() {
                     <td>
                       <ServiceState status={app.status} />
                     </td>
+                    <td>{app.hostnames.length === 0 ? 'None' : app.hostnames.length}</td>
                     <td>{app.tls_enabled ? (app.tls_ready ? 'Ready' : 'Enabled') : 'Off'}</td>
                     <td className="font-mono">
                       {app.proxy_config_present ? 'Present' : 'Missing'}
