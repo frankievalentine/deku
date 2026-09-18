@@ -2968,42 +2968,14 @@ async fn reconcile_proxy_for_app(
     app_id: &str,
     app_name: &str,
 ) -> anyhow::Result<()> {
-    let tls = match queries::get_app_by_id(&state.pool, app_id).await {
-        Ok(app) => app.tls_enabled,
-        Err(e) => return Err(e.into()),
-    };
-
-    let domains = queries::list_domain_names(&state.pool, app_id).await?;
-
-    // Upstreams come from the running web containers of this environment, so a
-    // reconcile after a deploy keeps every replica in the pool instead of
-    // collapsing to one, and never reaches across environments.
-    let environment = queries::ensure_production_environment(&state.pool, app_id).await?;
-    let upstreams = queries::list_web_upstreams(&state.pool, app_id, &environment.id).await?;
-
-    // Empty production state removes only the production vhost: an environment
-    // that is still serving keeps its own block. The file is removed only when
-    // no vhost survives.
-    let extras = crate::proxy::load_extras(&state.pool, app_id).await?;
-    crate::proxy::apply_app_config(
+    crate::proxy::reconcile_app(
         &state.pool,
         &state.config.angie_conf_dir,
         state.config.global_domain.as_deref(),
         app_id,
         app_name,
-        Some(crate::proxy::DesiredAppConfig {
-            environment_id: &environment.id,
-            domains: &domains,
-            upstreams: &upstreams,
-            tls,
-            auth: extras.auth.as_ref(),
-            maintenance: extras.maintenance,
-            maintenance_message: extras.maintenance_message.as_deref(),
-            redirects: &extras.redirects,
-        }),
     )
-    .await?;
-    Ok(())
+    .await
 }
 
 fn normalize_check_path(path: &str) -> String {
@@ -3083,10 +3055,64 @@ async fn list_deployments(
         }
         Err(e) => return internal_error(e).into_response(),
     };
-    match queries::list_deployments(&state.pool, &app.id).await {
-        Ok(deps) => (StatusCode::OK, Json(serde_json::json!(deps))).into_response(),
-        Err(e) => internal_error(e).into_response(),
+    let deps = match queries::list_deployments(&state.pool, &app.id).await {
+        Ok(deps) => deps,
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    // A deployment is reachable at its own URL only once a global domain exists
+    // and while its containers are retained. The URL is derived rather than
+    // stored, so it is computed here — but only for deployments that still have
+    // running web containers, since a retired one's vhost has been removed.
+    let slugs: std::collections::HashMap<String, String> =
+        queries::list_deployment_environment_slugs(&state.pool, &app.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+    let mut reachable: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if state.config.global_domain.is_some() {
+        for environment in queries::list_environments(&state.pool, &app.id)
+            .await
+            .unwrap_or_default()
+        {
+            for (deployment_id, ports) in
+                queries::list_deployment_upstream_ports(&state.pool, &app.id, &environment.id)
+                    .await
+                    .unwrap_or_default()
+            {
+                if !ports.is_empty() {
+                    reachable.insert(deployment_id);
+                }
+            }
+        }
     }
+
+    let deployments: Vec<serde_json::Value> = deps
+        .iter()
+        .map(|deployment| {
+            let mut value = serde_json::to_value(deployment).unwrap_or_default();
+            let url = slugs
+                .get(&deployment.id)
+                .filter(|_| reachable.contains(&deployment.id))
+                .and_then(|slug| {
+                    crate::proxy::deployment_hostname(
+                        &app.name,
+                        slug,
+                        &deployment.id,
+                        state.config.global_domain.as_deref(),
+                    )
+                })
+                .map(|hostname| format!("http://{hostname}"));
+            if let Some(url) = url {
+                value["preview_url"] = serde_json::Value::String(url);
+            }
+            value
+        })
+        .collect();
+
+    (StatusCode::OK, Json(serde_json::json!(deployments))).into_response()
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

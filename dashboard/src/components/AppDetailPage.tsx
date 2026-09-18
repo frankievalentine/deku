@@ -1148,6 +1148,7 @@ function DeploymentHistoryPanel({
                 <th scope="col">ID</th>
                 <th scope="col">Status</th>
                 <th scope="col">Builder</th>
+                <th scope="col">URL</th>
                 <th scope="col">Created</th>
               </tr>
             </thead>
@@ -1166,6 +1167,15 @@ function DeploymentHistoryPanel({
                     <StatusBadge status={deployment.status} size="sm" />
                   </td>
                   <td className="font-mono">{deployment.builder}</td>
+                  <td className="font-mono">
+                    {deployment.preview_url ? (
+                      <a href={deployment.preview_url} target="_blank" rel="noreferrer">
+                        {deployment.preview_url.replace(/^https?:\/\//, '')}
+                      </a>
+                    ) : (
+                      <span className="text-muted">-</span>
+                    )}
+                  </td>
                   <td className="font-mono">{formatDate(deployment.created_at)}</td>
                 </tr>
               ))}

@@ -403,7 +403,7 @@ pub async fn run_deploy(
         plugins,
         &req,
         &mut deployment,
-        &environment.id,
+        &environment,
     )
     .await;
 
@@ -482,8 +482,9 @@ async fn do_deploy(
     plugins: &crate::plugins::PluginRegistry,
     req: &DeployRequest,
     deployment: &mut deku_core::types::Deployment,
-    environment_id: &str,
+    environment: &crate::db::queries::Environment,
 ) -> anyhow::Result<String> {
+    let environment_id = environment.id.as_str();
     let app_id = &req.app_id;
     let app_name = &req.app_name;
     let deploy_id = &deployment.id;
@@ -1049,11 +1050,22 @@ async fn do_deploy(
             format!("http://127.0.0.1:{port}")
         };
 
+        // The deployment's own address, which keeps serving this build while it
+        // is retained even after a later deploy replaces it.
+        let deployment_url = crate::proxy::deployment_hostname(
+            app_name,
+            &environment.slug,
+            deploy_id,
+            cfg.global_domain.as_deref(),
+        )
+        .map(|hostname| format!("http://{hostname}"));
+
         events.emit(
             Some(app_id.clone()),
             "deploy.live",
             Some(serde_json::json!({
                 "url": url,
+                "deployment_url": deployment_url,
                 "dashboard": format!("http://127.0.0.1:{}", cfg.api_port),
             })),
         );
@@ -1122,12 +1134,31 @@ async fn do_deploy(
     if !old_ids.is_empty() {
         let docker_clone = docker.clone();
         let pool_clone = pool.clone();
+        let cfg_clone = cfg.clone();
+        let app_id_clone = app_id.clone();
+        let app_name_clone = app_name.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(retire_secs)).await;
             for id in old_ids {
                 let _ = container::stop_container(&docker_clone, &id, 30).await;
                 let _ = container::remove_container(&docker_clone, &id).await;
                 let _ = queries::update_container_status(&pool_clone, &id, "removed").await;
+            }
+
+            // A retired deployment's vhost would otherwise keep pointing at a
+            // port nothing listens on, so its URL would fail with a proxy error
+            // instead of simply no longer resolving. Rewriting now makes the URL
+            // disappear with the containers it named.
+            if let Err(error) = crate::proxy::reconcile_app(
+                &pool_clone,
+                &cfg_clone.angie_conf_dir,
+                cfg_clone.global_domain.as_deref(),
+                &app_id_clone,
+                &app_name_clone,
+            )
+            .await
+            {
+                tracing::warn!(app = %app_name_clone, "reconcile after retirement failed: {error}");
             }
         });
     }

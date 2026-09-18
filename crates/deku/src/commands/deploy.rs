@@ -142,19 +142,26 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
                 if deploys.is_empty() {
                     println!("No deployments found.");
                 } else {
-                    println!("{:<12} {:<12} {:<20} CREATED", "ID", "STATUS", "IMAGE");
-                    println!("{}", "-".repeat(72));
+                    println!(
+                        "{:<10} {:<12} {:<20} {:<34} CREATED",
+                        "ID", "STATUS", "IMAGE", "URL"
+                    );
+                    println!("{}", "-".repeat(110));
                     for d in deploys {
                         let id = &d["id"].as_str().unwrap_or("?")
                             [..8.min(d["id"].as_str().unwrap_or("?").len())];
                         let status = d["status"].as_str().unwrap_or("-");
                         let image = d["image_tag"].as_str().unwrap_or("-");
                         let created = d["created_at"].as_str().unwrap_or("-");
+                        // Absent while a deployment is no longer retained, or when
+                        // no global domain is configured.
+                        let url = d["preview_url"].as_str().unwrap_or("-");
                         println!(
-                            "{:<12} {:<12} {:<20} {}",
+                            "{:<10} {:<12} {:<20} {:<34} {}",
                             id,
                             status,
                             &image[..20.min(image.len())],
+                            &url[..34.min(url.len())],
                             &created[..19.min(created.len())]
                         );
                     }
@@ -257,12 +264,19 @@ async fn stream_deploy_logs(client: &DekuClient, app: &str, since: &str) -> Resu
                         let payload = crate::client::event_payload(&evt);
                         if let Some(line) = payload["line"].as_str() {
                             println!("  {line}");
-                        } else if let Some(url) = payload["url"].as_str() {
-                            println!("[{etype}] {url}");
-                        } else if let Some(error) = payload["error"].as_str() {
-                            println!("[{etype}] {error}");
                         } else {
-                            println!("[{etype}]");
+                            if let Some(url) = payload["url"].as_str() {
+                                println!("[{etype}] {url}");
+                            } else if let Some(error) = payload["error"].as_str() {
+                                println!("[{etype}] {error}");
+                            } else {
+                                println!("[{etype}]");
+                            }
+                            // The build's own address stays valid while the
+                            // deployment is retained, after later deploys too.
+                            if let Some(build_url) = payload["deployment_url"].as_str() {
+                                println!("  this build: {build_url}");
+                            }
                         }
 
                         // `deploy.rollback` is mid-deploy: the terminal outcome and

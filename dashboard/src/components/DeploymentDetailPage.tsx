@@ -226,6 +226,18 @@ function DeploymentDetailInner() {
                 <dd className="font-mono">{selectedDeployment.image_tag ?? 'Not resolved yet'}</dd>
               </div>
               <div>
+                <dt>URL</dt>
+                <dd className="font-mono">
+                  {selectedDeployment.preview_url ? (
+                    <a href={selectedDeployment.preview_url} target="_blank" rel="noreferrer">
+                      {selectedDeployment.preview_url}
+                    </a>
+                  ) : (
+                    <span className="text-muted">Not retained</span>
+                  )}
+                </dd>
+              </div>
+              <div>
                 <dt>Created</dt>
                 <dd className="font-mono">{formatDate(selectedDeployment.created_at)}</dd>
               </div>
@@ -318,6 +330,7 @@ function DeploymentDetailInner() {
                     <th>ID</th>
                     <th>Status</th>
                     <th>Builder</th>
+                    <th>URL</th>
                     <th>Created</th>
                   </tr>
                 </thead>
@@ -336,6 +349,15 @@ function DeploymentDetailInner() {
                         <StatusBadge status={deployment.status} size="sm" />
                       </td>
                       <td className="font-mono">{deployment.builder}</td>
+                      <td className="font-mono">
+                        {deployment.preview_url ? (
+                          <a href={deployment.preview_url} target="_blank" rel="noreferrer">
+                            {deployment.preview_url.replace(/^https?:\/\//, '')}
+                          </a>
+                        ) : (
+                          <span className="text-muted">-</span>
+                        )}
+                      </td>
                       <td className="font-mono">{formatDate(deployment.created_at)}</td>
                     </tr>
                   ))}

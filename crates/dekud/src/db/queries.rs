@@ -1015,6 +1015,25 @@ pub async fn list_recent_environment_deployments(
     Ok(ids)
 }
 
+/// Every deployment of an app with the slug of its environment.
+///
+/// A per-deployment URL needs the environment's slug, and `Deployment` carries
+/// only its id, so callers map ids to slugs rather than making one query per row.
+pub async fn list_deployment_environment_slugs(
+    pool: &SqlitePool,
+    app_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT d.id, e.slug FROM deployments d \
+         JOIN environments e ON e.id = d.environment_id \
+         WHERE d.app_id = ?1",
+    )
+    .bind(app_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Host ports of every deployment with running web containers, in one environment.
 ///
 /// Each retained deployment gets its own vhost, so these are grouped per

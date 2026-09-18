@@ -31,6 +31,8 @@ export interface Deployment {
   image_tag: string | null;
   created_at: string;
   finished_at: string | null;
+  /** The build's own URL, present while it is retained and a global domain is set. */
+  preview_url?: string;
 }
 
 export interface ConfigVar {

@@ -114,7 +114,8 @@ A deploy token can only trigger deploys for its own app. See [Deploy tokens](/de
 - With `--image`: POST to `/api/apps/:name/deploy`
 - Without: Tar.gz source directory, POST multipart to `/api/apps/:name/deploy/archive`
 - Streams SSE deploy log to terminal
-- `deploy list <app>` — tabular deployment history
+- `deploy list <app>` — tabular deployment history, with the URL each deployment is currently
+  reachable at (`-` once it is no longer retained, or when no `global_domain` is set)
 - `deploy rollback <app> [--to <id>]`
 
 ### `deku domains`

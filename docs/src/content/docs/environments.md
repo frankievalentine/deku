@@ -69,6 +69,39 @@ A rollback re-deploys the environment the deployment it targets belongs to. Roll
 production deployment cannot silently deploy into whichever environment happens to hold the newest
 deployment.
 
+## Preview URLs
+
+Every retained deployment is reachable at a hostname of its own:
+
+```
+<app>-<slug>-<shortid>.<global_domain>
+```
+
+`deku deploy run demo --environment staging` prints the environment's URL and the build's own URL.
+The build URL serves that exact deployment, so it keeps working after a later deploy replaces it,
+until the deployment falls out of the retention window.
+
+### Retention
+
+An environment's recent deployments stay running so their URLs keep working:
+
+```toml
+[previews]
+keep_deployments = 3   # per environment, counting the live one
+```
+
+A deploy keeps the live deployment plus the newest `keep_deployments - 1` before it, and retires
+anything older after the `retire` grace period. Set it to `1` to keep only the live deployment, whose
+URL then goes dark when the next deploy replaces it.
+
+Each retained deployment holds its own containers, so raising this number costs memory and ports per
+environment. Lowering it takes effect on the next deploy.
+
+Hostnames are derived, not stored: a URL resolves only while its containers are retained, and its
+vhost is removed when they are retired, so an expired URL stops resolving rather than failing
+through the proxy. `deku deploy list <app>` shows the URL for each deployment that is currently
+reachable and `-` for the rest.
+
 ## Config overrides
 
 An app-wide config var is inherited by every environment:
@@ -108,7 +141,7 @@ not wired to automatic deploys.
 
 ## Current limits
 
-- Generated hostnames are HTTP-only, as described above.
+- Generated hostnames, including per-deployment URLs, are HTTP-only, as described above.
 - `git push` deploys to production. Branch-to-environment mapping is not wired up.
 - Authentication, maintenance mode, and redirects are app-scoped: they apply to every environment's
   vhost, not per environment.

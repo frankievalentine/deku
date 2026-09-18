@@ -56,6 +56,24 @@ pub fn key_path(app_name: &str) -> PathBuf {
     PathBuf::from(format!("/etc/angie/ssl/deku_{app_name}.key"))
 }
 
+/// The hostname a retained deployment is reachable at.
+///
+/// `None` when no global domain is configured: a per-deployment URL is a
+/// hostname, and there is nothing to route on without a domain. The id is
+/// shortened because this is a DNS label; the vhost key keeps the whole id.
+pub fn deployment_hostname(
+    app_name: &str,
+    environment_slug: &str,
+    deployment_id: &str,
+    global_domain: Option<&str>,
+) -> Option<String> {
+    let global_domain = global_domain?;
+    let short = &deployment_id[..8.min(deployment_id.len())];
+    Some(format!(
+        "{app_name}-{environment_slug}-{short}.{global_domain}"
+    ))
+}
+
 /// The environment's `tls_enabled` flag, for a vhost derived from the database.
 async fn app_tls_enabled(pool: &sqlx::SqlitePool, app_id: &str) -> Result<bool> {
     Ok(crate::db::queries::get_app_by_id(pool, app_id)
@@ -134,15 +152,19 @@ async fn build_vhosts(
                 crate::db::queries::list_deployment_upstream_ports(pool, app_id, &environment.id)
                     .await?;
             for (deployment_id, ports) in deployments {
-                // The hostname is shortened for DNS, but the vhost key keeps the
-                // whole id: it names the upstream and the log files, where a
+                let Some(hostname) = deployment_hostname(
+                    app_name,
+                    &environment.slug,
+                    &deployment_id,
+                    Some(global_domain),
+                ) else {
+                    continue;
+                };
+                // The vhost key keeps the whole id even though the hostname is
+                // shortened: it names the upstream and the log files, where a
                 // truncated id could collide and merge two deployments' traffic.
-                let short = &deployment_id[..8.min(deployment_id.len())];
                 vhosts.push(writer::VhostConfig {
-                    domains: vec![format!(
-                        "{app_name}-{}-{short}.{global_domain}",
-                        environment.slug
-                    )],
+                    domains: vec![hostname],
                     upstreams: ports
                         .into_iter()
                         .map(|port| Upstream {
@@ -160,6 +182,46 @@ async fn build_vhosts(
     // A vhost with nothing to serve is omitted rather than pointed at nothing.
     vhosts.retain(|vhost| !vhost.domains.is_empty() && !vhost.upstreams.is_empty());
     Ok(vhosts)
+}
+
+/// Rewrite an app's vhosts from the database and reload Angie.
+///
+/// Every vhost is derived here: production from the app's domains, its running
+/// web containers, and its TLS flag, and each environment from its own. This is
+/// the one way to re-render an app without a deploy supplying state, so callers
+/// that change what should be routed — a domain, auth, or the containers that
+/// exist — all land on the same result.
+pub async fn reconcile_app(
+    pool: &sqlx::SqlitePool,
+    conf_dir: &Path,
+    global_domain: Option<&str>,
+    app_id: &str,
+    app_name: &str,
+) -> Result<()> {
+    let production = crate::db::queries::ensure_production_environment(pool, app_id).await?;
+    let domains = crate::db::queries::list_domain_names(pool, app_id).await?;
+    let upstreams = crate::db::queries::list_web_upstreams(pool, app_id, &production.id).await?;
+    let extras = load_extras(pool, app_id).await?;
+    let tls = app_tls_enabled(pool, app_id).await?;
+
+    apply_app_config(
+        pool,
+        conf_dir,
+        global_domain,
+        app_id,
+        app_name,
+        Some(DesiredAppConfig {
+            environment_id: &production.id,
+            domains: &domains,
+            upstreams: &upstreams,
+            tls,
+            auth: extras.auth.as_ref(),
+            maintenance: extras.maintenance,
+            maintenance_message: extras.maintenance_message.as_deref(),
+            redirects: &extras.redirects,
+        }),
+    )
+    .await
 }
 
 /// Write every vhost of an app and reload Angie, restoring the previous config
