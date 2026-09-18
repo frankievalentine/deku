@@ -122,7 +122,7 @@ function RoutingInner() {
           <p className="text-muted">
             {tlsConfig.configured
               ? `Current email: ${tlsConfig.email}`
-              : 'No account email is set, so certificate operations cannot run.'}
+              : 'No account email is set. It is optional: the certificate authority uses it to reach you about the account, and certificates are issued without one.'}
           </p>
           <div className="form-actions">
             <a className="btn btn-primary" href="/settings">

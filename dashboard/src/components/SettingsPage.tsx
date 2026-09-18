@@ -385,7 +385,7 @@ function SettingsInner() {
           <p className="text-muted">
             {state.tlsConfigured
               ? `Current email: ${state.tlsEmail}`
-              : 'No account email is set, so certificate operations cannot run.'}
+              : 'No account email is set. It is optional: the certificate authority uses it to reach you about the account, and certificates are issued without one.'}
           </p>
         </article>
 
