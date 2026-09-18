@@ -25,6 +25,8 @@ enum DeployCommands {
             help = "Build host: omit for the configured default, 'local' to build here, or the configured build host name"
         )]
         build_host: Option<String>,
+        #[arg(long, help = "Environment slug to deploy into; defaults to production")]
+        environment: Option<String>,
     },
     /// List deployments for an app
     List {
@@ -76,6 +78,7 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
             image,
             builder,
             build_host,
+            environment,
         } => {
             let since = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
@@ -87,6 +90,9 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
                 }
                 if let Some(h) = build_host {
                     body["build_host"] = serde_json::Value::String(h);
+                }
+                if let Some(e) = environment {
+                    body["environment"] = serde_json::Value::String(e);
                 }
                 client
                     .post(&format!("/api/apps/{app}/deploy"), body)
@@ -104,14 +110,20 @@ pub async fn run(args: DeployArgs, client: &DekuClient) -> Result<()> {
                 let size_kb = archive.len() / 1024;
                 println!("Uploading {size_kb}KB archive to daemon...");
 
+                let mut params: Vec<String> = Vec::new();
+                if let Some(b) = builder {
+                    params.push(format!("builder={b}"));
+                }
+                if let Some(h) = build_host {
+                    params.push(format!("build_host={h}"));
+                }
+                if let Some(e) = environment {
+                    params.push(format!("environment={e}"));
+                }
                 let mut query = format!("/api/apps/{app}/deploy/archive");
-                match (builder, build_host) {
-                    (Some(b), Some(h)) => {
-                        query.push_str(&format!("?builder={b}&build_host={h}"));
-                    }
-                    (Some(b), None) => query.push_str(&format!("?builder={b}")),
-                    (None, Some(h)) => query.push_str(&format!("?build_host={h}")),
-                    (None, None) => {}
+                if !params.is_empty() {
+                    query.push('?');
+                    query.push_str(&params.join("&"));
                 }
                 client.post_archive(&query, archive).await?;
                 println!("Deploy started. Streaming logs:");

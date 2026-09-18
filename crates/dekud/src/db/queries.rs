@@ -582,6 +582,22 @@ pub async fn list_environments(pool: &SqlitePool, app_id: &str) -> Result<Vec<En
     .await?)
 }
 
+/// Look up an environment by id.
+///
+/// A deployment records its environment by id, and rollback re-deploys into the
+/// environment it targets, so resolving by id keeps a rollback inside the
+/// environment it came from instead of defaulting to production.
+pub async fn get_environment_by_id(pool: &SqlitePool, id: &str) -> Result<Environment> {
+    sqlx::query_as::<_, Environment>(
+        "SELECT id, app_id, name, slug, branch, is_production, created_at FROM environments \
+         WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| DekuError::EnvironmentNotFound(id.to_string()))
+}
+
 pub async fn get_environment(pool: &SqlitePool, app_id: &str, slug: &str) -> Result<Environment> {
     sqlx::query_as::<_, Environment>(
         "SELECT id, app_id, name, slug, branch, is_production, created_at FROM environments \
@@ -2403,7 +2419,10 @@ mod service_backup_tests {
 
 #[cfg(test)]
 mod environment_tests {
-    use super::{create_app, delete_environment, ensure_production_environment, list_environments};
+    use super::{
+        create_app, delete_environment, ensure_production_environment, get_environment_by_id,
+        list_environments,
+    };
     use deku_core::types::NewApp;
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::SqlitePool;
@@ -2424,6 +2443,26 @@ mod environment_tests {
         .await
         .expect("app");
         (pool, app.id)
+    }
+
+    #[tokio::test]
+    async fn an_environment_resolves_by_id() {
+        let (pool, app_id) = pool_with_app("one").await;
+        let production = ensure_production_environment(&pool, &app_id)
+            .await
+            .expect("production");
+
+        let resolved = get_environment_by_id(&pool, &production.id)
+            .await
+            .expect("resolve by id");
+        assert_eq!(resolved.slug, "production");
+        assert!(resolved.is_production);
+
+        let missing = get_environment_by_id(&pool, "env-nope").await;
+        assert!(
+            missing.is_err(),
+            "an unknown environment id must not resolve"
+        );
     }
 
     #[tokio::test]

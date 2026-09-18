@@ -40,6 +40,8 @@ pub struct DeployRequest {
     /// offloading for this deploy, and any other value must match the configured
     /// build host name.
     pub build_host: Option<String>,
+    /// Target environment id. `None` deploys to production.
+    pub environment_id: Option<String>,
 }
 
 /// Decide whether this deploy should build on the configured build host.
@@ -357,9 +359,12 @@ pub async fn run_deploy(
         },
     };
 
-    // The environment this rollout belongs to. Production is the implicit target
-    // until deploy takes an explicit environment.
-    let environment = queries::ensure_production_environment(pool, app_id).await?;
+    // The environment this rollout belongs to. Production is the target unless
+    // the caller named one.
+    let environment = match req.environment_id.as_deref() {
+        Some(id) => queries::get_environment_by_id(pool, id).await?,
+        None => queries::ensure_production_environment(pool, app_id).await?,
+    };
 
     // Step 1: Create deployment record
     let mut deployment =
@@ -1242,6 +1247,11 @@ pub async fn rollback(
         Some(serde_json::json!({ "to_deploy_id": target.id, "image": image_tag })),
     );
 
+    // Roll back within the environment the target deployment came from; a
+    // production rollback must not redeploy into whichever environment happens
+    // to hold the newest deployment.
+    let environment_id = queries::get_deployment_environment_id(pool, &target.id).await?;
+
     let req = DeployRequest {
         app_id: app_id.to_string(),
         app_name: app_name.to_string(),
@@ -1250,6 +1260,7 @@ pub async fn rollback(
         },
         force_builder: Some("image".to_string()),
         build_host: Some("local".to_string()),
+        environment_id,
     };
 
     run_deploy(pool, docker, events, logs, cfg, plugins, req).await?;
@@ -1410,6 +1421,7 @@ mod tests {
                     },
                     force_builder: None,
                     build_host: None,
+                    environment_id: None,
                 },
             )
             .await

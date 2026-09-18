@@ -3102,6 +3102,45 @@ struct DeployBody {
     /// Build host selection: omit for the configured default, "local" to build
     /// on the deploy host, or the configured build host name.
     build_host: Option<String>,
+    /// Environment slug to deploy into. Omit for production.
+    environment: Option<String>,
+}
+
+/// Resolve a deploy's target environment id, or a response describing why not.
+///
+/// Resolving here, before the deploy is spawned, is what lets an unknown
+/// environment fail the request instead of the background job: `deploy run
+/// --environment typo` otherwise returns 202 and only fails once it is already
+/// streaming.
+async fn resolve_deploy_environment(
+    state: &AppState,
+    app_id: &str,
+    slug: Option<&str>,
+) -> std::result::Result<String, (StatusCode, Json<serde_json::Value>)> {
+    match slug {
+        Some(slug) => match queries::get_environment(&state.pool, app_id, slug).await {
+            Ok(environment) => Ok(environment.id),
+            Err(_) => {
+                let available = queries::list_environments(&state.pool, app_id)
+                    .await
+                    .map(|environments| {
+                        environments
+                            .into_iter()
+                            .map(|environment| environment.slug)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Err(bad_request(format!(
+                    "environment '{slug}' not found; available: {}",
+                    available.join(", ")
+                )))
+            }
+        },
+        None => match queries::ensure_production_environment(&state.pool, app_id).await {
+            Ok(environment) => Ok(environment.id),
+            Err(e) => Err(internal_error(e)),
+        },
+    }
 }
 
 #[utoipa::path(
@@ -3132,6 +3171,12 @@ async fn trigger_deploy(
         )
             .into_response();
     }
+
+    let environment_id =
+        match resolve_deploy_environment(&state, &app.id, body.environment.as_deref()).await {
+            Ok(id) => id,
+            Err(response) => return response.into_response(),
+        };
 
     let deploy_source = match body.source.as_str() {
         "image" => {
@@ -3175,6 +3220,7 @@ async fn trigger_deploy(
         source: deploy_source,
         force_builder: body.builder,
         build_host: body.build_host,
+        environment_id: Some(environment_id),
     };
 
     let pool = state.pool.clone();
@@ -4248,13 +4294,14 @@ fn deploy_token_json(token: &queries::DeployToken) -> serde_json::Value {
 struct ArchiveDeployQuery {
     builder: Option<String>,
     build_host: Option<String>,
+    environment: Option<String>,
 }
 
 #[utoipa::path(
     post,
     path = "/api/apps/{name}/deploy/archive",
     tag = "deploy",
-    params(("name" = String, Path, description = "App name"), ("builder" = Option<String>, Query, description = "Force a specific builder"), ("build_host" = Option<String>, Query, description = "Build host: configured default, 'local', or the configured name")),
+    params(("name" = String, Path, description = "App name"), ("builder" = Option<String>, Query, description = "Force a specific builder"), ("build_host" = Option<String>, Query, description = "Build host: configured default, 'local', or the configured name"), ("environment" = Option<String>, Query, description = "Environment slug to deploy into; defaults to production")),
     responses((status = 202, description = "Deploy an app from an uploaded source archive"))
 )]
 async fn deploy_archive(
@@ -4278,6 +4325,12 @@ async fn deploy_archive(
         )
             .into_response();
     }
+
+    let environment_id =
+        match resolve_deploy_environment(&state, &app.id, params.environment.as_deref()).await {
+            Ok(id) => id,
+            Err(response) => return response.into_response(),
+        };
 
     // Stream the archive field straight to a temp file so a permitted body is
     // never held in memory.
@@ -4357,6 +4410,7 @@ async fn deploy_archive(
         },
         force_builder: params.builder,
         build_host: params.build_host,
+        environment_id: Some(environment_id),
     };
 
     let pool = state.pool.clone();

@@ -453,6 +453,10 @@ async fn run_git_deploy(
         },
         force_builder: None,
         build_host: None,
+        // A git push has no environment selector yet, so it deploys to
+        // production, which is what the branch-to-environment mapping will
+        // refine later.
+        environment_id: None,
     };
 
     let deploy_lock = state.deploy_locks.for_app(&app.id);
