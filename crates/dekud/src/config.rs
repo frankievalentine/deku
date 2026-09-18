@@ -56,6 +56,109 @@ pub struct DekuConfig {
     /// Preview deployment retention.
     #[serde(default)]
     pub previews: PreviewsConfig,
+    /// Automated certificate issuance for app and environment hostnames.
+    #[serde(default)]
+    pub acme: AcmeConfig,
+}
+
+/// Automated certificates, issued through Angie's ACME module.
+///
+/// Off by default: no request reaches a certificate authority until an operator
+/// opts in with a provider and credentials. The credentials are used to answer
+/// the DNS-01 challenge for wildcard certificates, which HTTP-01 cannot issue.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AcmeConfig {
+    /// Off by default. Nothing is requested from a CA until this is set.
+    #[serde(default)]
+    pub enabled: bool,
+    /// ACME directory. Point this at a staging directory while testing.
+    #[serde(default = "default_acme_directory")]
+    pub directory: String,
+    /// Contact address registered with the CA for expiry notices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// DNS provider that answers the challenge. Only `cloudflare` is built in.
+    #[serde(default = "default_acme_provider")]
+    pub provider: String,
+    /// Provider API token. Prefer `api_token_file` or `DEKU_ACME_API_TOKEN` so
+    /// the secret stays out of the config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
+    /// File holding the provider API token, read on every use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token_file: Option<PathBuf>,
+    /// Where Angie keeps ACME account keys and certificates. Used to tell
+    /// whether a certificate has been issued yet.
+    #[serde(default = "default_acme_client_path")]
+    pub client_path: PathBuf,
+    /// Issue a wildcard certificate for `<app>-<slug>.<global_domain>`, which
+    /// covers every environment and per-deployment hostname.
+    #[serde(default)]
+    pub wildcard: bool,
+}
+
+impl Default for AcmeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: default_acme_directory(),
+            email: None,
+            provider: default_acme_provider(),
+            api_token: None,
+            api_token_file: None,
+            client_path: default_acme_client_path(),
+            wildcard: false,
+        }
+    }
+}
+
+impl AcmeConfig {
+    /// Reject a configuration that cannot work, before anything reaches a CA.
+    ///
+    /// `global_domain` is the daemon's configured domain, since a wildcard
+    /// certificate has no name to cover without it.
+    pub fn validate(&self, global_domain: Option<&str>) -> anyhow::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if self.provider != "cloudflare" {
+            anyhow::bail!(
+                "unknown ACME DNS provider '{}'; supported providers: cloudflare",
+                self.provider
+            );
+        }
+
+        if !self.directory.starts_with("https://") {
+            anyhow::bail!("ACME directory '{}' must be an https URL", self.directory);
+        }
+
+        if self.api_token.is_none() && self.api_token_file.is_none() {
+            anyhow::bail!(
+                "ACME is enabled but no API token is configured; set api_token_file or DEKU_ACME_API_TOKEN"
+            );
+        }
+
+        if self.wildcard && global_domain.is_none() {
+            anyhow::bail!(
+                "ACME wildcard is enabled but global_domain is not set, so there is no name to certify"
+            );
+        }
+
+        Ok(())
+    }
+}
+
+fn default_acme_directory() -> String {
+    "https://acme-v02.api.letsencrypt.org/directory".to_string()
+}
+
+fn default_acme_provider() -> String {
+    "cloudflare".to_string()
+}
+
+fn default_acme_client_path() -> PathBuf {
+    PathBuf::from("/var/lib/angie/acme")
 }
 
 /// How many deployments per environment stay reachable at their own URL.
@@ -322,6 +425,7 @@ struct RawDekuConfig {
     alerts: Option<AlertsConfig>,
     logs: Option<LogsConfig>,
     previews: Option<PreviewsConfig>,
+    acme: Option<AcmeConfig>,
 }
 
 fn default_config_dir() -> PathBuf {
@@ -427,11 +531,48 @@ impl Default for DekuConfig {
             alerts: AlertsConfig::default(),
             logs: LogsConfig::default(),
             previews: PreviewsConfig::default(),
+            acme: AcmeConfig::default(),
         }
     }
 }
 
 impl DekuConfig {
+    /// Resolve the ACME DNS provider token, if one is configured.
+    ///
+    /// Precedence is `DEKU_ACME_API_TOKEN`, then `[acme] api_token`, then
+    /// `api_token_file`. `Ok(None)` means the token has not been provided yet,
+    /// which is only an error once ACME is enabled.
+    pub fn acme_api_token(&self) -> Result<Option<String>> {
+        if let Ok(value) = std::env::var("DEKU_ACME_API_TOKEN") {
+            if !value.trim().is_empty() {
+                return Ok(Some(value.trim().to_string()));
+            }
+        }
+
+        if let Some(token) = self.acme.api_token.as_deref() {
+            if !token.trim().is_empty() {
+                return Ok(Some(token.trim().to_string()));
+            }
+        }
+
+        match self.acme.api_token_file.as_ref() {
+            Some(path) => {
+                let value = std::fs::read_to_string(path).map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to read ACME API token file {}: {error}",
+                        path.display()
+                    )
+                })?;
+                let value = value.trim();
+                if value.is_empty() {
+                    anyhow::bail!("ACME API token file {} is empty", path.display());
+                }
+                Ok(Some(value.to_string()))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Resolve the encryption-at-rest key, if one is configured.
     ///
     /// Precedence is `DEKU_ENCRYPTION_KEY`, then `[encryption] key`, then
@@ -547,6 +688,7 @@ pub fn load() -> Result<DekuConfig> {
         alerts: raw.alerts.unwrap_or_default(),
         logs: raw.logs.unwrap_or_default(),
         previews: raw.previews.unwrap_or_default(),
+        acme: raw.acme.unwrap_or_default(),
     };
 
     Ok(cfg)
@@ -639,7 +781,7 @@ mod tests {
             .to_string()
             .contains("failed to read encryption key file"));
     }
-    use super::{secure_dir, write_private_file, DekuConfig, EncryptionConfig};
+    use super::{secure_dir, write_private_file, AcmeConfig, DekuConfig, EncryptionConfig};
     use std::path::PathBuf;
 
     #[cfg(unix)]
@@ -737,5 +879,140 @@ mod tests {
 
         assert_eq!(target.destination, "deku@10.0.0.5");
         assert_eq!(target.port, None);
+    }
+
+    #[test]
+    fn acme_is_off_and_unconfigured_by_default() {
+        let cfg = AcmeConfig::default();
+        assert!(
+            !cfg.enabled,
+            "nothing should reach a CA until it is turned on"
+        );
+        assert!(!cfg.wildcard);
+        assert_eq!(cfg.provider, "cloudflare");
+        assert_eq!(
+            cfg.directory,
+            "https://acme-v02.api.letsencrypt.org/directory"
+        );
+        assert_eq!(
+            cfg.client_path,
+            std::path::PathBuf::from("/var/lib/angie/acme")
+        );
+        // A disabled configuration needs nothing else to be valid.
+        cfg.validate(Some("apps.test")).expect("disabled is valid");
+        cfg.validate(None)
+            .expect("disabled is valid without a domain");
+    }
+
+    #[test]
+    fn acme_accepts_a_complete_configuration() {
+        let cfg = AcmeConfig {
+            enabled: true,
+            api_token: Some("token".to_string()),
+            wildcard: true,
+            ..AcmeConfig::default()
+        };
+        cfg.validate(Some("apps.test")).expect("valid");
+    }
+
+    #[test]
+    fn acme_rejects_a_provider_it_cannot_drive() {
+        let cfg = AcmeConfig {
+            enabled: true,
+            provider: "route53".to_string(),
+            api_token: Some("token".to_string()),
+            ..AcmeConfig::default()
+        };
+        let error = cfg
+            .validate(Some("apps.test"))
+            .expect_err("unknown provider");
+        assert!(error.to_string().contains("route53"), "{error}");
+        assert!(
+            error.to_string().contains("cloudflare"),
+            "the error should name what is supported: {error}"
+        );
+    }
+
+    #[test]
+    fn acme_requires_a_token_and_an_https_directory() {
+        let no_token = AcmeConfig {
+            enabled: true,
+            ..AcmeConfig::default()
+        };
+        assert!(no_token
+            .validate(Some("apps.test"))
+            .expect_err("no token")
+            .to_string()
+            .contains("API token"));
+
+        let insecure = AcmeConfig {
+            enabled: true,
+            api_token: Some("token".to_string()),
+            directory: "http://acme.test/directory".to_string(),
+            ..AcmeConfig::default()
+        };
+        assert!(insecure
+            .validate(Some("apps.test"))
+            .expect_err("plain http")
+            .to_string()
+            .contains("https"));
+    }
+
+    #[test]
+    fn acme_wildcard_needs_a_global_domain() {
+        let cfg = AcmeConfig {
+            enabled: true,
+            api_token: Some("token".to_string()),
+            wildcard: true,
+            ..AcmeConfig::default()
+        };
+        let error = cfg.validate(None).expect_err("no domain to certify");
+        assert!(error.to_string().contains("global_domain"), "{error}");
+    }
+
+    #[test]
+    fn acme_token_reads_inline_and_from_a_file() {
+        let inline = DekuConfig {
+            acme: AcmeConfig {
+                api_token: Some("inline-token".to_string()),
+                ..AcmeConfig::default()
+            },
+            ..DekuConfig::default()
+        };
+        assert_eq!(
+            inline.acme_api_token().expect("token").as_deref(),
+            Some("inline-token")
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cloudflare.token");
+        // A trailing newline from an editor or `echo` must not become part of
+        // the token.
+        std::fs::write(&path, "file-token\n").expect("write token");
+        let from_file = DekuConfig {
+            acme: AcmeConfig {
+                api_token_file: Some(path),
+                ..AcmeConfig::default()
+            },
+            ..DekuConfig::default()
+        };
+        assert_eq!(
+            from_file.acme_api_token().expect("token").as_deref(),
+            Some("file-token")
+        );
+    }
+
+    #[test]
+    fn acme_token_file_that_cannot_be_read_is_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = DekuConfig {
+            acme: AcmeConfig {
+                api_token_file: Some(dir.path().join("missing.token")),
+                ..AcmeConfig::default()
+            },
+            ..DekuConfig::default()
+        };
+        let error = cfg.acme_api_token().expect_err("missing file");
+        assert!(error.to_string().contains("missing.token"), "{error}");
     }
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use tracing::{info, warn};
 
+mod acme;
 mod alerts;
 mod api;
 mod app_name;

@@ -366,6 +366,98 @@ fn build_public_router(state: SharedState) -> Router {
     }
 }
 
+/// Routes only reachable over the daemon's Unix socket.
+///
+/// Angie calls these from the host while answering an ACME challenge. They are
+/// absent from the TCP API and from the OpenAPI document on purpose: nothing
+/// off-host should be able to ask the daemon to write DNS records.
+///
+/// Defined after `build_public_router` because the OpenAPI coverage guard
+/// scans the router declared between `build_api_router` and it.
+fn build_internal_router(state: SharedState) -> Router {
+    Router::new()
+        .route("/internal/acme/dns-hook", post(acme_dns_hook))
+        .with_state(state)
+}
+
+/// Answer an `acme_hook` callback from Angie during a DNS-01 challenge.
+///
+/// Only the DNS challenge is handled: a wildcard certificate requires it, and
+/// the other methods never need provider access.
+async fn acme_dns_hook(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+
+    let challenge = header("x-deku-acme-challenge").unwrap_or_default();
+    if challenge != "dns" {
+        return bad_request(format!(
+            "unsupported ACME challenge '{challenge}'; only dns is handled"
+        ))
+        .into_response();
+    }
+
+    let action = match header("x-deku-acme-hook")
+        .as_deref()
+        .map(crate::acme::ChallengeAction::parse)
+    {
+        Some(Ok(action)) => action,
+        Some(Err(error)) => return bad_request(error.to_string()).into_response(),
+        None => return bad_request("missing x-deku-acme-hook header").into_response(),
+    };
+
+    let Some(domain) = header("x-deku-acme-domain") else {
+        return bad_request("missing x-deku-acme-domain header").into_response();
+    };
+    let Some(keyauth) = header("x-deku-acme-keyauth") else {
+        return bad_request("missing x-deku-acme-keyauth header").into_response();
+    };
+
+    // Anything that can write to the socket can reach this, so the domain is
+    // checked before any record is touched.
+    if let Err(error) =
+        crate::acme::authorize_domain(state.config.global_domain.as_deref(), &domain)
+    {
+        tracing::warn!(%domain, "rejected an ACME challenge: {error}");
+        return bad_request(error.to_string()).into_response();
+    }
+
+    let client = match crate::acme::provider_client(&state.config) {
+        Ok(Some(client)) => client,
+        Ok(None) => return bad_request("ACME is not enabled").into_response(),
+        Err(error) => return internal_error(error).into_response(),
+    };
+
+    let Some(zone) = state.config.global_domain.as_deref() else {
+        return bad_request("no global_domain is configured").into_response();
+    };
+
+    let zone_id = match client.zone_id(zone).await {
+        Ok(zone_id) => zone_id,
+        Err(error) => {
+            tracing::error!(%domain, "ACME challenge could not resolve its zone: {error}");
+            return internal_error(error).into_response();
+        }
+    };
+
+    match crate::acme::apply_challenge(&client, &zone_id, &domain, action, &keyauth).await {
+        Ok(()) => {
+            tracing::info!(%domain, ?action, "answered an ACME challenge");
+            StatusCode::OK.into_response()
+        }
+        Err(error) => {
+            tracing::error!(%domain, "ACME challenge failed: {error}");
+            internal_error(error).into_response()
+        }
+    }
+}
+
 async fn missing_dashboard_page(State(state): State<SharedState>) -> impl IntoResponse {
     let dashboard_dir = escape_html(&state.config.dashboard_dir.display().to_string());
     let body = format!(
@@ -465,6 +557,7 @@ pub async fn serve(state: SharedState) -> anyhow::Result<()> {
 
     // Unix socket router — trusted local access, no auth required
     let unix_app = build_api_router(state.clone())
+        .merge(build_internal_router(state.clone()))
         .layer(middleware::from_fn(security_headers))
         .merge(build_public_router(state.clone()))
         .layer(TraceLayer::new_for_http().make_span_with(make_span));
