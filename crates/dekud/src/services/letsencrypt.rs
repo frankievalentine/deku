@@ -12,7 +12,8 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
     let domains = queries::list_domain_names(pool, &app.id).await?;
     // Derive upstreams from the running web containers so toggling TLS keeps
     // every replica in the pool, matching the deploy and reconcile paths.
-    let upstream_ports = queries::list_web_upstream_ports(pool, &app.id).await?;
+    let environment = queries::ensure_production_environment(pool, &app.id).await?;
+    let upstream_ports = queries::list_web_upstream_ports(pool, &app.id, &environment.id).await?;
     ensure_tls_enable_ready(app_name, &domains, &upstream_ports)?;
     let upstreams: Vec<Upstream> = upstream_ports
         .iter()
@@ -43,7 +44,8 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
 pub async fn disable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Result<()> {
     let app = queries::get_app(pool, app_name).await?;
     let domains = queries::list_domain_names(pool, &app.id).await?;
-    let upstream_ports = queries::list_web_upstream_ports(pool, &app.id).await?;
+    let environment = queries::ensure_production_environment(pool, &app.id).await?;
+    let upstream_ports = queries::list_web_upstream_ports(pool, &app.id, &environment.id).await?;
     if !domains.is_empty() && !upstream_ports.is_empty() {
         let upstreams: Vec<Upstream> = upstream_ports
             .iter()

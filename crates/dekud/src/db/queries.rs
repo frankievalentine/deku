@@ -913,33 +913,41 @@ pub async fn list_containers_for_app(
     Ok(containers)
 }
 
-/// Host ports of the app's serving web containers, oldest first.
+/// Host ports of one environment's serving web containers, oldest first.
 ///
 /// This is the source of truth for upstreams: a deploy and a later reconcile both
 /// derive the vhost's server list from it, so every web replica receives traffic
 /// and the two paths cannot disagree.
 ///
-/// Only the current deployment's containers count. After a rollout the previous
-/// containers stay `running` for the retire window, and pooling them would send
-/// traffic back to the version that was just replaced. When no deployment is
-/// marked live yet (a crash mid-rollout, or the very first deploy) the newest
-/// deployment's containers are used instead of serving nothing.
-pub async fn list_web_upstream_ports(pool: &SqlitePool, app_id: &str) -> Result<Vec<u16>> {
+/// Scoped to a single environment. Environments share a host and a container
+/// namespace, so pooling across them would serve another environment's build in
+/// production. Only the current deployment's containers count within that
+/// environment: after a rollout the previous containers stay `running` for the
+/// retire window, and pooling them would send traffic back to the version that
+/// was just replaced. When no deployment is marked live yet (a crash mid-rollout,
+/// or the very first deploy) the newest deployment's containers are used instead
+/// of serving nothing.
+pub async fn list_web_upstream_ports(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
+) -> Result<Vec<u16>> {
     let rows = sqlx::query_as::<_, (i64,)>(
         "SELECT c.host_port FROM containers c \
          WHERE c.app_id = ?1 AND c.status = 'running' AND c.process_type = 'web' \
            AND c.host_port IS NOT NULL \
            AND c.deployment_id = COALESCE( \
                  (SELECT d.id FROM deployments d \
-                  WHERE d.app_id = ?1 AND d.status = 'live' \
+                  WHERE d.app_id = ?1 AND d.environment_id = ?2 AND d.status = 'live' \
                   ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1), \
                  (SELECT d.id FROM deployments d \
-                  WHERE d.app_id = ?1 \
+                  WHERE d.app_id = ?1 AND d.environment_id = ?2 \
                   ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1) \
                ) \
          ORDER BY c.created_at ASC",
     )
     .bind(app_id)
+    .bind(environment_id)
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|(port,)| port as u16).collect())
@@ -1476,8 +1484,9 @@ fn service_backup_from_row(row: sqlx::sqlite::SqliteRow) -> Result<ServiceBackup
 pub async fn list_web_upstreams(
     pool: &SqlitePool,
     app_id: &str,
+    environment_id: &str,
 ) -> Result<Vec<deku_core::types::Upstream>> {
-    Ok(list_web_upstream_ports(pool, app_id)
+    Ok(list_web_upstream_ports(pool, app_id, environment_id)
         .await?
         .into_iter()
         .map(|port| deku_core::types::Upstream {
@@ -2468,7 +2477,11 @@ mod upstream_port_tests {
         pool
     }
 
-    async fn insert_app(pool: &SqlitePool, id: &str, name: &str, deployment_id: &str) {
+    /// Insert an app with a production environment and one live deployment.
+    ///
+    /// Returns the environment id, since upstreams are now scoped to one.
+    async fn insert_app(pool: &SqlitePool, id: &str, name: &str, deployment_id: &str) -> String {
+        let environment_id = format!("env-{id}");
         sqlx::query(
             "INSERT INTO apps (id, name, status, created_at) VALUES (?1, ?2, 'created', ?3)",
         )
@@ -2480,15 +2493,64 @@ mod upstream_port_tests {
         .expect("insert app");
 
         sqlx::query(
-            "INSERT INTO deployments (id, app_id, status, builder, image_tag, created_at) \
-             VALUES (?1, ?2, 'live', 'dockerfile', 'deku/x:1', ?3)",
+            "INSERT INTO environments (id, app_id, name, slug, is_production, created_at) \
+             VALUES (?1, ?2, 'production', 'production', 1, ?3)",
         )
-        .bind(deployment_id)
+        .bind(&environment_id)
         .bind(id)
         .bind(chrono::Utc::now().to_rfc3339())
         .execute(pool)
         .await
+        .expect("insert environment");
+
+        sqlx::query(
+            "INSERT INTO deployments (id, app_id, environment_id, status, builder, image_tag, created_at) \
+             VALUES (?1, ?2, ?3, 'live', 'dockerfile', 'deku/x:1', ?4)",
+        )
+        .bind(deployment_id)
+        .bind(id)
+        .bind(&environment_id)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(pool)
+        .await
         .expect("insert deployment");
+
+        environment_id
+    }
+
+    /// Insert a second environment for an app, with its own live deployment.
+    async fn insert_environment(
+        pool: &SqlitePool,
+        app_id: &str,
+        slug: &str,
+        deployment_id: &str,
+    ) -> String {
+        let environment_id = format!("env-{app_id}-{slug}");
+        sqlx::query(
+            "INSERT INTO environments (id, app_id, name, slug, is_production, created_at) \
+             VALUES (?1, ?2, ?3, ?3, 0, ?4)",
+        )
+        .bind(&environment_id)
+        .bind(app_id)
+        .bind(slug)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(pool)
+        .await
+        .expect("insert environment");
+
+        sqlx::query(
+            "INSERT INTO deployments (id, app_id, environment_id, status, builder, image_tag, created_at) \
+             VALUES (?1, ?2, ?3, 'live', 'dockerfile', 'deku/x:2', ?4)",
+        )
+        .bind(deployment_id)
+        .bind(app_id)
+        .bind(&environment_id)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(pool)
+        .await
+        .expect("insert deployment");
+
+        environment_id
     }
 
     async fn insert_container_in(
@@ -2536,7 +2598,7 @@ mod upstream_port_tests {
     #[tokio::test]
     async fn returns_every_running_web_replica_port() {
         let pool = test_pool().await;
-        insert_app(&pool, "app-1", "one", "dep-1").await;
+        let environment = insert_app(&pool, "app-1", "one", "dep-1").await;
         insert_app(&pool, "app-2", "two", "dep-2").await;
         insert_container(&pool, "c1", "app-1", "web", "running", Some(30001)).await;
         insert_container(&pool, "c2", "app-1", "web", "running", Some(30002)).await;
@@ -2546,7 +2608,7 @@ mod upstream_port_tests {
         insert_container(&pool, "c5", "app-1", "web", "running", None).await;
         insert_container(&pool, "c6", "app-2", "web", "running", Some(30005)).await;
 
-        let mut ports = list_web_upstream_ports(&pool, "app-1")
+        let mut ports = list_web_upstream_ports(&pool, "app-1", &environment)
             .await
             .expect("ports");
         ports.sort_unstable();
@@ -2556,12 +2618,13 @@ mod upstream_port_tests {
     #[tokio::test]
     async fn containers_from_the_previous_deployment_are_not_pooled() {
         let pool = test_pool().await;
-        insert_app(&pool, "app-1", "one", "dep-1").await;
+        let environment = insert_app(&pool, "app-1", "one", "dep-1").await;
         // A newer deployment is live; dep-1 is the version being retired.
         sqlx::query(
-            "INSERT INTO deployments (id, app_id, status, builder, image_tag, created_at) \
-             VALUES ('dep-2', 'app-1', 'live', 'dockerfile', 'deku/x:2', ?1)",
+            "INSERT INTO deployments (id, app_id, environment_id, status, builder, image_tag, created_at) \
+             VALUES ('dep-2', 'app-1', ?1, 'live', 'dockerfile', 'deku/x:2', ?2)",
         )
+        .bind(&environment)
         .bind((chrono::Utc::now() + chrono::Duration::seconds(1)).to_rfc3339())
         .execute(&pool)
         .await
@@ -2571,7 +2634,7 @@ mod upstream_port_tests {
         insert_container_in(&pool, "new", "app-1", "dep-2", Some(32002)).await;
 
         assert_eq!(
-            list_web_upstream_ports(&pool, "app-1")
+            list_web_upstream_ports(&pool, "app-1", &environment)
                 .await
                 .expect("ports"),
             vec![32002],
@@ -2582,11 +2645,13 @@ mod upstream_port_tests {
     #[tokio::test]
     async fn upstreams_cover_every_replica_and_point_at_loopback() {
         let pool = test_pool().await;
-        insert_app(&pool, "app-1", "one", "dep-1").await;
+        let environment = insert_app(&pool, "app-1", "one", "dep-1").await;
         insert_container(&pool, "c1", "app-1", "web", "running", Some(31001)).await;
         insert_container(&pool, "c2", "app-1", "web", "running", Some(31002)).await;
 
-        let upstreams = list_web_upstreams(&pool, "app-1").await.expect("upstreams");
+        let upstreams = list_web_upstreams(&pool, "app-1", &environment)
+            .await
+            .expect("upstreams");
         assert_eq!(
             upstreams.len(),
             2,
@@ -2603,7 +2668,7 @@ mod upstream_port_tests {
     #[tokio::test]
     async fn upstreams_are_empty_for_an_app_that_is_not_serving() {
         let pool = test_pool().await;
-        insert_app(&pool, "app-1", "one", "dep-1").await;
+        let environment = insert_app(&pool, "app-1", "one", "dep-1").await;
         insert_container(&pool, "c1", "app-1", "web", "stopped", Some(31001)).await;
         // A published port mapping alone must not produce an upstream.
         sqlx::query(
@@ -2614,7 +2679,7 @@ mod upstream_port_tests {
         .await
         .expect("insert port mapping");
 
-        assert!(list_web_upstreams(&pool, "app-1")
+        assert!(list_web_upstreams(&pool, "app-1", &environment)
             .await
             .expect("upstreams")
             .is_empty());
@@ -2623,12 +2688,37 @@ mod upstream_port_tests {
     #[tokio::test]
     async fn returns_nothing_without_running_web_containers() {
         let pool = test_pool().await;
-        insert_app(&pool, "app-1", "one", "dep-1").await;
+        let environment = insert_app(&pool, "app-1", "one", "dep-1").await;
         insert_container(&pool, "c1", "app-1", "web", "stopped", Some(30001)).await;
-        assert!(list_web_upstream_ports(&pool, "app-1")
+        assert!(list_web_upstream_ports(&pool, "app-1", &environment)
             .await
             .expect("ports")
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn replicas_from_another_environment_are_never_pooled() {
+        let pool = test_pool().await;
+        let production = insert_app(&pool, "app-1", "one", "dep-prod").await;
+        let staging = insert_environment(&pool, "app-1", "staging", "dep-staging").await;
+
+        insert_container_in(&pool, "prod", "app-1", "dep-prod", Some(33001)).await;
+        insert_container_in(&pool, "stage", "app-1", "dep-staging", Some(33002)).await;
+
+        assert_eq!(
+            list_web_upstream_ports(&pool, "app-1", &production)
+                .await
+                .expect("production"),
+            vec![33001],
+            "production must only ever serve production replicas"
+        );
+        assert_eq!(
+            list_web_upstream_ports(&pool, "app-1", &staging)
+                .await
+                .expect("staging"),
+            vec![33002],
+            "staging must only serve its own replicas"
+        );
     }
 }
 

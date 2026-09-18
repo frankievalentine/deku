@@ -2966,17 +2966,11 @@ async fn reconcile_proxy_for_app(
 
     let domains = queries::list_domain_names(&state.pool, app_id).await?;
 
-    // Upstreams come from the running web containers, so a reconcile after a
-    // deploy keeps every replica in the pool instead of collapsing to one.
-    let upstreams: Vec<deku_core::types::Upstream> =
-        queries::list_web_upstream_ports(&state.pool, app_id)
-            .await?
-            .into_iter()
-            .map(|port| deku_core::types::Upstream {
-                host: "127.0.0.1".to_string(),
-                port,
-            })
-            .collect();
+    // Upstreams come from the running web containers of this environment, so a
+    // reconcile after a deploy keeps every replica in the pool instead of
+    // collapsing to one, and never reaches across environments.
+    let environment = queries::ensure_production_environment(&state.pool, app_id).await?;
+    let upstreams = queries::list_web_upstreams(&state.pool, app_id, &environment.id).await?;
 
     if domains.is_empty() || upstreams.is_empty() {
         crate::proxy::apply_app_config(&state.config.angie_conf_dir, app_name, None).await?;
@@ -3490,10 +3484,16 @@ async fn get_app_checks(
 
     // Probe every running web replica. Checking only one would report a healthy
     // app while another replica is serving errors.
-    let upstream_ports = match queries::list_web_upstream_ports(&state.pool, &app.id).await {
-        Ok(ports) => ports,
+    let check_environment = match queries::ensure_production_environment(&state.pool, &app.id).await
+    {
+        Ok(environment) => environment,
         Err(e) => return internal_error(e).into_response(),
     };
+    let upstream_ports =
+        match queries::list_web_upstream_ports(&state.pool, &app.id, &check_environment.id).await {
+            Ok(ports) => ports,
+            Err(e) => return internal_error(e).into_response(),
+        };
 
     let path = normalize_check_path(params.path.as_deref().unwrap_or("/"));
     let timeout_secs = params.timeout_secs.unwrap_or(5);
@@ -3902,7 +3902,8 @@ async fn build_routing_table(state: &AppState) -> anyhow::Result<Vec<serde_json:
 
     for app in apps {
         let domains = queries::list_domain_names(&state.pool, &app.id).await?;
-        let upstreams = queries::list_web_upstreams(&state.pool, &app.id).await?;
+        let environment = queries::ensure_production_environment(&state.pool, &app.id).await?;
+        let upstreams = queries::list_web_upstreams(&state.pool, &app.id, &environment.id).await?;
         table.push(serde_json::json!({
             "app": app.name,
             "domains": domains,
@@ -3936,7 +3937,8 @@ async fn build_routing_status_for_app(
     app: &deku_core::types::App,
 ) -> anyhow::Result<RoutingAppStatus> {
     let domains = queries::list_domain_names(&state.pool, &app.id).await?;
-    let upstreams = queries::list_web_upstreams(&state.pool, &app.id).await?;
+    let environment = queries::ensure_production_environment(&state.pool, &app.id).await?;
+    let upstreams = queries::list_web_upstreams(&state.pool, &app.id, &environment.id).await?;
     let proxy_config_path = crate::proxy::app_config_path(&state.config.angie_conf_dir, &app.name);
     let proxy_config_present = proxy_config_path.exists();
     let tls_status = crate::services::letsencrypt::status(&state.pool, &app.name).await?;
