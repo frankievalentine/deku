@@ -18,11 +18,14 @@ fn settings_json(
     cfg: &crate::config::DekuConfig,
     token_configured: bool,
     token_source: Option<TokenSource>,
+    account_email: Option<String>,
 ) -> serde_json::Value {
     serde_json::json!({
         "enabled": cfg.acme.enabled,
         "directory": cfg.acme.directory,
-        "email": cfg.acme.email,
+        // The contact the ACME account registers is the host's certificate
+        // account email, which has its own setting.
+        "account_email": account_email,
         "provider": cfg.acme.provider,
         "wildcard": cfg.acme.wildcard,
         "client_path": cfg.acme.client_path,
@@ -36,10 +39,12 @@ fn settings_json(
 async fn current_settings() -> anyhow::Result<serde_json::Value> {
     let cfg = crate::config::load()?;
     let token = cfg.acme_api_token()?;
+    let account_email = crate::services::letsencrypt::get_global_email(&cfg).await?;
     Ok(settings_json(
         &cfg,
         token.is_some(),
         token.map(|token| token.source),
+        account_email,
     ))
 }
 
@@ -60,8 +65,6 @@ pub async fn get_acme(State(_state): State<SharedState>) -> impl IntoResponse {
 pub struct AcmeSettingsBody {
     pub enabled: bool,
     pub directory: String,
-    #[serde(default)]
-    pub email: Option<String>,
     pub provider: String,
     pub wildcard: bool,
     /// A new provider token. Omit or leave empty to keep the stored one.
@@ -101,10 +104,6 @@ pub async fn put_acme(
     cfg.acme = AcmeConfig {
         enabled: body.enabled,
         directory: body.directory.trim().to_string(),
-        email: body
-            .email
-            .map(|email| email.trim().to_string())
-            .filter(|email| !email.is_empty()),
         provider: body.provider.trim().to_string(),
         // The token now lives in a file; clear any inline copy so the secret
         // cannot linger in the config.

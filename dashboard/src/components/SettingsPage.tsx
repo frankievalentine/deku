@@ -12,6 +12,7 @@ import {
   useVersionStatusQuery,
 } from '../lib/query';
 import { copyText, showToast } from '../lib/shell';
+import AcmeSettingsPanel from './AcmeSettingsPanel';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import Icon from './Icon';
@@ -387,6 +388,8 @@ function SettingsInner() {
               : 'No account email is set, so certificate operations cannot run.'}
           </p>
         </article>
+
+        <AcmeSettingsPanel />
 
         <article className="panel stack-md">
           <h2 className="section-title">Storage and services</h2>

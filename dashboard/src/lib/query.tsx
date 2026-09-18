@@ -10,6 +10,8 @@ import {
 } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import {
+  type AcmeSettings,
+  type AcmeSettingsInput,
   type App,
   addDomain,
   type ConfigVar,
@@ -20,6 +22,7 @@ import {
   deleteApp,
   deleteConfigVar,
   deleteManagedService,
+  fetchAcmeSettings,
   fetchApp,
   fetchAppRoutingStatus,
   fetchApps,
@@ -52,6 +55,7 @@ import {
   restoreServiceBackup,
   rotateDashboardToken,
   type ScaleMap,
+  saveAcmeSettings,
   setConfigVar,
   setLetsEncryptConfig,
   setScale,
@@ -131,6 +135,9 @@ export const queryKeys = {
     detail: (kind: ManagedServiceKind, name: string) => ['services', 'detail', kind, name] as const,
     backups: (kind: ManagedServiceKind, name: string) =>
       ['services', 'backups', kind, name] as const,
+  },
+  acme: {
+    settings: ['acme', 'settings'] as const,
   },
   settings: {
     summary: ['settings', 'summary'] as const,
@@ -246,6 +253,14 @@ export function appConfigQueryOptions(
     queryKey: queryKeys.apps.config(appName, environment),
     queryFn: () => fetchConfig(appName, environment),
     enabled: options?.enabled ?? Boolean(appName),
+  });
+}
+
+export function acmeSettingsQueryOptions(options?: QueryEnabledOnly) {
+  return queryOptions({
+    queryKey: queryKeys.acme.settings,
+    queryFn: () => fetchAcmeSettings(),
+    enabled: options?.enabled ?? true,
   });
 }
 
@@ -510,6 +525,23 @@ export function useAppConfigQuery(
 
 export function useAppEnvironmentsQuery(appName: string, options?: QueryEnabledOnly) {
   return useQuery(appEnvironmentsQueryOptions(appName, options));
+}
+
+export function useAcmeSettingsQuery(options?: QueryEnabledOnly) {
+  return useQuery(acmeSettingsQueryOptions(options));
+}
+
+export function useSaveAcmeSettingsMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    mutationOptions({
+      mutationFn: (input: AcmeSettingsInput) => saveAcmeSettings(input),
+      onSuccess: async (settings: AcmeSettings) => {
+        queryClient.setQueryData(queryKeys.acme.settings, settings);
+      },
+    })
+  );
 }
 
 export function useAppScaleQuery(appName: string, options?: QueryHookOptions) {

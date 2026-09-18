@@ -334,7 +334,26 @@ async function apiFetch<T>(
   const response = await fetch(`${BASE_URL}${path}`, { ...init, headers });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`${init.method ?? 'GET'} ${path} -> ${response.status}: ${text}`);
+
+    // The daemon reports failures as {"error": "..."}. Show that message on its
+    // own: a caller renders it to an operator, who should not have to read a
+    // method, path, and status code to learn what went wrong.
+    let message: string | null = null;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'error' in parsed &&
+        typeof (parsed as { error: unknown }).error === 'string'
+      ) {
+        message = (parsed as { error: string }).error;
+      }
+    } catch {
+      // Not JSON; fall back to the transport detail below.
+    }
+
+    throw new Error(message ?? `${init.method ?? 'GET'} ${path} -> ${response.status}: ${text}`);
   }
 
   if (response.status === 204) {
@@ -776,6 +795,47 @@ export function setLetsEncryptConfig(email: string): Promise<void> {
   return apiFetch<void>('/api/letsencrypt/config', {
     method: 'POST',
     body: JSON.stringify({ email }),
+  });
+}
+
+export interface AcmeSettings {
+  enabled: boolean;
+  directory: string;
+  /** The host's certificate account email, set in its own section. */
+  account_email: string | null;
+  provider: string;
+  wildcard: boolean;
+  client_path: string;
+  api_token_file: string | null;
+  /** Whether a token is configured; the token itself is never returned. */
+  token_configured: boolean;
+  token_source: 'environment' | 'inline' | 'file' | null;
+}
+
+export interface AcmeSettingsInput {
+  enabled: boolean;
+  directory: string;
+  provider: string;
+  wildcard: boolean;
+  /** A new token. Omit to keep the stored one. */
+  api_token?: string;
+}
+
+export function fetchAcmeSettings(): Promise<AcmeSettings> {
+  return apiFetch<AcmeSettings>('/api/acme');
+}
+
+export function saveAcmeSettings(input: AcmeSettingsInput): Promise<AcmeSettings> {
+  return apiFetch<AcmeSettings>('/api/acme', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export function verifyAcmeToken(apiToken?: string): Promise<{ ok: boolean; zone_id: string }> {
+  return apiFetch<{ ok: boolean; zone_id: string }>('/api/acme/verify', {
+    method: 'POST',
+    body: JSON.stringify({ api_token: apiToken ?? null }),
   });
 }
 

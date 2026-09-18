@@ -74,9 +74,6 @@ pub struct AcmeConfig {
     /// ACME directory. Point this at a staging directory while testing.
     #[serde(default = "default_acme_directory")]
     pub directory: String,
-    /// Contact address registered with the CA for expiry notices.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
     /// DNS provider that answers the challenge. Only `cloudflare` is built in.
     #[serde(default = "default_acme_provider")]
     pub provider: String,
@@ -102,7 +99,6 @@ impl Default for AcmeConfig {
         Self {
             enabled: false,
             directory: default_acme_directory(),
-            email: None,
             provider: default_acme_provider(),
             api_token: None,
             api_token_file: None,
