@@ -34,6 +34,10 @@ For an app named `demo` with a `staging` environment and `global_domain = "apps.
 `demo-staging.apps.test`. The hostname is derived, not stored, so renaming the app or changing
 `global_domain` changes it on the next reconcile.
 
+An app with **no domain of its own** is served at `<app>-production.<global_domain>` as well, so
+that production has a stable hostname instead of only the per-deployment URLs that change with
+every deploy. Adding a domain switches production back to it and drops the generated hostname.
+
 Two consequences worth knowing:
 
 - Environments need a `global_domain` in the daemon config (`deku setup` prompts for it) to be
@@ -43,9 +47,8 @@ Two consequences worth knowing:
   global_domain = "apps.test"
   ```
 
-- Environment hostnames are served over **HTTP**. Only production uses a certificate, because a
-  certificate is issued for the app's domains and does not cover the derived names. Terminate TLS
-  in front of the generated hostnames if you need it.
+- Generated hostnames are served over **HTTP**. A certificate covers the app's own domains, not the
+  derived names, so terminate TLS in front of them if you need it.
 
 All of an app's vhosts live in one `<app>.conf`. The file is per app rather than per hostname
 because `<app>-<slug>` has the same shape as an app name: an app called `demo-staging` and the
@@ -76,6 +79,9 @@ Every retained deployment is reachable at a hostname of its own:
 ```
 <app>-<slug>-<shortid>.<global_domain>
 ```
+
+Production is spelled out (`<app>-production-...`) like any other environment, even though its
+stable hostname is the app's own domains.
 
 `deku deploy run demo --environment staging` prints the environment's URL and the build's own URL.
 The build URL serves that exact deployment, so it keeps working after a later deploy replaces it,
