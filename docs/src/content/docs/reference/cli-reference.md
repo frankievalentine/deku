@@ -195,7 +195,16 @@ enable it, or use [lifecycle hooks](/hooks/) instead.
 - `letsencrypt enable <app>`
 - `letsencrypt disable <app>`
 - `letsencrypt status <app> [--json]` — human-readable summary, including days until expiry
-- `letsencrypt config <email>`
+- `letsencrypt config --email <address>` — the ACME account contact, also used by
+  [automatic certificates](/certificates/)
+
+### `deku acme`
+
+Automatic certificates for generated hostnames. See [Automatic
+certificates](/certificates/).
+
+- `acme status` — what was asked for, where the token comes from, and whether a certificate has been
+  issued yet; exits non-zero when the certificate exists but cannot be used
 
 ### `deku objectstore`
 

@@ -129,6 +129,7 @@ export default defineConfig({
           items: [
             { label: 'App templates', link: '/app-templates/' },
             { label: 'Environments', link: '/environments/' },
+            { label: 'Automatic certificates', link: '/certificates/' },
             { label: 'App authentication', link: '/app-authentication/' },
             { label: 'Build server', link: '/build-server/' },
             { label: 'AGENTS.md', link: '/agents/' },

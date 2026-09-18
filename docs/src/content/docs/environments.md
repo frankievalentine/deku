@@ -47,8 +47,9 @@ Two consequences worth knowing:
   global_domain = "apps.test"
   ```
 
-- Generated hostnames are served over **HTTP**. A certificate covers the app's own domains, not the
-  derived names, so terminate TLS in front of them if you need it.
+- Generated hostnames are served over **HTTP** unless [automatic
+  certificates](/certificates/) are configured, which obtains one wildcard certificate covering all
+  of them. An app's own domains are covered by that app's certificate either way.
 
 All of an app's vhosts live in one `<app>.conf`. The file is per app rather than per hostname
 because `<app>-<slug>` has the same shape as an app name: an app called `demo-staging` and the
@@ -147,7 +148,8 @@ not wired to automatic deploys.
 
 ## Current limits
 
-- Generated hostnames, including per-deployment URLs, are HTTP-only, as described above.
+- Generated hostnames, including per-deployment URLs, are HTTP-only until a wildcard certificate
+  covers them, as described above.
 - `git push` deploys to production. Branch-to-environment mapping is not wired up.
 - Authentication, maintenance mode, and redirects are app-scoped: they apply to every environment's
   vhost, not per environment.
