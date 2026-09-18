@@ -11,15 +11,18 @@ const { activeNav } = Astro.props;
 const NAV_GROUPS = [
   {
     id: 'operate',
-    label: 'Operate',
-    items: NAV_ITEMS.filter((item) =>
-      ['apps', 'host', 'routing', 'services', 'object-store', 'ssh-keys'].includes(item.id)
-    ),
+    label: 'Apps',
+    items: NAV_ITEMS.filter((item) => ['apps', 'services', 'storage', 'routing'].includes(item.id)),
   },
   {
-    id: 'platform',
-    label: 'Platform',
-    items: NAV_ITEMS.filter((item) => ['plugins', 'api', 'settings'].includes(item.id)),
+    id: 'host',
+    label: 'Server',
+    items: NAV_ITEMS.filter((item) => ['host', 'access'].includes(item.id)),
+  },
+  {
+    id: 'dashboard',
+    label: 'Dashboard',
+    items: NAV_ITEMS.filter((item) => ['settings', 'api'].includes(item.id)),
   },
 ];
 ---
@@ -27,6 +30,7 @@ const NAV_GROUPS = [
 <aside
   id="dashboard-sidebar"
   class="sidebar shell-sidebar"
+  data-side="left"
   data-breakpoint="1024"
   data-initial-open="true"
   data-initial-mobile-open="false"
@@ -48,11 +52,15 @@ const NAV_GROUPS = [
 
     <div class="sidebar-nav">
       {NAV_GROUPS.map((group) => (
-        <div class="sidebar-group">
-          <p class="sidebar-group-title" id={`sidebar-group-${group.id}`}>
+        <div
+          class="sidebar-group"
+          role="group"
+          aria-labelledby={`sidebar-group-${group.id}`}
+        >
+          <h3 class="sidebar-group-title" id={`sidebar-group-${group.id}`}>
             {group.label}
-          </p>
-          <ul class="sidebar-group-list" role="list" aria-labelledby={`sidebar-group-${group.id}`}>
+          </h3>
+          <ul class="sidebar-group-list" role="list">
             {group.items.map((item) => (
               <li>
                 <a

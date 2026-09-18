@@ -27,9 +27,6 @@ export function installMobileSidebarOverlay(): () => void {
   const sidebarElement = sidebar;
   const backgroundElement = background;
   const media = window.matchMedia(MOBILE_QUERY);
-  const closeButtons = Array.from(
-    sidebarElement.querySelectorAll<HTMLElement>('.sidebar-close-button')
-  );
   let trapped = false;
   let focusMoved = false;
 
@@ -102,13 +99,11 @@ export function installMobileSidebarOverlay(): () => void {
   const observer = new MutationObserver(syncOverlay);
   observer.observe(sidebarElement, { attributeFilter: ['aria-hidden'] });
   media.addEventListener('change', syncOverlay);
-  for (const button of closeButtons) button.addEventListener('click', closeSidebar);
   syncOverlay();
 
   return () => {
     observer.disconnect();
     media.removeEventListener('change', syncOverlay);
-    for (const button of closeButtons) button.removeEventListener('click', closeSidebar);
     sidebarElement.removeEventListener('keydown', handleKeyDown);
     backgroundElement.inert = false;
   };
