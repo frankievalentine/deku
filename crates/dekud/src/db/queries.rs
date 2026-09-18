@@ -521,6 +521,50 @@ pub async fn unset_config_var(pool: &SqlitePool, app_id: &str, key: &str) -> Res
     Ok(())
 }
 
+/// Set an environment's override for a config var.
+///
+/// An override shadows the app-wide value for deploys into that environment and
+/// nothing else.
+pub async fn set_environment_config_var_raw(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
+    key: &str,
+    value: &str,
+    is_global: bool,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO config_vars (app_id, environment_id, key, value, is_global) \
+         VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(app_id, environment_id, key) WHERE environment_id IS NOT NULL \
+         DO UPDATE SET value = excluded.value, is_global = excluded.is_global",
+    )
+    .bind(app_id)
+    .bind(environment_id)
+    .bind(key)
+    .bind(value)
+    .bind(is_global)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Remove one environment's override, leaving any app-wide value in place.
+pub async fn unset_environment_config_var(
+    pool: &SqlitePool,
+    app_id: &str,
+    environment_id: &str,
+    key: &str,
+) -> Result<()> {
+    sqlx::query("DELETE FROM config_vars WHERE app_id = ?1 AND environment_id = ?2 AND key = ?3")
+        .bind(app_id)
+        .bind(environment_id)
+        .bind(key)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 // ── Environments ──────────────────────────────────────────────────────────────
 
 /// The slug every app's implicit production environment uses.

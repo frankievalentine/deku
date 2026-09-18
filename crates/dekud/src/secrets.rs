@@ -36,6 +36,18 @@ pub struct ConfigVarView {
     /// Whether the value could not be decrypted, and why.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Where the value in this row comes from.
+    pub source: ConfigVarSource,
+}
+
+/// Which row a displayed config var value was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigVarSource {
+    /// The app-wide value, which every environment inherits.
+    App,
+    /// An override that applies only inside one environment.
+    Environment,
 }
 
 /// Encrypt a value for storage, or store it as-is when no key is configured.
@@ -89,6 +101,25 @@ pub async fn set_config_var(
 ) -> Result<()> {
     let stored = encrypt_value(cfg, value)?;
     queries::set_config_var_raw(pool, app_id, key, &stored, is_global).await?;
+    Ok(())
+}
+
+/// Store an environment's override for a config var.
+///
+/// The override shadows the app-wide value for deploys into that environment and
+/// leaves every other environment alone.
+pub async fn set_environment_config_var(
+    pool: &SqlitePool,
+    cfg: &DekuConfig,
+    app_id: &str,
+    environment_id: &str,
+    key: &str,
+    value: &str,
+    is_global: bool,
+) -> Result<()> {
+    let stored = encrypt_value(cfg, value)?;
+    queries::set_environment_config_var_raw(pool, app_id, environment_id, key, &stored, is_global)
+        .await?;
     Ok(())
 }
 
@@ -167,6 +198,7 @@ pub async fn list_config_vars(
                     is_global: var.is_global,
                     encrypted,
                     error: None,
+                    source: ConfigVarSource::App,
                 },
                 Err(error) => ConfigVarView {
                     app_id: var.app_id,
@@ -175,10 +207,51 @@ pub async fn list_config_vars(
                     is_global: var.is_global,
                     encrypted,
                     error: Some(error.to_string()),
+                    source: ConfigVarSource::App,
                 },
             }
         })
         .collect())
+}
+
+/// Config vars for display in one environment: the app-wide set with that
+/// environment's overrides applied, each row marked with where it came from.
+///
+/// This is the readable counterpart to [`resolve_config_vars`]: same merge, but a
+/// value that cannot be decrypted is reported instead of failing the whole list.
+pub async fn list_config_vars_for_environment(
+    pool: &SqlitePool,
+    cfg: &DekuConfig,
+    app_id: &str,
+    environment_id: &str,
+) -> Result<Vec<ConfigVarView>> {
+    let mut views = list_config_vars(pool, cfg, app_id).await?;
+
+    let overrides = queries::get_environment_config_vars_raw(pool, app_id, environment_id).await?;
+    for var in overrides {
+        let encrypted = is_encrypted_value(&var.value);
+        let (value, error) = match decrypt_value(cfg, &var.value) {
+            Ok(value) => (value, None),
+            Err(error) => (String::new(), Some(error.to_string())),
+        };
+        let view = ConfigVarView {
+            app_id: var.app_id,
+            key: var.key,
+            value,
+            is_global: var.is_global,
+            encrypted,
+            error,
+            source: ConfigVarSource::Environment,
+        };
+
+        match views.iter_mut().find(|existing| existing.key == view.key) {
+            Some(existing) => *existing = view,
+            None => views.push(view),
+        }
+    }
+
+    views.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(views)
 }
 
 /// The prefix that marks a stored config var value as ciphertext.
@@ -186,7 +259,11 @@ const ENVELOPE_PREFIX: &str = "enc:v1:";
 
 #[cfg(test)]
 mod tests {
-    use super::{decrypt_value, encrypt_value, is_encrypted_value, ConfigVarView, ENVELOPE_PREFIX};
+    use super::{
+        decrypt_value, encrypt_value, is_encrypted_value, list_config_vars_for_environment,
+        resolve_config_vars, set_config_var, set_environment_config_var, ConfigVarSource,
+        ConfigVarView, ENVELOPE_PREFIX,
+    };
     use crate::config::{DekuConfig, EncryptionConfig};
 
     fn cfg_with_key(hex: &str) -> DekuConfig {
@@ -268,6 +345,116 @@ mod tests {
         assert!(decrypt_value(&cfg, &tampered).is_err());
     }
 
+    async fn test_pool_with_app() -> (sqlx::SqlitePool, String) {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        crate::db::migrate(&pool).await.expect("migrate");
+        let app = crate::db::queries::create_app(
+            &pool,
+            &deku_core::types::NewApp {
+                name: "one".to_string(),
+            },
+        )
+        .await
+        .expect("app");
+        (pool, app.id)
+    }
+
+    #[tokio::test]
+    async fn an_environment_override_shadows_the_app_wide_value() {
+        let (pool, app_id) = test_pool_with_app().await;
+        let cfg = DekuConfig::default();
+        set_config_var(&pool, &cfg, &app_id, "LOG_LEVEL", "info", false)
+            .await
+            .expect("app-wide var");
+        let production = crate::db::queries::ensure_production_environment(&pool, &app_id)
+            .await
+            .expect("production");
+        set_environment_config_var(
+            &pool,
+            &cfg,
+            &app_id,
+            &production.id,
+            "LOG_LEVEL",
+            "debug",
+            false,
+        )
+        .await
+        .expect("override");
+        set_environment_config_var(
+            &pool,
+            &cfg,
+            &app_id,
+            &production.id,
+            "ONLY_HERE",
+            "1",
+            false,
+        )
+        .await
+        .expect("override only");
+
+        let views = list_config_vars_for_environment(&pool, &cfg, &app_id, &production.id)
+            .await
+            .expect("views");
+        let level = views
+            .iter()
+            .find(|view| view.key == "LOG_LEVEL")
+            .expect("LOG_LEVEL");
+        assert_eq!(level.value, "debug");
+        assert_eq!(
+            level.source,
+            ConfigVarSource::Environment,
+            "the override must be marked as such"
+        );
+        assert_eq!(
+            views
+                .iter()
+                .find(|view| view.key == "ONLY_HERE")
+                .expect("ONLY_HERE")
+                .source,
+            ConfigVarSource::Environment
+        );
+
+        // What a deploy injects must agree with what the list shows.
+        let resolved = resolve_config_vars(&pool, &cfg, &app_id, Some(&production.id))
+            .await
+            .expect("resolved");
+        assert_eq!(
+            resolved
+                .iter()
+                .find(|var| var.key == "LOG_LEVEL")
+                .expect("LOG_LEVEL")
+                .value,
+            "debug"
+        );
+
+        // Another environment still sees the app-wide value and not the override.
+        let staging = crate::db::queries::create_environment(
+            &pool, &app_id, "staging", "staging", None, false,
+        )
+        .await
+        .expect("staging");
+        let staging_resolved = resolve_config_vars(&pool, &cfg, &app_id, Some(&staging.id))
+            .await
+            .expect("staging resolved");
+        assert_eq!(
+            staging_resolved
+                .iter()
+                .find(|var| var.key == "LOG_LEVEL")
+                .expect("LOG_LEVEL")
+                .value,
+            "info",
+            "an override in one environment must not reach another"
+        );
+        assert!(
+            staging_resolved.iter().all(|var| var.key != "ONLY_HERE"),
+            "an override-only var must not leak into another environment"
+        );
+    }
+
     #[test]
     fn view_serializes_the_encryption_state() {
         let view = ConfigVarView {
@@ -277,10 +464,15 @@ mod tests {
             is_global: false,
             encrypted: true,
             error: Some("no key".to_string()),
+            source: ConfigVarSource::Environment,
         };
         let json = serde_json::to_value(&view).expect("serialize");
         assert_eq!(json["encrypted"], true);
         assert_eq!(json["error"], "no key");
+        assert_eq!(
+            json["source"], "environment",
+            "the origin of a value must survive serialization for the CLI and dashboard"
+        );
     }
 
     #[test]

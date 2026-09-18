@@ -14,6 +14,11 @@ enum ConfigCommands {
     List {
         #[arg(help = "App name")]
         app: String,
+        #[arg(
+            long,
+            help = "Environment slug; shows the set that environment deploys with"
+        )]
+        environment: Option<String>,
     },
     /// Set one or more config vars (KEY=VALUE ...)
     Set {
@@ -21,6 +26,11 @@ enum ConfigCommands {
         app: String,
         #[arg(help = "KEY=VALUE pairs", num_args = 1..)]
         pairs: Vec<String>,
+        #[arg(
+            long,
+            help = "Environment slug; overrides the app-wide value in that environment only"
+        )]
+        environment: Option<String>,
     },
     /// Unset a config var
     Unset {
@@ -28,6 +38,11 @@ enum ConfigCommands {
         app: String,
         #[arg(help = "Key name")]
         key: String,
+        #[arg(
+            long,
+            help = "Environment slug; removes that environment's override only"
+        )]
+        environment: Option<String>,
     },
     /// Import config vars from a .env file
     Import {
@@ -42,8 +57,12 @@ enum ConfigCommands {
 
 pub async fn run(args: ConfigArgs, client: &DekuClient) -> Result<()> {
     match args.command {
-        ConfigCommands::List { app } => {
-            let data = client.get(&format!("/api/apps/{app}/config")).await?;
+        ConfigCommands::List { app, environment } => {
+            let query = match &environment {
+                Some(slug) => format!("/api/apps/{app}/config?environment={slug}"),
+                None => format!("/api/apps/{app}/config"),
+            };
+            let data = client.get(&query).await?;
             let empty = Vec::new();
             let vars = data.as_array().unwrap_or(&empty);
             if vars.is_empty() {
@@ -64,15 +83,23 @@ pub async fn run(args: ConfigArgs, client: &DekuClient) -> Result<()> {
                     } else {
                         ""
                     };
+                    let origin = match var["source"].as_str() {
+                        Some("environment") => "  (override)",
+                        _ => "",
+                    };
                     match var["is_global"].as_bool().unwrap_or(false) {
-                        true => println!("{key}={value}  (global){locked}"),
-                        false => println!("{key}={value}{locked}"),
+                        true => println!("{key}={value}  (global){locked}{origin}"),
+                        false => println!("{key}={value}{locked}{origin}"),
                     }
                 }
             }
         }
 
-        ConfigCommands::Set { app, pairs } => {
+        ConfigCommands::Set {
+            app,
+            pairs,
+            environment,
+        } => {
             for pair in &pairs {
                 let (k, v) = pair
                     .split_once('=')
@@ -83,18 +110,31 @@ pub async fn run(args: ConfigArgs, client: &DekuClient) -> Result<()> {
                         serde_json::json!({
                             "key": k,
                             "value": v,
+                            "environment": environment,
                         }),
                     )
                     .await?;
             }
-            println!("Config vars set for '{app}'.");
+            match &environment {
+                Some(slug) => println!("Config vars set for '{app}' in '{slug}'."),
+                None => println!("Config vars set for '{app}'."),
+            }
         }
 
-        ConfigCommands::Unset { app, key } => {
-            client
-                .delete(&format!("/api/apps/{app}/config/{key}"))
-                .await?;
-            println!("Unset '{key}' for '{app}'.");
+        ConfigCommands::Unset {
+            app,
+            key,
+            environment,
+        } => {
+            let path = match &environment {
+                Some(slug) => format!("/api/apps/{app}/config/{key}?environment={slug}"),
+                None => format!("/api/apps/{app}/config/{key}"),
+            };
+            client.delete(&path).await?;
+            match &environment {
+                Some(slug) => println!("Unset '{key}' for '{app}' in '{slug}'."),
+                None => println!("Unset '{key}' for '{app}'."),
+            }
         }
 
         ConfigCommands::Import {

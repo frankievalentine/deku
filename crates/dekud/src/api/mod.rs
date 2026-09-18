@@ -3629,16 +3629,22 @@ async fn get_app_checks(
 
 // ── Config vars ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize)]
+struct ConfigQuery {
+    environment: Option<String>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/apps/{name}/config",
     tag = "config",
-    params(("name" = String, Path, description = "App name")),
+    params(("name" = String, Path, description = "App name"), ("environment" = Option<String>, Query, description = "Environment slug; returns that environment's effective set")),
     responses((status = 200, description = "List config vars"))
 )]
 async fn list_config(
     State(state): State<SharedState>,
     axum::extract::Path(name): axum::extract::Path<String>,
+    Query(params): Query<ConfigQuery>,
 ) -> impl IntoResponse {
     let app = match queries::get_app(&state.pool, &name).await {
         Ok(a) => a,
@@ -3647,7 +3653,23 @@ async fn list_config(
         }
         Err(e) => return internal_error(e).into_response(),
     };
-    match crate::secrets::list_config_vars(&state.pool, &state.config, &app.id).await {
+    let listing = match params.environment.as_deref() {
+        Some(slug) => match queries::get_environment(&state.pool, &app.id, slug).await {
+            Ok(environment) => {
+                crate::secrets::list_config_vars_for_environment(
+                    &state.pool,
+                    &state.config,
+                    &app.id,
+                    &environment.id,
+                )
+                .await
+            }
+            Err(e) => return internal_error(e).into_response(),
+        },
+        None => crate::secrets::list_config_vars(&state.pool, &state.config, &app.id).await,
+    };
+
+    match listing {
         Ok(vars) => (StatusCode::OK, Json(serde_json::json!(vars))).into_response(),
         Err(e) => internal_error(e).into_response(),
     }
@@ -3659,6 +3681,8 @@ struct SetConfigBody {
     value: String,
     #[serde(default)]
     is_global: bool,
+    /// Environment slug to override in. Omit for the app-wide value.
+    environment: Option<String>,
 }
 
 #[utoipa::path(
@@ -3681,21 +3705,46 @@ async fn set_config(
         }
         Err(e) => return internal_error(e).into_response(),
     };
-    match crate::secrets::set_config_var(
-        &state.pool,
-        &state.config,
-        &app.id,
-        &body.key,
-        &body.value,
-        body.is_global,
-    )
-    .await
-    {
+    // An override is written for one environment; without a slug the value is
+    // app-wide and every environment inherits it.
+    let write = match body.environment.as_deref() {
+        Some(slug) => match queries::get_environment(&state.pool, &app.id, slug).await {
+            Ok(environment) => {
+                crate::secrets::set_environment_config_var(
+                    &state.pool,
+                    &state.config,
+                    &app.id,
+                    &environment.id,
+                    &body.key,
+                    &body.value,
+                    body.is_global,
+                )
+                .await
+            }
+            Err(e) => return internal_error(e).into_response(),
+        },
+        None => {
+            crate::secrets::set_config_var(
+                &state.pool,
+                &state.config,
+                &app.id,
+                &body.key,
+                &body.value,
+                body.is_global,
+            )
+            .await
+        }
+    };
+
+    match write {
         Ok(()) => {
             state.events.emit(
                 Some(app.id),
                 "config.set",
-                Some(serde_json::json!({ "key": body.key })),
+                Some(serde_json::json!({
+                    "key": body.key,
+                    "environment": body.environment,
+                })),
             );
             StatusCode::NO_CONTENT.into_response()
         }
@@ -3707,12 +3756,13 @@ async fn set_config(
     delete,
     path = "/api/apps/{name}/config/{key}",
     tag = "config",
-    params(("name" = String, Path, description = "App name"), ("key" = String, Path, description = "Config key")),
+    params(("name" = String, Path, description = "App name"), ("key" = String, Path, description = "Config key"), ("environment" = Option<String>, Query, description = "Environment slug; removes that environment's override only")),
     responses((status = 204, description = "No content"))
 )]
 async fn unset_config(
     State(state): State<SharedState>,
     axum::extract::Path((name, key)): axum::extract::Path<(String, String)>,
+    Query(params): Query<ConfigQuery>,
 ) -> impl IntoResponse {
     let app = match queries::get_app(&state.pool, &name).await {
         Ok(a) => a,
@@ -3721,12 +3771,26 @@ async fn unset_config(
         }
         Err(e) => return internal_error(e).into_response(),
     };
-    match queries::unset_config_var(&state.pool, &app.id, &key).await {
+    let removal = match params.environment.as_deref() {
+        Some(slug) => match queries::get_environment(&state.pool, &app.id, slug).await {
+            Ok(environment) => {
+                queries::unset_environment_config_var(&state.pool, &app.id, &environment.id, &key)
+                    .await
+            }
+            Err(e) => return internal_error(e).into_response(),
+        },
+        None => queries::unset_config_var(&state.pool, &app.id, &key).await,
+    };
+
+    match removal {
         Ok(()) => {
             state.events.emit(
                 Some(app.id),
                 "config.unset",
-                Some(serde_json::json!({ "key": key })),
+                Some(serde_json::json!({
+                    "key": key,
+                    "environment": params.environment,
+                })),
             );
             StatusCode::NO_CONTENT.into_response()
         }
