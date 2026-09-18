@@ -21,7 +21,7 @@ export interface CommandItem {
   action?:
     | 'open-create-app'
     | 'open-routing'
-    | 'open-object-store'
+    | 'open-storage'
     | 'open-settings'
     | 'rotate-token'
     | 'disconnect';
@@ -57,57 +57,56 @@ interface ToastQueueWindow extends Window {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: '/', label: 'Apps', id: 'apps', icon: 'apps', description: 'Manage app fleet' },
-  { href: '/host', label: 'Host', id: 'host', icon: 'host', description: 'View host overview' },
-  {
-    href: '/routing',
-    label: 'Routing',
-    id: 'routing',
-    icon: 'routing',
-    description: 'Inspect routes and TLS',
-  },
+  { href: '/apps', label: 'Apps', id: 'apps', icon: 'apps', description: 'Apps and deployments' },
   {
     href: '/services',
     label: 'Services',
     id: 'services',
     icon: 'services',
-    description: 'Operate managed services',
+    description: 'Databases and caches',
   },
   {
-    href: '/object-store',
-    label: 'Object Store',
-    id: 'object-store',
+    href: '/storage',
+    label: 'Storage',
+    id: 'storage',
     icon: 'object-store',
-    description: 'Configure object storage',
+    description: 'Backups and file storage',
   },
   {
-    href: '/ssh-keys',
-    label: 'SSH Keys',
-    id: 'ssh-keys',
+    href: '/routing',
+    label: 'Routing',
+    id: 'routing',
+    icon: 'routing',
+    description: 'Domains and certificates',
+  },
+  {
+    href: '/',
+    label: 'Overview',
+    id: 'host',
+    icon: 'host',
+    description: 'Server health and activity',
+  },
+  {
+    href: '/access',
+    label: 'SSH keys',
+    id: 'access',
     icon: 'ssh-keys',
-    description: 'Manage SSH access',
-  },
-  {
-    href: '/plugins',
-    label: 'Plugins',
-    id: 'plugins',
-    icon: 'plugins',
-    description: 'Review loaded plugins',
-  },
-  {
-    href: '/api/docs',
-    label: 'API',
-    id: 'api',
-    icon: 'api',
-    description: 'REST API reference',
-    external: true,
+    description: 'Keys that can sign in',
   },
   {
     href: '/settings',
     label: 'Settings',
     id: 'settings',
     icon: 'settings',
-    description: 'Global dashboard settings',
+    description: 'Access token and version',
+  },
+  {
+    href: '/api/docs',
+    label: 'API',
+    id: 'api',
+    icon: 'api',
+    description: 'API reference',
+    external: true,
   },
 ];
 

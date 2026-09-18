@@ -26,12 +26,11 @@ type ConnectionState = 'awaiting-token' | 'online' | 'offline';
 const CONNECTION_STATE_STORAGE_KEY = 'deku_connection_state';
 const PAGE_SHORTCUTS: Record<string, string> = {
   apps: 'a',
-  host: 'h',
-  routing: 'r',
   services: 's',
-  'object-store': 'o',
-  'ssh-keys': 'j',
-  plugins: 'p',
+  storage: 'o',
+  routing: 'r',
+  host: 'h',
+  access: 'j',
   settings: ',',
 };
 
@@ -320,13 +319,13 @@ export default function ShellController() {
         description: 'Jump to routes and certificates',
       },
       {
-        id: 'open-object-store',
-        label: 'Open object store',
-        keywords: ['object store', 'storage', 's3'],
+        id: 'open-storage',
+        label: 'Open storage',
+        keywords: ['object store', 'storage', 'backups', 's3'],
         kind: 'action',
         icon: 'object-store',
-        action: 'open-object-store',
-        description: 'Jump to object storage configuration',
+        action: 'open-storage',
+        description: 'Jump to backups and object storage configuration',
       },
       {
         id: 'open-settings',
@@ -431,13 +430,13 @@ export default function ShellController() {
 
     switch (item.action) {
       case 'open-create-app':
-        window.location.assign('/?create=1');
+        window.location.assign('/apps?create=1');
         break;
       case 'open-routing':
         window.location.assign('/routing');
         break;
-      case 'open-object-store':
-        window.location.assign('/object-store');
+      case 'open-storage':
+        window.location.assign('/storage');
         break;
       case 'open-settings':
         window.location.assign('/settings');

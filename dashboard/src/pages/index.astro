@@ -1,9 +1,8 @@
 ---
-import '../styles/apps.css';
-import AppListClient from '../components/AppListClient';
+import HostPage from '../components/HostPage';
 import Shell from '../layouts/Shell.astro';
 ---
 
-<Shell title="Deku / Apps" activeNav="apps">
-  <AppListClient client:load />
+<Shell title="Deku / Overview" activeNav="host">
+  <HostPage client:load />
 </Shell>

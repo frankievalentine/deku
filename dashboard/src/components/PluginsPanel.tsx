@@ -1,26 +1,10 @@
 import { type SubmitEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { useTokenAccess } from '../hooks/useHasToken';
 import { deletePlugin, fetchPlugins, installPlugin, type Plugin } from '../lib/api';
 import ConfirmModal from './ConfirmModal';
-import ConnectScreen from './ConnectScreen';
 import Spinner from './Spinner';
 import TableScroll from './TableScroll';
 
-export default function PluginsPage() {
-  const tokenAccess = useTokenAccess();
-
-  if (tokenAccess === 'unknown') {
-    return null;
-  }
-
-  if (tokenAccess === 'locked') {
-    return <ConnectScreen />;
-  }
-
-  return <PluginsInner />;
-}
-
-function PluginsInner() {
+export default function PluginsPanel() {
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [path, setPath] = useState('');
   const [pathError, setPathError] = useState<string | null>(null);
@@ -88,80 +72,68 @@ function PluginsInner() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="panel loading-state">
-        <Spinner />
-        <span>Loading plugins…</span>
-      </div>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <div className="panel error-state">
-        <p className="text-danger" role="alert">
-          {loadError}
-        </p>
-        <button type="button" className="btn btn-secondary" onClick={() => void load()}>
-          Retry loading plugins
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div className="stack-lg">
-      <section className="hero-panel">
-        <div className="stack-md">
-          <h1 className="page-title">Plugins</h1>
+    <>
+      <article className="panel stack-md">
+        <div className="stack-sm">
+          <p className="eyebrow">Plugins</p>
+          <h2 className="section-title">Install plugin</h2>
           <p className="page-copy">
             Install a plugin from a shared library path to add the capabilities it provides.
           </p>
         </div>
-      </section>
 
-      <article className="panel stack-md">
-        <h2 className="section-title">Install plugin</h2>
-        <form onSubmit={handleInstall} className="stack-md" noValidate>
-          <div className="form-group">
-            <label className="form-label" htmlFor="plugin-path">
-              Shared library path
-            </label>
-            <input
-              id="plugin-path"
-              ref={pathInput}
-              className="input"
-              value={path}
-              onChange={(event) => {
-                setPath(event.target.value);
-                if (pathError) setPathError(null);
-              }}
-              placeholder="/home/deku/.deku/plugins/libdeku_plugin_postgres.so"
-              spellCheck={false}
-              autoComplete="off"
-              required
-              aria-invalid={pathError ? true : undefined}
-              aria-describedby={
-                pathError ? 'plugin-path-hint plugin-path-error' : 'plugin-path-hint'
-              }
-            />
-            <p id="plugin-path-hint" className="text-muted">
-              Use an absolute path to a plugin library the daemon can read.
+        {loadError ? (
+          <div className="error-state">
+            <p className="text-danger" role="alert">
+              {loadError}
             </p>
-            {pathError ? (
-              <p id="plugin-path-error" className="text-danger">
-                {pathError}
-              </p>
-            ) : null}
-          </div>
-          <div className="form-actions">
-            <button className="btn btn-primary" type="submit" disabled={busy === 'install'}>
-              {busy === 'install' ? <span className="loading-spinner" /> : null}
-              <span>Install plugin</span>
+            <button type="button" className="btn btn-secondary" onClick={() => void load()}>
+              Retry loading plugins
             </button>
           </div>
-        </form>
+        ) : (
+          <form onSubmit={handleInstall} className="stack-md" noValidate>
+            <div className="form-group">
+              <label className="form-label" htmlFor="plugin-path">
+                Shared library path
+              </label>
+              <input
+                id="plugin-path"
+                ref={pathInput}
+                className="input"
+                value={path}
+                onChange={(event) => {
+                  setPath(event.target.value);
+                  if (pathError) setPathError(null);
+                }}
+                placeholder="/home/deku/.deku/plugins/libdeku_plugin_postgres.so"
+                spellCheck={false}
+                autoComplete="off"
+                required
+                aria-invalid={pathError ? true : undefined}
+                aria-describedby={
+                  pathError ? 'plugin-path-hint plugin-path-error' : 'plugin-path-hint'
+                }
+              />
+              <p id="plugin-path-hint" className="text-muted">
+                Use an absolute path to a plugin library the daemon can read.
+              </p>
+              {pathError ? (
+                <p id="plugin-path-error" className="text-danger">
+                  {pathError}
+                </p>
+              ) : null}
+            </div>
+            <div className="form-actions">
+              <button className="btn btn-primary" type="submit" disabled={busy === 'install'}>
+                {busy === 'install' ? <span className="loading-spinner" /> : null}
+                <span>Install plugin</span>
+              </button>
+            </div>
+          </form>
+        )}
+
         {actionError ? (
           <p className="callout callout-danger" role="alert">
             {actionError}
@@ -171,7 +143,12 @@ function PluginsInner() {
 
       <article className="panel stack-md">
         <h2 className="section-title">Loaded plugins</h2>
-        {plugins.length === 0 ? (
+        {loading ? (
+          <div className="loading-state">
+            <Spinner />
+            <span>Loading plugins…</span>
+          </div>
+        ) : plugins.length === 0 ? (
           <p className="text-muted">
             No plugins are loaded. Install one by shared library path above to have the daemon load
             it.
@@ -229,6 +206,6 @@ function PluginsInner() {
           void handleDelete();
         }}
       />
-    </div>
+    </>
   );
 }
