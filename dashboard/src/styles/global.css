@@ -2264,7 +2264,6 @@ select:focus-visible {
 
   .shell-search-text,
   .shell-action-label,
-  .shell-action-spinner,
   .shell-command-shortcut {
     display: none;
   }
