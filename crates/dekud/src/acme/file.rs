@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use sqlx::SqlitePool;
+
 use crate::config::{AcmeConfig, DekuConfig};
 
 /// The ACME client Deku configures. Angie refers to it by this name, and a
@@ -71,6 +73,73 @@ pub struct FileConfig<'a> {
     pub deku_socket: &'a Path,
 }
 
+/// Whether any app config still serves the wildcard certificate.
+///
+/// A vhost names the certificate by variable, so this is what the client being
+/// taken away conflicts with: a config naming a client that is not configured
+/// makes Angie reject the whole file it appears in.
+pub fn configs_serve_wildcard(conf_dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(conf_dir) else {
+        return false;
+    };
+
+    let client = WILDCARD_CLIENT;
+    entries
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .is_some_and(|name| is_app_config_file(&name.to_string_lossy()))
+        })
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .any(|contents| contents.contains(&format!("$acme_cert_{client}")))
+}
+
+/// Bring Angie in line with the daemon's certificate settings.
+///
+/// Taking the client away is ordered against the configs that serve it: they
+/// have to stop naming it before it goes, or the reload that removes it is
+/// rejected for the whole server — which left disabling certificates impossible
+/// rather than merely failing.
+pub async fn apply(pool: &SqlitePool, cfg: &DekuConfig, email: Option<&str>) -> Result<Outcome> {
+    let wanted = wanted(cfg, email)?;
+
+    if wanted.is_none() && configs_serve_wildcard(&cfg.angie_conf_dir) {
+        rewrite_apps_without_wildcard(pool, cfg).await?;
+    }
+
+    let desired = wanted.map(|config| render(&config)).transpose()?;
+    sync_file(&cfg.angie_conf_dir, desired.as_deref()).await
+}
+
+/// Rewrite every app's config so none of them serves the wildcard certificate.
+///
+/// The ACME configuration is deliberately not passed on: the point is to write
+/// the same hostnames without TLS, which is what a config looks like when no
+/// certificate is ready.
+async fn rewrite_apps_without_wildcard(pool: &SqlitePool, cfg: &DekuConfig) -> Result<()> {
+    for app in crate::db::queries::list_apps(pool).await? {
+        crate::proxy::reconcile_app(
+            pool,
+            &cfg.angie_conf_dir,
+            cfg.global_domain.as_deref(),
+            None,
+            &app.id,
+            &app.name,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "rewriting the config of app '{}' without the certificate",
+                app.name
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Write or remove the ACME configuration so it matches the daemon config.
 ///
 /// Returns what changed, and Angie is reloaded only when something did. That
@@ -78,14 +147,6 @@ pub struct FileConfig<'a> {
 /// that is not currently valid, ignoring its own retry delay, so reloading an
 /// unchanged file while issuance is failing is how a host ends up hammering the
 /// certificate authority.
-pub async fn sync(cfg: &DekuConfig, email: Option<&str>) -> Result<Outcome> {
-    let desired = match wanted(cfg, email)? {
-        Some(config) => Some(render(&config)?),
-        None => None,
-    };
-    sync_file(&cfg.angie_conf_dir, desired.as_deref()).await
-}
-
 /// Write, remove, or leave the file alone to match what is wanted.
 ///
 /// Split from the configuration so the rule can be checked on its own: `None`
@@ -445,6 +506,30 @@ mod tests {
         // There was not: nothing is left behind for Angie to read.
         super::restore(&path, None).expect("restore");
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_config_serving_the_certificate_is_detected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let conf_dir = temp.path();
+
+        assert!(
+            !super::configs_serve_wildcard(conf_dir),
+            "an empty directory serves nothing"
+        );
+
+        // An app that serves it: the removal has to be ordered against this.
+        std::fs::write(
+            conf_dir.join("demo.conf"),
+            "ssl_certificate $acme_cert_deku_wildcard;",
+        )
+        .expect("write");
+        assert!(super::configs_serve_wildcard(conf_dir));
+
+        // An app that does not, and a file that is not an app, do not count.
+        std::fs::write(conf_dir.join("demo.conf"), "listen 80;").expect("write");
+        std::fs::write(conf_dir.join("notes.txt"), "$acme_cert_deku_wildcard").expect("write");
+        assert!(!super::configs_serve_wildcard(conf_dir));
     }
 
     #[test]

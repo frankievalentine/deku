@@ -62,6 +62,9 @@ async fn main() -> Result<()> {
         }
     }
 
+    let pool = db::connect(&cfg).await?;
+    db::migrate(&pool).await?;
+
     // Angie requests the wildcard certificate from a file of its own, so the
     // client exists from startup rather than from the next deploy. A failure is
     // reported, not fatal: a host that has not configured a certificate still
@@ -73,14 +76,11 @@ async fn main() -> Result<()> {
             None
         }
     };
-    match acme::file::sync(&cfg, acme_email.as_deref()).await {
+    match acme::file::apply(&pool, &cfg, acme_email.as_deref()).await {
         Ok(acme::file::Outcome::Unchanged) => {}
         Ok(outcome) => info!(?outcome, "synced the ACME configuration"),
         Err(error) => warn!("could not apply the ACME configuration: {error}"),
     }
-
-    let pool = db::connect(&cfg).await?;
-    db::migrate(&pool).await?;
 
     let docker = container::connect()?;
     info!("connected to docker daemon");

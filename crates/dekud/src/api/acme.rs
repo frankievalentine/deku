@@ -134,7 +134,7 @@ pub async fn put_acme(
             None
         }
     };
-    if let Err(error) = crate::acme::file::sync(&cfg, email.as_deref()).await {
+    if let Err(error) = crate::acme::file::apply(&state.pool, &cfg, email.as_deref()).await {
         return internal_error(error).into_response();
     }
 
