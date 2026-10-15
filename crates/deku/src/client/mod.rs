@@ -59,6 +59,12 @@ impl DekuClient {
         self.handle_response(res).await
     }
 
+    pub async fn put(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value> {
+        let url = format!("{}{path}", self.base_url);
+        let res = self.http.put(&url).json(&body).send().await?;
+        self.handle_response(res).await
+    }
+
     pub async fn delete(&self, path: &str) -> Result<()> {
         let url = format!("{}{path}", self.base_url);
         let res = self.http.delete(&url).send().await?;

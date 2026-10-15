@@ -9,7 +9,13 @@
 //! certificate is requested and used stays in the proxy configuration.
 
 pub mod cloudflare;
+pub mod domains;
 pub mod file;
+#[cfg(test)]
+mod it;
+pub mod reachability;
+pub mod status;
+pub mod watcher;
 
 /// The headers the hook location sends and the hook handler reads.
 ///
@@ -143,7 +149,7 @@ pub fn provider_client(cfg: &DekuConfig) -> Result<Option<CloudflareClient>> {
     // Reject a configuration that cannot work before a challenge is attempted.
     cfg.acme.validate(cfg.global_domain.as_deref())?;
 
-    if !cfg.acme.enabled {
+    if !(cfg.acme.enabled && cfg.acme.wildcard) {
         return Ok(None);
     }
 

@@ -83,7 +83,9 @@ pub enum Outcome {
 
 /// Everything the file is rendered from.
 pub struct FileConfig<'a> {
-    pub global_domain: &'a str,
+    /// The global domain to request the wildcard for, or `None` when only the
+    /// per-domain clients in the app configs need this file.
+    pub wildcard_domain: Option<&'a str>,
     pub acme: &'a AcmeConfig,
     /// The account email registered with the certificate authority, when one is
     /// set. Deku keeps it with the Let's Encrypt settings rather than asking
@@ -125,30 +127,64 @@ pub fn configs_serve_wildcard(conf_dir: &Path) -> bool {
 /// rather than merely failing.
 pub async fn apply(pool: &SqlitePool, cfg: &DekuConfig, email: Option<&str>) -> Result<Outcome> {
     let wanted = wanted(cfg, email)?;
+    let wildcard_wanted = wanted
+        .as_ref()
+        .is_some_and(|file| file.wildcard_domain.is_some());
 
-    if wanted.is_none() && configs_serve_wildcard(&cfg.angie_conf_dir) {
+    if !wildcard_wanted && configs_serve_wildcard(&cfg.angie_conf_dir) {
         // The dashboard is only ever served with the wildcard, so it is
         // withdrawn with it rather than rewritten to plain HTTP.
         crate::proxy::dashboard::remove(&cfg.angie_conf_dir)?;
-        rewrite_apps_without_wildcard(pool, cfg).await?;
+        rewrite_app_configs(pool, cfg).await?;
+    } else if !(cfg.acme.enabled && cfg.acme.custom_domains)
+        && configs_declare_domain_clients(&cfg.angie_conf_dir)
+    {
+        // Per-domain clients live in the app configs, so turning custom domain
+        // certificates off means rewriting those configs without them.
+        rewrite_app_configs(pool, cfg).await?;
     }
 
+    if wanted.is_some() {
+        // Angie binds the status socket inside it as soon as the file loads, so
+        // the directory has to exist first; a fresh Angie install may not have
+        // created it yet.
+        std::fs::create_dir_all(&cfg.acme.client_path)
+            .with_context(|| format!("creating {}", cfg.acme.client_path.display()))?;
+    }
     let desired = wanted.map(|config| render(&config)).transpose()?;
     sync_file(&cfg.angie_conf_dir, desired.as_deref()).await
 }
 
-/// Rewrite every app's config so none of them serves the wildcard certificate.
+/// Whether any app config declares a per-domain ACME client.
+pub fn configs_declare_domain_clients(conf_dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(conf_dir) else {
+        return false;
+    };
+    let needle = format!("acme_client {}", crate::acme::domains::CLIENT_PREFIX);
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .is_some_and(|name| is_app_config_file(&name.to_string_lossy()))
+        })
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .any(|contents| contents.contains(&needle))
+}
+
+/// Rewrite every app's config from the current certificate settings.
 ///
-/// The ACME configuration is deliberately not passed on: the point is to write
-/// the same hostnames without TLS, which is what a config looks like when no
-/// certificate is ready.
-async fn rewrite_apps_without_wildcard(pool: &SqlitePool, cfg: &DekuConfig) -> Result<()> {
+/// With the wildcard or custom domain certificates switched off, the configs
+/// come out serving those hostnames over HTTP and declaring no clients, which
+/// is what a config looks like when no certificate is ready.
+async fn rewrite_app_configs(pool: &SqlitePool, cfg: &DekuConfig) -> Result<()> {
     for app in crate::db::queries::list_apps(pool).await? {
         crate::proxy::reconcile_app(
             pool,
             &cfg.angie_conf_dir,
             cfg.global_domain.as_deref(),
-            None,
+            Some(&cfg.acme),
             &app.id,
             &app.name,
         )
@@ -215,40 +251,79 @@ async fn sync_file(conf_dir: &Path, desired: Option<&str>) -> Result<Outcome> {
 /// name; anything else would leave Angie collecting names for a certificate
 /// nobody serves.
 fn wanted<'a>(cfg: &'a DekuConfig, email: Option<&'a str>) -> Result<Option<FileConfig<'a>>> {
-    if !cfg.acme.enabled || !cfg.acme.wildcard {
+    if !cfg.acme.enabled {
         return Ok(None);
     }
 
-    let Some(global_domain) = cfg
+    let wildcard_domain = cfg
         .global_domain
         .as_deref()
-        .filter(|domain| !domain.trim().is_empty())
-    else {
+        .filter(|domain| cfg.acme.wildcard && !domain.trim().is_empty());
+
+    if wildcard_domain.is_none() && !cfg.acme.custom_domains {
         return Ok(None);
-    };
+    }
 
     // Nothing half-configured reaches Angie: a client without a token would
     // retry on every reload and never obtain anything.
     cfg.acme
-        .validate(Some(global_domain))
+        .validate(cfg.global_domain.as_deref())
         .context("the ACME configuration cannot be used")?;
 
     Ok(Some(FileConfig {
-        global_domain,
+        wildcard_domain,
         acme: &cfg.acme,
         email,
         deku_socket: &cfg.socket_path,
     }))
 }
 
+/// The socket Angie answers certificate status on, for the daemon's watcher.
+///
+/// Beside the certificates, so the directory exists and only root reaches it.
+pub fn status_socket(acme: &AcmeConfig) -> PathBuf {
+    acme.client_path.join("status.sock")
+}
+
 /// Render the file.
 pub fn render(config: &FileConfig<'_>) -> Result<String> {
-    let client = WILDCARD_CLIENT;
-    let directory = directive_value(&config.acme.directory, "the ACME directory")?;
-    let domain = directive_value(config.global_domain, "the global domain")?;
-
     // A path is checked before it is used, so it is owned rather than borrowed
     // from a `display()` temporary that would not outlive the check.
+    let client_path_shown = config.acme.client_path.display().to_string();
+    let client_path = directive_value(&client_path_shown, "the ACME client path")?;
+    let status_shown = status_socket(config.acme).display().to_string();
+    let status = directive_value(&status_shown, "the status socket")?;
+
+    let mut out = format!(
+        "\
+# Written by Deku for certificates Angie requests and renews. Do not edit.
+
+acme_client_path {client_path};
+
+# Each ACME client's state, read by the daemon to learn when a certificate has
+# been issued or a request has failed. Only the client status is exposed, and
+# only on this socket.
+server {{
+    listen unix:{status};
+
+    location /acme/ {{
+        api /status/http/acme_clients/;
+    }}
+}}
+"
+    );
+
+    if let Some(domain) = config.wildcard_domain {
+        out.push('\n');
+        out.push_str(&render_wildcard(config, domain)?);
+    }
+    Ok(out)
+}
+
+fn render_wildcard(config: &FileConfig<'_>, domain: &str) -> Result<String> {
+    let client = WILDCARD_CLIENT;
+    let directory = directive_value(&config.acme.directory, "the ACME directory")?;
+    let domain = directive_value(domain, "the global domain")?;
     let client_path_shown = config.acme.client_path.display().to_string();
     let client_path = directive_value(&client_path_shown, "the ACME client path")?;
 
@@ -282,14 +357,11 @@ pub fn render(config: &FileConfig<'_>) -> Result<String> {
 
     Ok(format!(
         "\
-# Written by Deku for the wildcard certificate. Do not edit.
-#
-# Angie requests and renews a certificate covering {domain} and *.{domain}, and
-# keeps it under {client_path}. The DNS-01 challenge is answered by Deku: Angie
-# calls the hook location below, the daemon writes the TXT record through the
-# provider's API, and the 200 it returns is what Angie waits for.
-
-acme_client_path {client_path};
+# The wildcard certificate. Angie requests and renews a certificate covering
+# {domain} and *.{domain}, and keeps it under {client_path}. The DNS-01
+# challenge is answered by Deku: Angie calls the hook location below, the daemon
+# writes the TXT record through the provider's API, and the 200 it returns is
+# what Angie waits for.
 
 acme_client {client} {directory}
     challenge=dns{email};
@@ -317,7 +389,7 @@ server {{
 /// The values come from the daemon config and the dashboard, and they are
 /// written verbatim into a file the proxy loads, so a stray newline or semicolon
 /// would become configuration.
-fn directive_value<'a>(value: &'a str, what: &str) -> Result<&'a str> {
+pub(crate) fn directive_value<'a>(value: &'a str, what: &str) -> Result<&'a str> {
     if value
         .chars()
         .any(|character| character.is_whitespace() || character.is_control() || character == ';')
@@ -400,7 +472,7 @@ mod tests {
     fn rendered(email: Option<&str>) -> String {
         let acme = acme();
         render(&FileConfig {
-            global_domain: "apps.test",
+            wildcard_domain: Some("apps.test"),
             acme: &acme,
             email,
             deku_socket: Path::new("/run/deku/deku.sock"),
@@ -458,6 +530,37 @@ mod tests {
     }
 
     #[test]
+    fn custom_domains_alone_get_the_client_path_and_status_but_no_wildcard() {
+        let acme = AcmeConfig {
+            enabled: true,
+            custom_domains: true,
+            ..AcmeConfig::default()
+        };
+        let contents = render(&FileConfig {
+            wildcard_domain: None,
+            acme: &acme,
+            email: None,
+            deku_socket: Path::new("/run/deku/deku.sock"),
+        })
+        .expect("render");
+        assert!(contents.contains(&format!("acme_client_path {};", acme.client_path.display())));
+        assert!(contents.contains(&format!(
+            "listen unix:{};",
+            super::status_socket(&acme).display()
+        )));
+        assert!(
+            contents.contains("api /status/http/acme_clients/;"),
+            "{contents}"
+        );
+        assert!(!contents.contains(WILDCARD_CLIENT), "{contents}");
+    }
+
+    #[test]
+    fn the_wildcard_file_also_serves_status() {
+        assert!(rendered(None).contains("api /status/http/acme_clients/;"));
+    }
+
+    #[test]
     fn an_account_email_is_optional() {
         assert!(!rendered(None).contains(" email="), "{}", rendered(None));
     }
@@ -468,7 +571,7 @@ mod tests {
         let error = render(&FileConfig {
             // A newline here would add a directive of the caller's choosing to a
             // file the proxy loads.
-            global_domain: "apps.test;\nserver { listen 80; }",
+            wildcard_domain: Some("apps.test;\nserver { listen 80; }"),
             acme: &acme,
             email: None,
             deku_socket: Path::new("/run/deku/deku.sock"),

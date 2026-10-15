@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     middleware,
     response::{Html, IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -133,6 +133,11 @@ fn build_api_router(state: SharedState) -> Router {
             get(list_domains).post(add_domain),
         )
         .route("/api/apps/{name}/domains/{domain}", delete(remove_domain))
+        .route("/api/apps/{name}/domains/{domain}/tls", put(set_domain_tls))
+        .route(
+            "/api/apps/{name}/domains/{domain}/tls/retry",
+            post(retry_domain_tls),
+        )
         // Ports
         .route("/api/apps/{name}/ports", get(list_ports).post(add_port))
         .route("/api/apps/{name}/ports/{id}", delete(remove_port))
@@ -2063,6 +2068,15 @@ async fn add_redirect_handler(
         )
             .into_response();
     }
+    // Angie answers this path itself for the certificate reachability check;
+    // a second exact location for it would make the whole config invalid.
+    if source_path == crate::acme::reachability::CHECK_PATH {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("{source_path} is reserved for certificate checks") })),
+        )
+            .into_response();
+    }
     let target_ok =
         target.starts_with("http://") || target.starts_with("https://") || target.starts_with('/');
     if !target_ok {
@@ -2491,6 +2505,19 @@ fn acme_config_check(cfg: &crate::config::DekuConfig) -> serde_json::Value {
         });
     }
 
+    // Only the wildcard's DNS challenge needs a provider token.
+    if !cfg.acme.wildcard {
+        return serde_json::json!({
+            "name": "acme",
+            "status": "ok",
+            "detail": if cfg.acme.custom_domains {
+                format!("custom domain certificates over HTTP-01 from {}", cfg.acme.directory)
+            } else {
+                "enabled, but neither the wildcard nor custom domain certificates is on".to_string()
+            },
+        });
+    }
+
     match cfg.acme_api_token() {
         Ok(Some(token)) => serde_json::json!({
             "name": "acme",
@@ -2513,6 +2540,71 @@ fn acme_config_check(cfg: &crate::config::DekuConfig) -> serde_json::Value {
             "detail": error.to_string(),
         }),
     }
+}
+
+/// Report app domains whose certificates Angie cannot obtain.
+///
+/// A domain still being checked or issued is normal for a few minutes after it
+/// is added, so only a paused domain fails; one waiting on DNS or port 80 warns
+/// with the reason, since that is usually the operator's next step.
+async fn domain_certificates_check(state: &SharedState) -> Option<serde_json::Value> {
+    use crate::acme::domains::{CertState, TlsMode};
+
+    let cfg = current_config(state);
+    if !(cfg.acme.enabled && cfg.acme.custom_domains) {
+        return None;
+    }
+    let domains = queries::list_all_domain_tls(&state.pool).await.ok()?;
+    let auto: Vec<_> = domains
+        .iter()
+        .filter(|domain| domain.mode == TlsMode::Auto)
+        .collect();
+    let failed: Vec<_> = auto
+        .iter()
+        .filter(|domain| domain.state == CertState::Failed)
+        .collect();
+    let waiting: Vec<_> = auto
+        .iter()
+        .filter(|domain| domain.state == CertState::Checking)
+        .collect();
+    let active = auto
+        .iter()
+        .filter(|domain| domain.state == CertState::Active)
+        .count();
+
+    let describe = |list: &[&&crate::acme::domains::DomainTls]| {
+        list.iter()
+            .map(|domain| {
+                format!(
+                    "{}: {}",
+                    domain.domain,
+                    domain.details.as_deref().unwrap_or("no reason recorded")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let (status, detail) = if !failed.is_empty() {
+        (
+            "fail",
+            format!("paused after repeated failures: {}", describe(&failed)),
+        )
+    } else if !waiting.is_empty() {
+        ("warn", format!("not reachable yet: {}", describe(&waiting)))
+    } else {
+        (
+            "ok",
+            format!(
+                "{active} of {} automatic domains have a certificate",
+                auto.len()
+            ),
+        )
+    };
+    Some(serde_json::json!({
+        "name": "domain_certificates",
+        "status": status,
+        "detail": detail,
+    }))
 }
 
 /// Check whether the wildcard certificate has been issued.
@@ -2658,6 +2750,9 @@ async fn doctor(State(state): State<SharedState>) -> impl IntoResponse {
         checks.push(acme_module_check().await);
         checks.push(acme_config_check(&state.config));
         checks.push(acme_certificate_check(&state.config));
+    }
+    if let Some(check) = domain_certificates_check(&state).await {
+        checks.push(check);
     }
 
     let overall = if checks.iter().any(|check| check["status"] == "fail") {
@@ -2915,9 +3010,156 @@ async fn list_domains(
         }
         Err(e) => return internal_error(e).into_response(),
     };
-    match queries::list_domains(&state.pool, &app.id).await {
-        Ok(domains) => (StatusCode::OK, Json(serde_json::json!(domains))).into_response(),
-        Err(e) => internal_error(e).into_response(),
+    let domains = match queries::list_domains(&state.pool, &app.id).await {
+        Ok(domains) => domains,
+        Err(e) => return internal_error(e).into_response(),
+    };
+    let tls = match queries::list_domain_tls(&state.pool, &app.id).await {
+        Ok(tls) => tls,
+        Err(e) => return internal_error(e).into_response(),
+    };
+    let body: Vec<_> = domains
+        .iter()
+        .map(|domain| {
+            let entry = tls.iter().find(|entry| entry.domain_id == domain.id);
+            serde_json::json!({
+                "id": domain.id,
+                "app_id": domain.app_id,
+                "domain": domain.domain,
+                "created_at": domain.created_at,
+                "tls": entry.map(domain_tls_json),
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(serde_json::json!(body))).into_response()
+}
+
+/// A domain's certificate state as the API reports it.
+fn domain_tls_json(entry: &crate::acme::domains::DomainTls) -> serde_json::Value {
+    serde_json::json!({
+        "mode": entry.mode,
+        "state": entry.state,
+        "details": entry.details,
+        "expires_at": entry.expires_at,
+        "checked_at": entry.checked_at,
+        "next_retry_at": entry.next_retry_at,
+    })
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+struct SetDomainTlsBody {
+    /// `auto`, `manual`, or `off`.
+    mode: String,
+}
+
+/// Find one of an app's domains with its certificate state.
+async fn find_domain_tls(
+    state: &AppState,
+    name: &str,
+    domain: &str,
+) -> Result<(deku_core::types::App, crate::acme::domains::DomainTls), Box<axum::response::Response>>
+{
+    let app = match queries::get_app(&state.pool, name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return Err(Box::new(
+                not_found(format!("app '{name}' not found")).into_response(),
+            ));
+        }
+        Err(e) => return Err(Box::new(internal_error(e).into_response())),
+    };
+    match queries::list_domain_tls(&state.pool, &app.id).await {
+        Ok(entries) => match entries.into_iter().find(|entry| entry.domain == domain) {
+            Some(entry) => Ok((app, entry)),
+            None => Err(Box::new(
+                not_found(format!("domain '{domain}' is not attached to '{name}'")).into_response(),
+            )),
+        },
+        Err(e) => Err(Box::new(internal_error(e).into_response())),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/apps/{name}/domains/{domain}/tls",
+    tag = "domains",
+    params(
+        ("name" = String, Path, description = "App name"),
+        ("domain" = String, Path, description = "Domain"),
+    ),
+    request_body = SetDomainTlsBody,
+    responses((status = 200, description = "The domain's certificate state"))
+)]
+async fn set_domain_tls(
+    State(state): State<SharedState>,
+    axum::extract::Path((name, domain)): axum::extract::Path<(String, String)>,
+    Json(body): Json<SetDomainTlsBody>,
+) -> impl IntoResponse {
+    use crate::acme::domains::{supports_http_challenge, TlsMode};
+
+    let Some(mode) = TlsMode::parse(body.mode.trim()) else {
+        return bad_request("mode must be auto, manual, or off").into_response();
+    };
+    let (app, entry) = match find_domain_tls(&state, &name, &domain).await {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    if mode == TlsMode::Auto && !supports_http_challenge(&entry.domain) {
+        return bad_request(format!(
+            "{domain} cannot get a certificate automatically: wildcards and IP addresses need one you install (mode manual)"
+        ))
+        .into_response();
+    }
+    if let Err(e) = queries::set_domain_tls_mode(&state.pool, &entry.domain_id, mode).await {
+        return internal_error(e).into_response();
+    }
+    if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &app.name).await {
+        return internal_error(e).into_response();
+    }
+    match find_domain_tls(&state, &name, &domain).await {
+        Ok((_, entry)) => (StatusCode::OK, Json(domain_tls_json(&entry))).into_response(),
+        Err(response) => *response,
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{name}/domains/{domain}/tls/retry",
+    tag = "domains",
+    params(
+        ("name" = String, Path, description = "App name"),
+        ("domain" = String, Path, description = "Domain"),
+    ),
+    responses((status = 202, description = "The domain is checked again on the watcher's next pass"))
+)]
+async fn retry_domain_tls(
+    State(state): State<SharedState>,
+    axum::extract::Path((name, domain)): axum::extract::Path<(String, String)>,
+) -> impl IntoResponse {
+    use crate::acme::domains::TlsMode;
+
+    let (app, entry) = match find_domain_tls(&state, &name, &domain).await {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    if entry.mode != TlsMode::Auto {
+        return bad_request(format!(
+            "{domain} is not in auto mode, so there is nothing to retry"
+        ))
+        .into_response();
+    }
+    // Starting the mode over clears the failures and the retry schedule, so
+    // the next pass checks reachability and requests again straight away.
+    if let Err(e) = queries::set_domain_tls_mode(&state.pool, &entry.domain_id, TlsMode::Auto).await
+    {
+        return internal_error(e).into_response();
+    }
+    if let Err(e) = reconcile_proxy_for_app(&state, &app.id, &app.name).await {
+        return internal_error(e).into_response();
+    }
+    match find_domain_tls(&state, &name, &domain).await {
+        Ok((_, entry)) => (StatusCode::ACCEPTED, Json(domain_tls_json(&entry))).into_response(),
+        Err(response) => *response,
     }
 }
 

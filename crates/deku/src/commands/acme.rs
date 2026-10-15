@@ -13,12 +13,49 @@ pub struct AcmeArgs {
 enum AcmeCommands {
     /// Show the certificate settings and whether one has been issued
     Status,
+    /// Turn automatic certificates for app domains on or off
+    CustomDomains {
+        #[arg(value_parser = ["on", "off"], help = "on or off")]
+        state: String,
+    },
 }
 
 pub async fn run(args: AcmeArgs, client: &DekuClient) -> Result<()> {
     match args.command {
         AcmeCommands::Status => status(client).await,
+        AcmeCommands::CustomDomains { state } => custom_domains(client, state == "on").await,
     }
+}
+
+/// Switch custom domain certificates, keeping every other certificate setting.
+async fn custom_domains(client: &DekuClient, on: bool) -> Result<()> {
+    let current = client.get("/api/acme").await?;
+    let enabled = current["enabled"].as_bool().unwrap_or(false);
+    let wildcard = current["wildcard"].as_bool().unwrap_or(false);
+    client
+        .put(
+            "/api/acme",
+            serde_json::json!({
+                // Turning custom domains on turns ACME on; turning them off
+                // leaves it on only for the wildcard.
+                "enabled": if on { true } else { enabled && wildcard },
+                "directory": current["directory"],
+                "provider": current["provider"],
+                "wildcard": wildcard,
+                "custom_domains": on,
+            }),
+        )
+        .await?;
+    if on {
+        println!("Automatic certificates for app domains are on.");
+        println!("Each domain is checked for reachability on port 80, then Angie requests its certificate.");
+        println!("Follow progress with `deku domains list <app>`.");
+    } else {
+        println!(
+            "Automatic certificates for app domains are off. Their domains are served over HTTP."
+        );
+    }
+    Ok(())
 }
 
 /// Report what automatic certificates were asked for and what happened.
@@ -39,6 +76,14 @@ async fn status(client: &DekuClient) -> Result<()> {
     println!(
         "Wildcard:    {}",
         data["wildcard"].as_bool().unwrap_or(false)
+    );
+    println!(
+        "Domains:     {}",
+        if data["custom_domains"].as_bool().unwrap_or(false) {
+            "automatic certificates for app domains (see `deku domains list <app>`)"
+        } else {
+            "off"
+        }
     );
     println!(
         "Provider:    {}",

@@ -28,6 +28,7 @@ fn settings_json(
         "account_email": account_email,
         "provider": cfg.acme.provider,
         "wildcard": cfg.acme.wildcard,
+        "custom_domains": cfg.acme.custom_domains,
         "client_path": cfg.acme.client_path,
         "api_token_file": cfg.acme.api_token_file,
         "token_configured": token_configured,
@@ -67,6 +68,10 @@ pub struct AcmeSettingsBody {
     pub directory: String,
     pub provider: String,
     pub wildcard: bool,
+    /// Request certificates for app domains over HTTP-01. Omitted keeps the
+    /// current setting, so clients that predate it change nothing.
+    #[serde(default)]
+    pub custom_domains: Option<bool>,
     /// A new provider token. Omit or leave empty to keep the stored one.
     #[serde(default)]
     pub api_token: Option<String>,
@@ -111,6 +116,7 @@ pub async fn put_acme(
         api_token_file: cfg.acme.api_token_file.clone(),
         client_path: cfg.acme.client_path.clone(),
         wildcard: body.wildcard,
+        custom_domains: body.custom_domains.unwrap_or(cfg.acme.custom_domains),
     };
 
     // Reject a configuration that cannot work before it is written, so the UI

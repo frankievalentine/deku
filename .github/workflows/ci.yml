@@ -29,8 +29,11 @@ jobs:
       - name: Test
         # Includes the deploy and service migration tests that run real
         # containers against the runner's Docker daemon.
+        # DEKU_ACME_IT adds the certificate test: Deku's rendered config, Angie
+        # built with its ACME module, and Pebble as the certificate authority.
         env:
           DEKU_DOCKER_IT: "1"
+          DEKU_ACME_IT: "1"
         run: cargo test --all
 
   msrv:

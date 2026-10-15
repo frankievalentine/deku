@@ -1,0 +1,4 @@
+upstream deku_{{key}} {
+{{#each upstreams}}    server {{this.host}}:{{this.port}};
+{{/each}}
+}

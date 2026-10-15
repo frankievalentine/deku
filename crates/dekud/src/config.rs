@@ -102,6 +102,11 @@ pub struct AcmeConfig {
     /// covers every environment and per-deployment hostname.
     #[serde(default)]
     pub wildcard: bool,
+    /// Request a certificate for each app domain over HTTP-01, so a domain
+    /// pointed at this host is served over HTTPS without an installed
+    /// certificate. Needs no DNS provider token.
+    #[serde(default)]
+    pub custom_domains: bool,
 }
 
 impl Default for AcmeConfig {
@@ -114,6 +119,7 @@ impl Default for AcmeConfig {
             api_token_file: None,
             client_path: default_acme_client_path(),
             wildcard: false,
+            custom_domains: false,
         }
     }
 }
@@ -128,15 +134,21 @@ impl AcmeConfig {
             return Ok(());
         }
 
+        if !self.directory.starts_with("https://") {
+            anyhow::bail!("ACME directory '{}' must be an https URL", self.directory);
+        }
+
+        // The DNS provider answers only the wildcard's DNS-01 challenge. Custom
+        // domains are validated over HTTP-01, which needs neither.
+        if !self.wildcard {
+            return Ok(());
+        }
+
         if self.provider != "cloudflare" {
             anyhow::bail!(
                 "unknown ACME DNS provider '{}'; supported providers: cloudflare",
                 self.provider
             );
-        }
-
-        if !self.directory.starts_with("https://") {
-            anyhow::bail!("ACME directory '{}' must be an https URL", self.directory);
         }
 
         if self.api_token.is_none() && self.api_token_file.is_none() {
@@ -992,6 +1004,7 @@ mod tests {
             enabled: true,
             provider: "route53".to_string(),
             api_token: Some("token".to_string()),
+            wildcard: true,
             ..AcmeConfig::default()
         };
         let error = cfg
@@ -1008,6 +1021,7 @@ mod tests {
     fn acme_requires_a_token_and_an_https_directory() {
         let no_token = AcmeConfig {
             enabled: true,
+            wildcard: true,
             ..AcmeConfig::default()
         };
         assert!(no_token
@@ -1027,6 +1041,18 @@ mod tests {
             .expect_err("plain http")
             .to_string()
             .contains("https"));
+    }
+
+    #[test]
+    fn custom_domain_certificates_need_no_dns_token() {
+        // HTTP-01 is answered by Angie itself, so no provider is involved.
+        let cfg = AcmeConfig {
+            enabled: true,
+            custom_domains: true,
+            ..AcmeConfig::default()
+        };
+        cfg.validate(None)
+            .expect("valid without a token or a global domain");
     }
 
     #[test]

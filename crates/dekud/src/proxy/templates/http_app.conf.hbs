@@ -1,14 +1,16 @@
-upstream deku_{{key}} {
-{{#each upstreams}}    server {{this.host}}:{{this.port}};
-{{/each}}
-}
-
 server {
     listen 80;
     server_name{{#each domains}} {{this}}{{/each}};
-
+{{#if acme_client}}    acme {{acme_client}};
+{{/if}}
     access_log /var/log/angie/deku_{{key}}_access.log;
     error_log  /var/log/angie/deku_{{key}}_error.log;
+
+    # Answers the daemon's reachability check before a certificate is requested.
+    location = {{check_path}} {
+        default_type text/plain;
+        return 200 "{{host_id}}";
+    }
 
 {{#if maintenance}}    location / {
         return 503{{#if maintenance_message}} "{{maintenance_message}}"{{/if}};

@@ -124,7 +124,9 @@ pub async fn run(args: LetsencryptArgs, client: &DekuClient) -> Result<()> {
                     serde_json::json!({}),
                 )
                 .await?;
-            println!("TLS enabled for '{app}'.");
+            println!("TLS enabled for '{app}' with the certificate installed at /etc/angie/ssl/deku_{app}.crt.");
+            println!("Note: `deku letsencrypt` is deprecated. Use `deku domains tls {app} <domain> manual`,");
+            println!("or `auto` to have Angie request and renew certificates for you.");
         }
         LetsencryptCommands::Disable { app } => {
             client
@@ -133,7 +135,8 @@ pub async fn run(args: LetsencryptArgs, client: &DekuClient) -> Result<()> {
                     serde_json::json!({}),
                 )
                 .await?;
-            println!("TLS disabled for '{app}'.");
+            println!("TLS disabled for '{app}'. Its domains are back in auto mode.");
+            println!("Note: `deku letsencrypt` is deprecated. Use `deku domains tls {app} <domain> off`.");
         }
         LetsencryptCommands::Status { app, json } => {
             let status = client

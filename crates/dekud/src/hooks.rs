@@ -31,6 +31,8 @@ pub enum HookEvent {
     AppDestroyed,
     AlertFired,
     AlertResolved,
+    CertificateIssued,
+    CertificateFailed,
 }
 
 impl HookEvent {
@@ -46,6 +48,8 @@ impl HookEvent {
             Self::AppDestroyed => "app.destroyed",
             Self::AlertFired => "alert.fired",
             Self::AlertResolved => "alert.resolved",
+            Self::CertificateIssued => "certificate.issued",
+            Self::CertificateFailed => "certificate.failed",
         }
     }
 

@@ -8,9 +8,12 @@ use deku_core::types::Upstream;
 
 static HTTP_TEMPLATE: &str = include_str!("templates/http_app.conf.hbs");
 static HTTPS_TEMPLATE: &str = include_str!("templates/https_app.conf.hbs");
+static UPSTREAM_TEMPLATE: &str = include_str!("templates/upstream.conf.hbs");
 
 fn registry() -> Result<Handlebars<'static>> {
     let mut hbs = Handlebars::new();
+    hbs.register_template_string("upstream", UPSTREAM_TEMPLATE)
+        .context("failed to register upstream template")?;
     hbs.register_template_string("http_app", HTTP_TEMPLATE)
         .context("failed to register http_app template")?;
     hbs.register_template_string("https_app", HTTPS_TEMPLATE)
@@ -72,6 +75,10 @@ pub enum CertSource {
 /// `key` is unique within the file: it names the upstream block and the log
 /// files. Production uses the app name, so its rendering is unchanged from when
 /// an app had a single vhost; each environment uses `<app>-<slug>`.
+///
+/// Several vhosts may share a key: an environment's domains are split by where
+/// their certificates come from, and they all proxy to one upstream, which is
+/// rendered once.
 #[derive(Debug, Clone)]
 pub struct VhostConfig {
     pub key: String,
@@ -79,6 +86,40 @@ pub struct VhostConfig {
     pub upstreams: Vec<Upstream>,
     /// `None` serves the vhost over HTTP alone.
     pub cert: Option<CertSource>,
+    /// The ACME client whose certificate covers these domains. Angie puts every
+    /// name of every server block that references a client into its
+    /// certificate, so a vhost that references one holds that client's domain
+    /// and nothing else.
+    pub acme_client: Option<String>,
+}
+
+/// An ACME client declared in an app's config file, for one of its domains.
+///
+/// Declared beside the vhosts that reference it, so removing the app removes
+/// the client with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcmeClient {
+    pub name: String,
+    pub directory: String,
+    /// Shared by every client, so they register a single ACME account.
+    pub account_key: PathBuf,
+    /// Off stops Angie requesting a certificate for a domain that keeps
+    /// failing, while the vhost that references the client stays valid.
+    pub enabled: bool,
+}
+
+impl AcmeClient {
+    fn render(&self) -> Result<String> {
+        let directory = crate::acme::file::directive_value(&self.directory, "the ACME directory")?;
+        let key_shown = self.account_key.display().to_string();
+        let account_key = crate::acme::file::directive_value(&key_shown, "the ACME account key")?;
+        Ok(format!(
+            "acme_client {name} {directory} challenge=http account_key={account_key} retry_after_error={retry}{enabled};\n",
+            name = self.name,
+            retry = crate::acme::domains::ANGIE_RETRY_AFTER_ERROR,
+            enabled = if self.enabled { "" } else { " enabled=off" },
+        ))
+    }
 }
 
 /// Directives shared by every vhost of an app.
@@ -107,6 +148,7 @@ pub struct AppVhostPolicy<'a> {
 pub fn write_app_config(
     conf_dir: &Path,
     app_name: &str,
+    clients: &[AcmeClient],
     vhosts: &[VhostConfig],
     policy: &AppVhostPolicy<'_>,
 ) -> Result<()> {
@@ -150,6 +192,15 @@ pub fn write_app_config(
         .collect();
 
     let mut rendered = String::new();
+    if !clients.is_empty() {
+        rendered
+            .push_str("# Certificates for this app's domains, requested and renewed by Angie.\n");
+        for client in clients {
+            rendered.push_str(&client.render()?);
+        }
+    }
+
+    let mut upstreams_written = std::collections::HashSet::new();
     for vhost in vhosts {
         let (template, cert_file, cert_key_file) = match &vhost.cert {
             Some(CertSource::File { cert, key }) => (
@@ -171,10 +222,25 @@ pub fn write_app_config(
             .map(|u| json!({ "host": u.host, "port": u.port }))
             .collect();
 
+        if upstreams_written.insert(vhost.key.clone()) {
+            if !rendered.is_empty() {
+                rendered.push('\n');
+            }
+            let block = hbs
+                .render(
+                    "upstream",
+                    &json!({ "key": vhost.key, "upstreams": upstream_data }),
+                )
+                .with_context(|| format!("rendering the upstream for {}", vhost.key))?;
+            rendered.push_str(&block);
+        }
+
         let data = json!({
             "key": vhost.key,
             "domains": vhost.domains,
-            "upstreams": upstream_data,
+            "acme_client": vhost.acme_client,
+            "check_path": crate::acme::reachability::CHECK_PATH,
+            "host_id": crate::acme::reachability::host_id(),
             "cert_file": cert_file,
             "cert_key_file": cert_key_file,
             "auth_basic": auth_basic,
@@ -245,8 +311,8 @@ pub fn remove_app_config(conf_dir: &Path, app_name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        app_config_path, read_app_config, remove_app_config, write_app_config, AppVhostPolicy,
-        CertSource, VhostConfig,
+        app_config_path, read_app_config, remove_app_config, write_app_config, AcmeClient,
+        AppVhostPolicy, CertSource, VhostConfig,
     };
     use deku_core::types::Upstream;
 
@@ -256,6 +322,7 @@ mod tests {
             domains: domains.to_vec(),
             upstreams: upstreams.to_vec(),
             cert: None,
+            acme_client: None,
         }
     }
 
@@ -314,6 +381,7 @@ mod tests {
         write_app_config(
             conf_dir,
             "demo",
+            &[],
             &[demo_vhost(&domains, &upstreams)],
             &policy(&[], false, None),
         )
@@ -352,6 +420,7 @@ mod tests {
                 cert: PathBuf::from("/etc/angie/ssl/deku_demo.crt"),
                 key: PathBuf::from("/etc/angie/ssl/deku_demo.key"),
             }),
+            acme_client: None,
         };
         let derived = VhostConfig {
             key: "demo-staging".to_string(),
@@ -360,10 +429,17 @@ mod tests {
             cert: Some(CertSource::Acme {
                 client: "deku_wildcard".to_string(),
             }),
+            acme_client: None,
         };
 
-        write_app_config(conf_dir, "demo", &[own, derived], &policy(&[], false, None))
-            .expect("config should write");
+        write_app_config(
+            conf_dir,
+            "demo",
+            &[],
+            &[own, derived],
+            &policy(&[], false, None),
+        )
+        .expect("config should write");
         let rendered = read_rendered(conf_dir);
 
         assert!(
@@ -389,6 +465,69 @@ mod tests {
     }
 
     #[test]
+    fn per_domain_clients_are_declared_and_referenced_with_one_upstream() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let conf_dir = temp.path();
+        let issued = VhostConfig {
+            key: "demo".to_string(),
+            domains: vec![String::from("shop.example.com")],
+            upstreams: upstreams(),
+            cert: Some(CertSource::Acme {
+                client: "deku_d_aaaa".to_string(),
+            }),
+            acme_client: Some("deku_d_aaaa".to_string()),
+        };
+        let issuing = VhostConfig {
+            key: "demo".to_string(),
+            domains: vec![String::from("www.shop.example.com")],
+            upstreams: upstreams(),
+            cert: None,
+            acme_client: Some("deku_d_bbbb".to_string()),
+        };
+        let clients = [
+            AcmeClient {
+                name: "deku_d_aaaa".to_string(),
+                directory: "https://acme.test/directory".to_string(),
+                account_key: PathBuf::from("/var/lib/angie/acme/deku-account.key"),
+                enabled: true,
+            },
+            AcmeClient {
+                name: "deku_d_bbbb".to_string(),
+                directory: "https://acme.test/directory".to_string(),
+                account_key: PathBuf::from("/var/lib/angie/acme/deku-account.key"),
+                enabled: false,
+            },
+        ];
+
+        write_app_config(
+            conf_dir,
+            "demo",
+            &clients,
+            &[issued, issuing],
+            &policy(&[], false, None),
+        )
+        .expect("config should write");
+        let rendered = read_rendered(conf_dir);
+
+        assert!(rendered.contains(
+            "acme_client deku_d_aaaa https://acme.test/directory challenge=http account_key=/var/lib/angie/acme/deku-account.key retry_after_error=15m;"
+        ), "{rendered}");
+        assert!(rendered.contains("acme_client deku_d_bbbb https://acme.test/directory challenge=http account_key=/var/lib/angie/acme/deku-account.key retry_after_error=15m enabled=off;"), "{rendered}");
+        assert_eq!(
+            rendered.matches("upstream deku_demo {").count(),
+            1,
+            "one upstream per key: {rendered}"
+        );
+        assert_eq!(
+            rendered.matches("acme deku_d_aaaa;").count(),
+            2,
+            "both server blocks of the HTTPS vhost reference the client"
+        );
+        assert_eq!(rendered.matches("acme deku_d_bbbb;").count(), 1);
+        assert!(rendered.contains("ssl_certificate     $acme_cert_deku_d_aaaa;"));
+    }
+
+    #[test]
     fn every_vhost_lands_in_one_file_with_its_own_upstream() {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let conf_dir = temp.path();
@@ -400,6 +539,7 @@ mod tests {
                 port: 3000,
             }],
             cert: None,
+            acme_client: None,
         };
         let staging = VhostConfig {
             key: "demo-staging".to_string(),
@@ -409,11 +549,13 @@ mod tests {
                 port: 3100,
             }],
             cert: None,
+            acme_client: None,
         };
 
         write_app_config(
             conf_dir,
             "demo",
+            &[],
             &[production, staging],
             &policy(&[], false, None),
         )
@@ -477,6 +619,7 @@ mod tests {
         write_app_config(
             conf_dir,
             "demo",
+            &[],
             &[demo_vhost(&domains, &upstreams)],
             &policy(&[], true, Some("Back soon")),
         )
@@ -504,6 +647,7 @@ mod tests {
         write_app_config(
             conf_dir,
             "demo",
+            &[],
             &[demo_vhost(&domains, &upstreams)],
             &policy(&redirects, false, None),
         )
@@ -531,6 +675,7 @@ mod tests {
         write_app_config(
             conf_dir,
             "demo",
+            &[],
             &[demo_vhost(&domains, &upstreams)],
             &AppVhostPolicy {
                 auth: Some(&record),
@@ -579,6 +724,7 @@ mod tests {
         write_app_config(
             conf_dir,
             "demo",
+            &[],
             &[demo_vhost(&domains, &upstreams)],
             &AppVhostPolicy {
                 auth: Some(&record),
@@ -612,17 +758,20 @@ mod tests {
             domains: vec![String::from("example.com")],
             upstreams: upstreams(),
             cert: None,
+            acme_client: None,
         };
         let staging = VhostConfig {
             key: "demo-staging".to_string(),
             domains: vec![String::from("demo-staging.example.test")],
             upstreams: upstreams(),
             cert: None,
+            acme_client: None,
         };
 
         write_app_config(
             conf_dir,
             "demo",
+            &[],
             &[production, staging],
             &AppVhostPolicy {
                 auth: Some(&record),

@@ -79,6 +79,167 @@ fn derived_certificate(acme: Option<&crate::config::AcmeConfig>) -> Option<write
     })
 }
 
+/// A set of production domains served the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DomainGroup {
+    domains: Vec<String>,
+    cert: Option<writer::CertSource>,
+    acme_client: Option<String>,
+}
+
+/// Whether the wildcard for `global_domain` covers `domain`: the global domain
+/// itself, or a name exactly one label below it.
+pub(crate) fn covered_by_wildcard(domain: &str, global_domain: &str) -> bool {
+    let domain = domain.trim().to_ascii_lowercase();
+    let global = global_domain.trim().to_ascii_lowercase();
+    domain == global
+        || domain
+            .strip_suffix(&format!(".{global}"))
+            .is_some_and(|label| !label.is_empty() && !label.contains('.'))
+}
+
+/// Split production's domains by where each one's certificate comes from.
+///
+/// - A `manual` domain of an app with HTTPS on is served the installed files,
+///   and so is an `auto` domain of such an app that Angie is not working on.
+/// - An `auto` domain the issued wildcard covers is served the wildcard.
+/// - An `auto` domain Angie is working on gets a vhost of its own that
+///   references its client, and is served that client's certificate once one
+///   has been issued. It has to be alone: Angie certifies every name of every
+///   server block that references a client.
+/// - Everything else is served over HTTP.
+///
+/// With custom domain certificates off and no wildcard, this is one group,
+/// exactly what production rendered before per-domain certificates existed.
+fn plan_production_domains(
+    domains: &[String],
+    tls: &[crate::acme::domains::DomainTls],
+    app_tls: bool,
+    app_name: &str,
+    global_domain: Option<&str>,
+    acme: Option<&crate::config::AcmeConfig>,
+) -> Vec<DomainGroup> {
+    use crate::acme::domains::{client_name, supports_http_challenge, CertState, TlsMode};
+
+    let wildcard_ready = acme.is_some_and(crate::acme::file::wildcard_issued);
+    let custom_domains = acme.is_some_and(|acme| acme.enabled && acme.custom_domains);
+
+    let mut manual = Vec::new();
+    let mut wildcard = Vec::new();
+    let mut plain = Vec::new();
+    let mut own = Vec::new();
+
+    for domain in domains {
+        let (mode, state) = tls
+            .iter()
+            .find(|entry| entry.domain == *domain)
+            .map_or((TlsMode::Auto, CertState::Pending), |entry| {
+                (entry.mode, entry.state)
+            });
+
+        match mode {
+            TlsMode::Manual if app_tls => manual.push(domain.clone()),
+            TlsMode::Manual | TlsMode::Off => plain.push(domain.clone()),
+            TlsMode::Auto => {
+                if wildcard_ready
+                    && global_domain.is_some_and(|global| covered_by_wildcard(domain, global))
+                {
+                    wildcard.push(domain.clone());
+                } else if custom_domains
+                    && supports_http_challenge(domain)
+                    && matches!(
+                        state,
+                        CertState::Issuing | CertState::Active | CertState::Failed
+                    )
+                {
+                    let client = client_name(domain);
+                    let issued = acme.is_some_and(|acme| {
+                        crate::acme::file::certificate_issued(
+                            &acme.client_path.join(&client).join("certificate.pem"),
+                        )
+                    });
+                    own.push(DomainGroup {
+                        domains: vec![domain.clone()],
+                        cert: issued.then(|| writer::CertSource::Acme {
+                            client: client.clone(),
+                        }),
+                        acme_client: Some(client),
+                    });
+                } else if app_tls {
+                    // An app that serves an installed certificate keeps serving
+                    // it until Angie has one of its own for the domain.
+                    manual.push(domain.clone());
+                } else {
+                    plain.push(domain.clone());
+                }
+            }
+        }
+    }
+
+    let mut groups = Vec::new();
+    if !manual.is_empty() {
+        groups.push(DomainGroup {
+            domains: manual,
+            cert: Some(writer::CertSource::File {
+                cert: cert_path(app_name),
+                key: key_path(app_name),
+            }),
+            acme_client: None,
+        });
+    }
+    if !wildcard.is_empty() {
+        groups.push(DomainGroup {
+            domains: wildcard,
+            cert: Some(writer::CertSource::Acme {
+                client: crate::acme::file::WILDCARD_CLIENT.to_string(),
+            }),
+            acme_client: None,
+        });
+    }
+    groups.extend(own);
+    if !plain.is_empty() {
+        groups.push(DomainGroup {
+            domains: plain,
+            cert: None,
+            acme_client: None,
+        });
+    }
+    groups
+}
+
+/// The ACME clients the vhosts reference, declared in the same file.
+///
+/// A domain whose requests keep failing keeps its client, so its vhost stays
+/// valid, but the client is turned off so reloads stop asking the certificate
+/// authority on its behalf.
+fn acme_clients_for(
+    vhosts: &[writer::VhostConfig],
+    tls: &[crate::acme::domains::DomainTls],
+    acme: Option<&crate::config::AcmeConfig>,
+) -> Vec<writer::AcmeClient> {
+    let Some(acme) = acme else {
+        return Vec::new();
+    };
+    vhosts
+        .iter()
+        .filter_map(|vhost| {
+            let name = vhost.acme_client.clone()?;
+            let paused = vhost.domains.first().is_some_and(|domain| {
+                tls.iter().any(|entry| {
+                    entry.domain == *domain
+                        && entry.state == crate::acme::domains::CertState::Failed
+                })
+            });
+            Some(writer::AcmeClient {
+                name,
+                directory: acme.directory.clone(),
+                account_key: crate::acme::domains::account_key_path(acme),
+                enabled: !paused,
+            })
+        })
+        .collect()
+}
+
 /// Whether an app has anything to route.
 ///
 /// An app with no domain of its own is still reachable through the derived
@@ -285,21 +446,28 @@ async fn build_vhosts(
             (upstreams, tls)
         };
 
-        let cert = if environment.is_production {
-            tls_enabled.then(|| writer::CertSource::File {
-                cert: cert_path(app_name),
-                key: key_path(app_name),
-            })
+        if environment.is_production {
+            let tls = crate::db::queries::list_domain_tls(pool, app_id).await?;
+            for group in
+                plan_production_domains(&domains, &tls, tls_enabled, app_name, global_domain, acme)
+            {
+                vhosts.push(writer::VhostConfig {
+                    key: key.clone(),
+                    domains: group.domains,
+                    upstreams: upstreams.clone(),
+                    cert: group.cert,
+                    acme_client: group.acme_client,
+                });
+            }
         } else {
-            derived_cert.clone()
-        };
-
-        vhosts.push(writer::VhostConfig {
-            key,
-            domains,
-            upstreams,
-            cert,
-        });
+            vhosts.push(writer::VhostConfig {
+                key,
+                domains,
+                upstreams,
+                cert: derived_cert.clone(),
+                acme_client: None,
+            });
+        }
 
         // One vhost per retained deployment, so a specific build stays reachable
         // at its own hostname after it stops being the environment's live one.
@@ -332,6 +500,7 @@ async fn build_vhosts(
                         .collect(),
                     key: format!("{app_name}-{}-{deployment_id}", environment.slug),
                     cert: derived_cert.clone(),
+                    acme_client: None,
                 });
             }
         }
@@ -404,6 +573,8 @@ pub async fn apply_app_config(
         Some(config) => build_vhosts(pool, global_domain, acme, app_id, app_name, config).await?,
         None => Vec::new(),
     };
+    let tls = crate::db::queries::list_domain_tls(pool, app_id).await?;
+    let clients = acme_clients_for(&vhosts, &tls, acme);
 
     if vhosts.is_empty() {
         remove_app_config(conf_dir, app_name)?;
@@ -414,6 +585,7 @@ pub async fn apply_app_config(
         write_app_config(
             conf_dir,
             app_name,
+            &clients,
             &vhosts,
             &writer::AppVhostPolicy {
                 auth: config.auth,
@@ -1072,6 +1244,215 @@ mod tests {
             }),
             "an environment hostname serves the wildcard once it is issued"
         );
+    }
+
+    fn tls_entry(
+        domain: &str,
+        mode: crate::acme::domains::TlsMode,
+        state: crate::acme::domains::CertState,
+    ) -> crate::acme::domains::DomainTls {
+        crate::acme::domains::DomainTls {
+            domain_id: format!("id-{domain}"),
+            app_id: "app-1".to_string(),
+            domain: domain.to_string(),
+            mode,
+            state,
+            details: None,
+            failures: 0,
+            expires_at: None,
+            checked_at: None,
+            next_retry_at: None,
+            observed_run: None,
+        }
+    }
+
+    fn issue(acme: &crate::config::AcmeConfig, client: &str) {
+        let dir = acme.client_path.join(client);
+        std::fs::create_dir_all(&dir).expect("client dir");
+        std::fs::write(
+            dir.join("certificate.pem"),
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+        )
+        .expect("certificate");
+    }
+
+    #[test]
+    fn without_certificate_features_production_renders_as_before() {
+        let domains = vec![
+            "shop.example.com".to_string(),
+            "www.shop.example.com".to_string(),
+        ];
+        let groups = super::plan_production_domains(&domains, &[], false, "shop", None, None);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].domains, domains);
+        assert!(groups[0].cert.is_none() && groups[0].acme_client.is_none());
+
+        let groups = super::plan_production_domains(&domains, &[], true, "shop", None, None);
+        assert_eq!(
+            groups.len(),
+            1,
+            "an app with HTTPS on serves every domain its files"
+        );
+        assert!(matches!(
+            groups[0].cert,
+            Some(super::writer::CertSource::File { .. })
+        ));
+    }
+
+    #[test]
+    fn each_domain_is_served_from_where_its_certificate_comes_from() {
+        use crate::acme::domains::{client_name, CertState, TlsMode};
+
+        let certs = tempfile::tempdir().expect("tempdir");
+        let acme = crate::config::AcmeConfig {
+            enabled: true,
+            custom_domains: true,
+            wildcard: true,
+            client_path: certs.path().to_path_buf(),
+            ..crate::config::AcmeConfig::default()
+        };
+        issue(&acme, crate::acme::file::WILDCARD_CLIENT);
+        issue(&acme, &client_name("active.shop.test"));
+
+        let domains: Vec<String> = [
+            "active.shop.test",
+            "issuing.shop.test",
+            "waiting.shop.test",
+            "legacy.shop.test",
+            "docs.example.com",
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+        let tls = vec![
+            tls_entry("active.shop.test", TlsMode::Auto, CertState::Active),
+            tls_entry("issuing.shop.test", TlsMode::Auto, CertState::Issuing),
+            tls_entry("waiting.shop.test", TlsMode::Auto, CertState::Pending),
+            tls_entry("legacy.shop.test", TlsMode::Manual, CertState::Manual),
+            tls_entry("docs.example.com", TlsMode::Auto, CertState::Pending),
+        ];
+
+        let groups = super::plan_production_domains(
+            &domains,
+            &tls,
+            true,
+            "shop",
+            Some("example.com"),
+            Some(&acme),
+        );
+        let group_of = |domain: &str| {
+            groups
+                .iter()
+                .find(|group| group.domains.iter().any(|d| d == domain))
+                .unwrap_or_else(|| panic!("{domain} is not served"))
+                .clone()
+        };
+
+        let active = group_of("active.shop.test");
+        assert_eq!(
+            active.domains.len(),
+            1,
+            "a domain with its own client is alone in its vhost"
+        );
+        assert_eq!(
+            active.cert,
+            Some(super::writer::CertSource::Acme {
+                client: client_name("active.shop.test")
+            })
+        );
+
+        let issuing = group_of("issuing.shop.test");
+        assert_eq!(issuing.acme_client, Some(client_name("issuing.shop.test")));
+        assert!(
+            issuing.cert.is_none(),
+            "nothing issued yet, so it stays on HTTP"
+        );
+
+        assert!(
+            matches!(
+                group_of("legacy.shop.test").cert,
+                Some(super::writer::CertSource::File { .. })
+            ),
+            "an installed certificate keeps being served"
+        );
+        assert!(
+            matches!(
+                group_of("waiting.shop.test").cert,
+                Some(super::writer::CertSource::File { .. })
+            ),
+            "an app with HTTPS on keeps its files for a domain Angie is not working on"
+        );
+        assert_eq!(
+            group_of("docs.example.com").cert,
+            Some(super::writer::CertSource::Acme {
+                client: crate::acme::file::WILDCARD_CLIENT.to_string()
+            }),
+            "a name the wildcard covers uses it instead of requesting another"
+        );
+    }
+
+    #[test]
+    fn a_domain_that_keeps_failing_keeps_its_client_but_turns_it_off() {
+        use crate::acme::domains::{client_name, CertState, TlsMode};
+
+        let certs = tempfile::tempdir().expect("tempdir");
+        let acme = crate::config::AcmeConfig {
+            enabled: true,
+            custom_domains: true,
+            client_path: certs.path().to_path_buf(),
+            ..crate::config::AcmeConfig::default()
+        };
+        let domains = vec!["broken.shop.test".to_string(), "fine.shop.test".to_string()];
+        let tls = vec![
+            tls_entry("broken.shop.test", TlsMode::Auto, CertState::Failed),
+            tls_entry("fine.shop.test", TlsMode::Auto, CertState::Issuing),
+        ];
+        let groups =
+            super::plan_production_domains(&domains, &tls, false, "shop", None, Some(&acme));
+        let vhosts: Vec<_> = groups
+            .into_iter()
+            .map(|group| super::writer::VhostConfig {
+                key: "shop".to_string(),
+                domains: group.domains,
+                upstreams: Vec::new(),
+                cert: group.cert,
+                acme_client: group.acme_client,
+            })
+            .collect();
+
+        let clients = super::acme_clients_for(&vhosts, &tls, Some(&acme));
+        let broken = clients
+            .iter()
+            .find(|client| client.name == client_name("broken.shop.test"))
+            .expect("the failing domain keeps its client, so its vhost stays valid");
+        assert!(!broken.enabled, "but reloads must stop requesting for it");
+        assert!(
+            clients
+                .iter()
+                .find(|client| client.name == client_name("fine.shop.test"))
+                .expect("client")
+                .enabled
+        );
+        assert!(
+            clients
+                .iter()
+                .all(|client| client.account_key == crate::acme::domains::account_key_path(&acme)),
+            "every client shares one account"
+        );
+    }
+
+    #[test]
+    fn the_wildcard_covers_its_domain_and_one_label_below() {
+        assert!(super::covered_by_wildcard("example.com", "example.com"));
+        assert!(super::covered_by_wildcard(
+            "shop.example.com",
+            "example.com"
+        ));
+        assert!(!super::covered_by_wildcard(
+            "www.shop.example.com",
+            "example.com"
+        ));
+        assert!(!super::covered_by_wildcard("badexample.com", "example.com"));
     }
 
     fn write_executable(path: &std::path::Path, body: &str) {

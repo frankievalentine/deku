@@ -172,12 +172,16 @@ pub fn run(args: SetupArgs) -> Result<()> {
     };
 
     let existing = load_optional()?;
+    let fresh_install = existing.is_none();
     let existing_dashboard_auth = existing
         .as_ref()
         .and_then(|config| config.dashboard_auth.clone());
     // Settings setup does not ask about (hooks, encryption, ACME) survive a rerun.
     let mut existing_extra = existing.map(|config| config.extra).unwrap_or_default();
     ensure_encryption_key(&config_dir, &mut existing_extra)?;
+    if fresh_install {
+        enable_custom_domain_certificates(&mut existing_extra);
+    }
     let (dashboard_token, dashboard_auth) =
         issue_dashboard_token(Utc::now(), existing_dashboard_auth.as_ref())?;
 
@@ -249,6 +253,22 @@ pub fn run(args: SetupArgs) -> Result<()> {
 /// the state directory on a system install, so a backup of the database alone
 /// does not carry the key that opens it. An existing `[encryption]` section or
 /// a `DEKU_ENCRYPTION_KEY` in the environment is left alone.
+/// Turn on automatic certificates for app domains in a new install's config.
+///
+/// Only a new install: an existing host serves its domains the way it already
+/// does until the operator opts in, because turning this on changes what
+/// answers on port 80 for those domains.
+fn enable_custom_domain_certificates(extra: &mut toml::Table) {
+    let acme = extra
+        .entry("acme")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let toml::Value::Table(acme) = acme {
+        acme.entry("enabled").or_insert(toml::Value::Boolean(true));
+        acme.entry("custom_domains")
+            .or_insert(toml::Value::Boolean(true));
+    }
+}
+
 fn ensure_encryption_key(config_dir: &std::path::Path, extra: &mut toml::Table) -> Result<()> {
     if extra.contains_key("encryption") || std::env::var_os("DEKU_ENCRYPTION_KEY").is_some() {
         return Ok(());
@@ -308,7 +328,21 @@ fn install_systemd_unit() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_encryption_key;
+    use super::{enable_custom_domain_certificates, ensure_encryption_key};
+
+    #[test]
+    fn a_new_install_requests_certificates_for_app_domains() {
+        let mut extra = toml::Table::new();
+        enable_custom_domain_certificates(&mut extra);
+        assert_eq!(extra["acme"]["enabled"].as_bool(), Some(true));
+        assert_eq!(extra["acme"]["custom_domains"].as_bool(), Some(true));
+
+        // Anything already chosen is kept.
+        let mut chosen: toml::Table =
+            toml::from_str("[acme]\ncustom_domains = false\n").expect("toml");
+        enable_custom_domain_certificates(&mut chosen);
+        assert_eq!(chosen["acme"]["custom_domains"].as_bool(), Some(false));
+    }
 
     #[test]
     fn a_new_install_gets_an_owner_only_key_file() {

@@ -200,6 +200,7 @@ pub async fn delete_app(pool: &SqlitePool, name: &str) -> Result<()> {
         "DELETE FROM events WHERE app_id = ?",
         "DELETE FROM containers WHERE app_id = ?",
         "DELETE FROM deployments WHERE app_id = ?",
+        "DELETE FROM domain_tls WHERE domain_id IN (SELECT id FROM domains WHERE app_id = ?)",
         "DELETE FROM domains WHERE app_id = ?",
         "DELETE FROM config_vars WHERE app_id = ?",
         "DELETE FROM port_mappings WHERE app_id = ?",
@@ -741,6 +742,19 @@ pub async fn add_domain(pool: &SqlitePool, app_id: &str, domain: &str) -> Result
     )
     .execute(pool)
     .await?;
+
+    // A domain added to an app that already serves an installed certificate is
+    // served with it too, as before; every other domain starts in `auto`.
+    let tls_enabled: bool = sqlx::query_scalar("SELECT tls_enabled FROM apps WHERE id = ?1")
+        .bind(app_id)
+        .fetch_one(pool)
+        .await?;
+    let mode = if tls_enabled {
+        crate::acme::domains::TlsMode::Manual
+    } else {
+        crate::acme::domains::TlsMode::Auto
+    };
+    set_domain_tls_mode(pool, &row.id, mode).await?;
     Ok(row)
 }
 
@@ -764,6 +778,132 @@ pub async fn remove_domain(pool: &SqlitePool, app_id: &str, domain: &str) -> Res
 pub async fn list_domain_names(pool: &SqlitePool, app_id: &str) -> Result<Vec<String>> {
     let rows = list_domains(pool, app_id).await?;
     Ok(rows.into_iter().map(|d| d.domain).collect())
+}
+
+// ── Domain certificates ───────────────────────────────────────────────────────
+
+/// The columns both domain certificate listings read. A missing `domain_tls`
+/// row reads as the defaults, so a domain is never left out.
+macro_rules! domain_tls_select {
+    ($tail:literal) => {
+        concat!(
+            "SELECT d.id AS domain_id, d.app_id AS app_id, d.domain AS domain,
+                COALESCE(t.mode, 'auto') AS mode, COALESCE(t.state, 'pending') AS state,
+                t.details AS details, COALESCE(t.failures, 0) AS failures,
+                t.expires_at AS expires_at, t.checked_at AS checked_at,
+                t.next_retry_at AS next_retry_at, t.observed_run AS observed_run
+             FROM domains d LEFT JOIN domain_tls t ON t.domain_id = d.id ",
+            $tail
+        )
+    };
+}
+
+fn domain_tls_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<crate::acme::domains::DomainTls> {
+    use crate::acme::domains::{CertState, DomainTls, TlsMode};
+    use sqlx::Row;
+
+    let mode: String = row.try_get("mode")?;
+    let state: String = row.try_get("state")?;
+    let failures: i64 = row.try_get("failures")?;
+    Ok(DomainTls {
+        domain_id: row.try_get("domain_id")?,
+        app_id: row.try_get("app_id")?,
+        domain: row.try_get("domain")?,
+        mode: TlsMode::parse(&mode)
+            .ok_or_else(|| DekuError::Internal(format!("unknown domain TLS mode '{mode}'")))?,
+        state: CertState::parse(&state)
+            .ok_or_else(|| DekuError::Internal(format!("unknown domain TLS state '{state}'")))?,
+        details: row.try_get("details")?,
+        failures: u32::try_from(failures).unwrap_or(0),
+        expires_at: row.try_get("expires_at")?,
+        checked_at: row.try_get("checked_at")?,
+        next_retry_at: row.try_get("next_retry_at")?,
+        observed_run: row.try_get("observed_run")?,
+    })
+}
+
+/// Every domain of an app with its certificate state.
+pub async fn list_domain_tls(
+    pool: &SqlitePool,
+    app_id: &str,
+) -> Result<Vec<crate::acme::domains::DomainTls>> {
+    sqlx::query(domain_tls_select!("WHERE d.app_id = ?1 ORDER BY d.domain"))
+        .bind(app_id)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(domain_tls_from_row)
+        .collect()
+}
+
+/// Every domain of every app with its certificate state.
+pub async fn list_all_domain_tls(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::acme::domains::DomainTls>> {
+    sqlx::query(domain_tls_select!("ORDER BY d.domain"))
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(domain_tls_from_row)
+        .collect()
+}
+
+/// Put a domain into `mode`, starting it over from that mode's first state.
+pub async fn set_domain_tls_mode(
+    pool: &SqlitePool,
+    domain_id: &str,
+    mode: crate::acme::domains::TlsMode,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO domain_tls (domain_id, mode, state, details, failures, next_retry_at, updated_at)
+         VALUES (?1, ?2, ?3, NULL, 0, NULL, ?4)
+         ON CONFLICT(domain_id) DO UPDATE SET
+            mode = excluded.mode, state = excluded.state, details = NULL, failures = 0,
+            next_retry_at = NULL, observed_run = NULL, updated_at = excluded.updated_at",
+    )
+    .bind(domain_id)
+    .bind(mode.as_str())
+    .bind(mode.initial_state().as_str())
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Record where an `auto` domain is in getting its certificate.
+pub async fn update_domain_tls_state(
+    pool: &SqlitePool,
+    domain_id: &str,
+    update: &DomainTlsUpdate<'_>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE domain_tls SET state = ?2, details = ?3, failures = ?4, expires_at = ?5,
+            checked_at = ?6, next_retry_at = ?7, observed_run = ?8, updated_at = ?9
+         WHERE domain_id = ?1",
+    )
+    .bind(domain_id)
+    .bind(update.state.as_str())
+    .bind(update.details)
+    .bind(i64::from(update.failures))
+    .bind(update.expires_at)
+    .bind(update.checked_at)
+    .bind(update.next_retry_at)
+    .bind(update.observed_run)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The state a domain moves to, as written by [`update_domain_tls_state`].
+pub struct DomainTlsUpdate<'a> {
+    pub state: crate::acme::domains::CertState,
+    pub details: Option<&'a str>,
+    pub failures: u32,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub checked_at: Option<DateTime<Utc>>,
+    pub next_retry_at: Option<DateTime<Utc>>,
+    pub observed_run: Option<&'a str>,
 }
 
 /// Every domain any app has claimed.
@@ -3447,4 +3587,177 @@ pub async fn remove_redirect(pool: &SqlitePool, app_id: &str, id: &str) -> Resul
         return Err(DekuError::Internal(format!("redirect '{id}' not found")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod domain_tls_tests {
+    use super::{
+        add_domain, delete_app, list_all_domain_tls, list_domain_tls, remove_domain,
+        set_domain_tls_mode, update_domain_tls_state, DomainTlsUpdate,
+    };
+    use crate::acme::domains::{CertState, TlsMode};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::SqlitePool;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        crate::db::migrate(&pool).await.expect("migrate");
+        pool
+    }
+
+    async fn insert_app(pool: &SqlitePool, id: &str, name: &str, tls: bool) {
+        sqlx::query(
+            "INSERT INTO apps (id, name, created_at, locked, status, tls_enabled)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP, 0, 'deployed', ?3)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(tls)
+        .execute(pool)
+        .await
+        .expect("insert app");
+    }
+
+    #[tokio::test]
+    async fn a_new_domain_follows_how_its_app_serves_https_today() {
+        let pool = test_pool().await;
+        insert_app(&pool, "a1", "shop", false).await;
+        insert_app(&pool, "a2", "billing", true).await;
+        add_domain(&pool, "a1", "shop.example.com")
+            .await
+            .expect("add");
+        add_domain(&pool, "a2", "billing.example.com")
+            .await
+            .expect("add");
+
+        let shop = list_domain_tls(&pool, "a1").await.expect("list");
+        assert_eq!(
+            (shop[0].mode, shop[0].state),
+            (TlsMode::Auto, CertState::Pending)
+        );
+
+        // An app serving an installed certificate keeps serving it for the
+        // domains it gains.
+        let billing = list_domain_tls(&pool, "a2").await.expect("list");
+        assert_eq!(
+            (billing[0].mode, billing[0].state),
+            (TlsMode::Manual, CertState::Manual)
+        );
+    }
+
+    #[tokio::test]
+    async fn states_are_recorded_and_a_mode_change_starts_over() {
+        let pool = test_pool().await;
+        insert_app(&pool, "a1", "shop", false).await;
+        let domain = add_domain(&pool, "a1", "shop.example.com")
+            .await
+            .expect("add");
+
+        update_domain_tls_state(
+            &pool,
+            &domain.id,
+            &DomainTlsUpdate {
+                state: CertState::Failed,
+                details: Some("connection refused on port 80"),
+                failures: 2,
+                expires_at: None,
+                checked_at: Some(chrono::Utc::now()),
+                next_retry_at: Some(chrono::Utc::now()),
+                observed_run: None,
+            },
+        )
+        .await
+        .expect("update");
+        let failed = &list_all_domain_tls(&pool).await.expect("list")[0];
+        assert_eq!(failed.state, CertState::Failed);
+        assert_eq!(failed.failures, 2);
+        assert_eq!(
+            failed.details.as_deref(),
+            Some("connection refused on port 80")
+        );
+
+        set_domain_tls_mode(&pool, &domain.id, TlsMode::Auto)
+            .await
+            .expect("mode");
+        let retried = &list_all_domain_tls(&pool).await.expect("list")[0];
+        assert_eq!(
+            retried.state,
+            CertState::Pending,
+            "a mode change starts over"
+        );
+        assert_eq!(retried.failures, 0);
+        assert!(retried.details.is_none() && retried.next_retry_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn removing_a_domain_or_its_app_removes_its_certificate_state() {
+        let pool = test_pool().await;
+        insert_app(&pool, "a1", "shop", false).await;
+        add_domain(&pool, "a1", "shop.example.com")
+            .await
+            .expect("add");
+        add_domain(&pool, "a1", "www.shop.example.com")
+            .await
+            .expect("add");
+
+        remove_domain(&pool, "a1", "shop.example.com")
+            .await
+            .expect("remove");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM domain_tls")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, 1);
+
+        delete_app(&pool, "shop").await.expect("delete app");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM domain_tls")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn the_migration_keeps_installed_certificates_and_waits_on_the_rest() {
+        let pool = test_pool().await;
+        insert_app(&pool, "a1", "shop", false).await;
+        insert_app(&pool, "a2", "billing", true).await;
+        // Domains as they existed before the migration: no certificate state.
+        for (id, app, domain) in [
+            ("d1", "a1", "shop.example.com"),
+            ("d2", "a2", "billing.example.com"),
+        ] {
+            sqlx::query("INSERT INTO domains (id, app_id, domain) VALUES (?1, ?2, ?3)")
+                .bind(id)
+                .bind(app)
+                .bind(domain)
+                .execute(&pool)
+                .await
+                .expect("insert domain");
+        }
+
+        sqlx::raw_sql(include_str!("../../migrations/0015_domain_tls.sql"))
+            .execute(&pool)
+            .await
+            .expect("the migration is safe to run again");
+
+        let all = list_all_domain_tls(&pool).await.expect("list");
+        let billing = all
+            .iter()
+            .find(|d| d.domain == "billing.example.com")
+            .expect("billing");
+        let shop = all
+            .iter()
+            .find(|d| d.domain == "shop.example.com")
+            .expect("shop");
+        assert_eq!(
+            (billing.mode, billing.state),
+            (TlsMode::Manual, CertState::Manual)
+        );
+        assert_eq!((shop.mode, shop.state), (TlsMode::Auto, CertState::Pending));
+    }
 }

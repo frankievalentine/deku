@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+use crate::acme::domains::TlsMode;
 use crate::config::DekuConfig;
 use crate::db::queries;
 use deku_core::types::Upstream;
@@ -15,6 +16,9 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
     let environment = queries::ensure_production_environment(pool, &app.id).await?;
     let upstream_ports = queries::list_web_upstream_ports(pool, &app.id, &environment.id).await?;
     ensure_tls_enable_ready(app_name, &domains, &upstream_ports)?;
+    // An installed certificate is a choice for the app's domains: they are
+    // served with it rather than with certificates Angie would request.
+    set_modes(pool, &app.id, TlsMode::Auto, TlsMode::Manual).await?;
     let upstreams: Vec<Upstream> = upstream_ports
         .iter()
         .map(|port| Upstream {
@@ -48,6 +52,9 @@ pub async fn enable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Resu
 
 pub async fn disable(pool: &SqlitePool, cfg: &DekuConfig, app_name: &str) -> Result<()> {
     let app = queries::get_app(pool, app_name).await?;
+    // Without the installed certificate, the domains go back to `auto`, where
+    // Angie requests one once custom domain certificates are on.
+    set_modes(pool, &app.id, TlsMode::Manual, TlsMode::Auto).await?;
     let domains = queries::list_domain_names(pool, &app.id).await?;
     let environment = queries::ensure_production_environment(pool, &app.id).await?;
     let upstream_ports = queries::list_web_upstream_ports(pool, &app.id, &environment.id).await?;
@@ -103,6 +110,16 @@ pub async fn get_global_email(cfg: &DekuConfig) -> Result<Option<String>> {
     } else {
         Ok(Some(trimmed.to_string()))
     }
+}
+
+/// Move every domain of an app in mode `from` to mode `to`.
+async fn set_modes(pool: &SqlitePool, app_id: &str, from: TlsMode, to: TlsMode) -> Result<()> {
+    for entry in queries::list_domain_tls(pool, app_id).await? {
+        if entry.mode == from {
+            queries::set_domain_tls_mode(pool, &entry.domain_id, to).await?;
+        }
+    }
+    Ok(())
 }
 
 /// The `notAfter` of a certificate file, when it can be read.
@@ -161,7 +178,7 @@ pub fn classify_expiry(
 }
 
 /// Parse the `notAfter=Sep 17 12:00:00 2026 GMT` format openssl prints.
-fn parse_openssl_timestamp(raw: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_openssl_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     let trimmed = raw.trim();
     let without_zone = trimmed
         .strip_suffix(" GMT")

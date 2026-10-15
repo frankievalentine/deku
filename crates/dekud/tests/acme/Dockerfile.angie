@@ -1,0 +1,18 @@
+# Angie with the ACME module, built from the published source, for the
+# certificate integration test (crates/dekud/src/acme/it.rs).
+
+FROM debian:bookworm-slim AS build
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential git ca-certificates libpcre2-dev zlib1g-dev libssl-dev >/dev/null
+RUN git clone --depth 1 --branch Angie-1.12.3 https://github.com/webserver-llc/angie.git /src
+WORKDIR /src
+RUN ./configure --prefix=/etc/angie --sbin-path=/usr/sbin/angie --conf-path=/etc/angie/angie.conf \
+      --pid-path=/run/angie.pid --error-log-path=/var/log/angie/error.log --http-log-path=/var/log/angie/access.log \
+      --with-http_ssl_module --with-http_v2_module --with-http_acme_module --with-http_auth_request_module >/dev/null \
+ && make -j"$(nproc)" >/dev/null && make install >/dev/null
+
+FROM debian:bookworm-slim
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libpcre2-8-0 zlib1g libssl3 ca-certificates curl >/dev/null && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/sbin/angie /usr/sbin/angie
+COPY --from=build /etc/angie /etc/angie
+RUN mkdir -p /var/log/angie /var/lib/angie/acme
+CMD ["angie", "-g", "daemon off;"]

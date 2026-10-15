@@ -1,19 +1,16 @@
-upstream deku_{{key}} {
-{{#each upstreams}}    server {{this.host}}:{{this.port}};
-{{/each}}
-}
-
 server {
     listen 80;
     server_name{{#each domains}} {{this}}{{/each}};
-    return 301 https://$host$request_uri;
+{{#if acme_client}}    acme {{acme_client}};
+{{/if}}    return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
     http2  on;
     server_name{{#each domains}} {{this}}{{/each}};
-
+{{#if acme_client}}    acme {{acme_client}};
+{{/if}}
     ssl_certificate     {{cert_file}};
     ssl_certificate_key {{cert_key_file}};
 

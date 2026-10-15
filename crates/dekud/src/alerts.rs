@@ -29,6 +29,8 @@ pub const RULE_CERTIFICATE_MISSING: &str = "certificate_missing";
 pub const RULE_CERTIFICATE_EXPIRED: &str = "certificate_expired";
 /// Certificate is inside the renewal window.
 pub const RULE_CERTIFICATE_EXPIRING: &str = "certificate_expiring";
+/// Requests for a domain's certificate keep failing, so Deku has paused them.
+pub const RULE_CERTIFICATE_FAILED: &str = "certificate_failed";
 /// The app has been deployed but no web container is running.
 pub const RULE_APP_NO_RUNNING_CONTAINERS: &str = "app_no_running_containers";
 /// The most recent scheduled backup failed.
@@ -100,6 +102,75 @@ pub async fn run_once(state: &SharedState) -> Result<()> {
     reconcile(state, drafts).await
 }
 
+/// Alerts for domains whose certificates Angie requests.
+///
+/// Angie renews 30 days before expiry, so an automatic certificate inside the
+/// 14-day warning window means renewal has been failing for two weeks; before
+/// that, nothing needs a person.
+fn domain_certificate_drafts(
+    domains: &[crate::acme::domains::DomainTls],
+    apps: &[deku_core::types::App],
+    now: chrono::DateTime<Utc>,
+) -> Vec<AlertDraft> {
+    use crate::acme::domains::{CertState, TlsMode};
+
+    let app_name = |app_id: &str| {
+        apps.iter()
+            .find(|app| app.id == app_id)
+            .map_or_else(|| app_id.to_string(), |app| app.name.clone())
+    };
+    let mut drafts = Vec::new();
+    for domain in domains.iter().filter(|domain| domain.mode == TlsMode::Auto) {
+        let scope = format!("domain:{}", domain.domain);
+        match domain.state {
+            CertState::Failed => drafts.push(AlertDraft::new(
+                RULE_CERTIFICATE_FAILED,
+                SEVERITY_WARNING,
+                scope,
+                &domain.domain,
+                format!(
+                    "certificate requests for {} ({}) keep failing: {}",
+                    domain.domain,
+                    app_name(&domain.app_id),
+                    domain.details.as_deref().unwrap_or("no reason was given")
+                ),
+            )),
+            CertState::Active => {
+                let Some(expires_at) = domain.expires_at else {
+                    continue;
+                };
+                let days = (expires_at - now).num_days();
+                if days < 0 {
+                    drafts.push(AlertDraft::new(
+                        RULE_CERTIFICATE_EXPIRED,
+                        SEVERITY_CRITICAL,
+                        scope,
+                        &domain.domain,
+                        format!(
+                            "certificate for {} expired {} day(s) ago",
+                            domain.domain,
+                            days.abs()
+                        ),
+                    ));
+                } else if days <= letsencrypt::CERT_EXPIRY_WARNING_DAYS {
+                    drafts.push(AlertDraft::new(
+                        RULE_CERTIFICATE_EXPIRING,
+                        SEVERITY_WARNING,
+                        scope,
+                        &domain.domain,
+                        format!(
+                            "certificate for {} expires in {days} day(s) and has not renewed",
+                            domain.domain
+                        ),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    drafts
+}
+
 /// Collect the current findings. Pure with respect to stored alert state, so it
 /// can be exercised without touching the alerts table.
 pub async fn evaluate(state: &SharedState) -> Result<Vec<AlertDraft>> {
@@ -160,6 +231,13 @@ pub async fn evaluate(state: &SharedState) -> Result<Vec<AlertDraft>> {
                 format!("certificate for '{}' could not be read: {error}", app.name),
             )),
         }
+    }
+
+    // Certificates Angie requests for app domains.
+    let cfg = crate::api::current_config(state);
+    if cfg.acme.enabled && cfg.acme.custom_domains {
+        let domains = queries::list_all_domain_tls(&state.pool).await?;
+        drafts.extend(domain_certificate_drafts(&domains, &apps, Utc::now()));
     }
 
     // Apps that were deployed but have nothing serving.
@@ -345,6 +423,56 @@ mod tests {
             disk_warn_percent: warn,
             disk_critical_percent: critical,
         }
+    }
+
+    #[test]
+    fn automatic_certificates_alert_only_when_a_person_is_needed() {
+        use crate::acme::domains::{CertState, DomainTls, TlsMode};
+        use chrono::{TimeDelta, Utc};
+
+        let now = Utc::now();
+        let app = deku_core::types::App {
+            id: "a1".to_string(),
+            name: "shop".to_string(),
+            created_at: now,
+            locked: false,
+            status: deku_core::types::AppStatus::Deployed,
+            tls_enabled: false,
+        };
+        let domain = |name: &str, state: CertState, days: Option<i64>| DomainTls {
+            domain_id: format!("id-{name}"),
+            app_id: "a1".to_string(),
+            domain: name.to_string(),
+            mode: TlsMode::Auto,
+            state,
+            details: Some("connection refused on port 80".to_string()),
+            failures: 2,
+            expires_at: days.map(|days| now + TimeDelta::days(days)),
+            checked_at: None,
+            next_retry_at: None,
+            observed_run: None,
+        };
+        let domains = [
+            domain("paused.shop.test", CertState::Failed, None),
+            // Inside Angie's 30-day renewal window but not yet worrying.
+            domain("renewing.shop.test", CertState::Active, Some(25)),
+            domain("stuck.shop.test", CertState::Active, Some(9)),
+            domain("waiting.shop.test", CertState::Checking, None),
+        ];
+
+        let drafts = super::domain_certificate_drafts(&domains, &[app], now);
+        let rules: Vec<_> = drafts
+            .iter()
+            .map(|draft| (draft.rule, draft.subject.as_str()))
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                (super::RULE_CERTIFICATE_FAILED, "paused.shop.test"),
+                (super::RULE_CERTIFICATE_EXPIRING, "stuck.shop.test"),
+            ]
+        );
+        assert!(drafts[0].message.contains("shop") && drafts[0].message.contains("port 80"));
     }
 
     #[test]

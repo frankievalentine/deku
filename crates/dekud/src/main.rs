@@ -68,6 +68,12 @@ async fn main() -> Result<()> {
     // client exists from startup rather than from the next deploy. A failure is
     // reported, not fatal: a host that has not configured a certificate still
     // runs, and a rejected file is rolled back before Angie ever reads it.
+    // Every app config answers the reachability check with this identifier,
+    // so it is loaded before any config is written.
+    if let Err(error) = acme::reachability::init(&cfg.data_dir) {
+        warn!("could not load the host identifier for reachability checks: {error}");
+    }
+
     let acme_email = match services::letsencrypt::get_global_email(&cfg).await {
         Ok(email) => email,
         Err(error) => {
@@ -152,6 +158,7 @@ async fn main() -> Result<()> {
     }
 
     backup_scheduler::spawn(state.clone());
+    acme::watcher::spawn(state.clone());
     alerts::spawn(state.clone());
     logs::spawn_maintenance(state.clone());
 
