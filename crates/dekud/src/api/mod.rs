@@ -2531,7 +2531,7 @@ fn acme_certificate_check(cfg: &crate::config::DekuConfig) -> serde_json::Value 
     }
 
     let certificate = crate::acme::file::wildcard_certificate(&cfg.acme);
-    if certificate.exists() {
+    if crate::acme::file::certificate_issued(&certificate) {
         serde_json::json!({
             "name": "acme_certificate",
             "status": "ok",
@@ -2697,9 +2697,7 @@ fn api_bind_check(cfg: &crate::config::DekuConfig) -> serde_json::Value {
 /// Report whether a configured `dashboard_domain` is being served.
 async fn dashboard_domain_check(state: &SharedState) -> Option<serde_json::Value> {
     let cfg = current_config(state);
-    let wildcard_issued = cfg.acme.enabled
-        && cfg.acme.wildcard
-        && crate::acme::file::wildcard_certificate(&cfg.acme).exists();
+    let wildcard_issued = crate::acme::file::wildcard_issued(&cfg.acme);
     let app_domains = queries::list_all_domain_names(&state.pool)
         .await
         .unwrap_or_default();

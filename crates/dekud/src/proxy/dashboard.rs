@@ -139,9 +139,7 @@ pub fn render(cfg: &DekuConfig, domain: &str) -> Result<String> {
 /// Write or remove the dashboard vhost to match `cfg`, and reload Angie. A
 /// reload Angie rejects puts the previous file back.
 pub async fn apply(pool: &sqlx::SqlitePool, cfg: &DekuConfig) -> Result<Desired> {
-    let wildcard_issued = cfg.acme.enabled
-        && cfg.acme.wildcard
-        && crate::acme::file::wildcard_certificate(&cfg.acme).exists();
+    let wildcard_issued = crate::acme::file::wildcard_issued(&cfg.acme);
     let app_domains = crate::db::queries::list_all_domain_names(pool).await?;
     let desired = desired(cfg, wildcard_issued, &app_domains);
 

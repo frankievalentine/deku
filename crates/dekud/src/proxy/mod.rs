@@ -73,9 +73,8 @@ pub fn key_path(app_name: &str) -> PathBuf {
 /// again. Before it exists they are written without TLS, which means a hostname
 /// starts being served over HTTPS on the first reconcile after issuance.
 fn derived_certificate(acme: Option<&crate::config::AcmeConfig>) -> Option<writer::CertSource> {
-    let acme = acme.filter(|acme| acme.enabled && acme.wildcard)?;
-    let certificate = crate::acme::file::wildcard_certificate(acme);
-    certificate.exists().then(|| writer::CertSource::Acme {
+    let acme = acme?;
+    crate::acme::file::wildcard_issued(acme).then(|| writer::CertSource::Acme {
         client: crate::acme::file::WILDCARD_CLIENT.to_string(),
     })
 }
@@ -1020,11 +1019,37 @@ mod tests {
             })
         );
 
-        // Once the client has a certificate, the same hostnames serve it.
+        // A request that failed leaves an empty certificate file behind. Serving
+        // it would fail every handshake, so the hostnames stay on HTTP.
         let issued = acme.client_path.join("deku_wildcard");
         std::fs::create_dir_all(&issued).expect("the client directory should create");
-        std::fs::write(issued.join("certificate.pem"), "certificate")
-            .expect("the certificate should write");
+        std::fs::write(issued.join("certificate.pem"), "").expect("the empty file should write");
+        let vhosts = super::build_vhosts(
+            &pool,
+            Some("apps.test"),
+            Some(&acme),
+            "app-1",
+            "demo",
+            &desired,
+        )
+        .await
+        .expect("vhosts");
+        assert!(
+            vhosts
+                .iter()
+                .find(|vhost| vhost.key == "demo-staging")
+                .expect("staging vhost")
+                .cert
+                .is_none(),
+            "an empty certificate file is a failed request, not an issued certificate"
+        );
+
+        // Once the client has a certificate, the same hostnames serve it.
+        std::fs::write(
+            issued.join("certificate.pem"),
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+        )
+        .expect("the certificate should write");
 
         let vhosts = super::build_vhosts(
             &pool,

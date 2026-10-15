@@ -50,6 +50,26 @@ pub fn wildcard_certificate(acme: &AcmeConfig) -> PathBuf {
         .join("certificate.pem")
 }
 
+/// Whether `path` holds an issued certificate.
+///
+/// Existence is not enough: a client whose request failed leaves an empty
+/// `certificate.pem` behind, and a vhost that serves it fails every TLS
+/// handshake. Only a file with a PEM certificate in it counts.
+pub fn certificate_issued(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|contents| {
+        contents
+            .windows(PEM_CERTIFICATE_MARKER.len())
+            .any(|window| window == PEM_CERTIFICATE_MARKER)
+    })
+}
+
+const PEM_CERTIFICATE_MARKER: &[u8] = b"-----BEGIN CERTIFICATE-----";
+
+/// Whether the wildcard certificate is configured and has been issued.
+pub fn wildcard_issued(acme: &AcmeConfig) -> bool {
+    acme.enabled && acme.wildcard && certificate_issued(&wildcard_certificate(acme))
+}
+
 /// What syncing the file did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -339,7 +359,8 @@ fn restore(path: &Path, previous: Option<&[u8]>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        config_path, is_app_config_file, render, FileConfig, CONFIG_FILE_NAME, WILDCARD_CLIENT,
+        certificate_issued, config_path, is_app_config_file, render, FileConfig, CONFIG_FILE_NAME,
+        WILDCARD_CLIENT,
     };
     use crate::config::AcmeConfig;
     use std::path::{Path, PathBuf};
@@ -353,6 +374,27 @@ mod tests {
             api_token_file: Some(PathBuf::from("/var/lib/deku/acme-api-token")),
             ..AcmeConfig::default()
         }
+    }
+
+    #[test]
+    fn only_a_pem_certificate_counts_as_issued() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("certificate.pem");
+        assert!(!certificate_issued(&path), "a missing file is not issued");
+
+        // What a failed request leaves behind.
+        std::fs::write(&path, "").expect("write");
+        assert!(
+            !certificate_issued(&path),
+            "an empty file is a failed request"
+        );
+
+        std::fs::write(
+            &path,
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write");
+        assert!(certificate_issued(&path));
     }
 
     fn rendered(email: Option<&str>) -> String {

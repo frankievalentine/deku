@@ -177,7 +177,7 @@ pub async fn acme_status(State(_state): State<SharedState>) -> impl IntoResponse
         .flatten();
 
     let certificate = acme::file::wildcard_certificate(&cfg.acme);
-    let exists = certificate.exists();
+    let exists = acme::file::certificate_issued(&certificate);
     let not_after = match exists {
         true => crate::services::letsencrypt::certificate_not_after(&certificate).await,
         false => None,
