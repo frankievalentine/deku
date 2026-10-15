@@ -4,11 +4,24 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="$(mktemp -d /tmp/deku-smoke.XXXXXX)"
 DIST_RELEASE_DIR="${DEKU_INSTALL_SMOKE_RELEASE_DIR:-}"
+# The real sleep, found before the mocks go on PATH: the installer's own sleep is
+# mocked to return at once, and the fake daemon must not pick that one up.
+DEKU_SMOKE_REAL_SLEEP="$(command -v sleep)"
+export DEKU_SMOKE_REAL_SLEEP
 trap 'cleanup' EXIT
+# Ctrl-C, a hangup or a timeout's SIGTERM would otherwise skip the EXIT trap's
+# cleanup and leave the fake daemon behind.
+trap 'exit 130' INT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
 
 cleanup() {
   if [[ -n "${DEKU_SYSTEMCTL_STATE_DIR:-}" && -f "${DEKU_SYSTEMCTL_STATE_DIR}/deku.pid" ]]; then
     kill "$(cat "${DEKU_SYSTEMCTL_STATE_DIR}/deku.pid")" >/dev/null 2>&1 || true
+  fi
+  # The installer's own temporary directory, once install.sh has been sourced.
+  if [[ -n "${TMP_DIR:-}" ]]; then
+    rm -rf "$TMP_DIR"
   fi
   rm -rf "$TEST_ROOT"
 }
@@ -289,7 +302,16 @@ start_deku() {
   data_dir="$(sed -n 's/^data_dir = "\(.*\)"$/\1/p' "$DEKU_CONFIG_DIR/config.toml" | head -n 1)"
   mkdir -p "$data_dir"
   : > "${data_dir}/deku.sock"
-  (while true; do sleep 60; done) &
+  # A stand-in for dekud. It uses the real sleep (the mock returns at once and
+  # would turn this into a busy loop), and it exits by itself once the test's
+  # directory is gone or after ten minutes, so a test killed outright, where no
+  # trap runs, cannot leave it behind.
+  (
+    deadline=$((SECONDS + 600))
+    while [[ -d "$state_dir" ]] && ((SECONDS < deadline)); do
+      "$DEKU_SMOKE_REAL_SLEEP" 1
+    done
+  ) &
   echo $! > "${state_dir}/deku.pid"
   touch "${state_dir}/deku.active"
 }
@@ -375,6 +397,9 @@ export DEKU_INSTALL_FORCE_DEFAULTS="1"
 mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")"
 
 source "${ROOT_DIR}/scripts/install.sh"
+# install.sh sets its own EXIT trap, which replaces this script's: put the
+# test's cleanup back, or every run leaves its fake daemon and files behind.
+trap 'cleanup' EXIT
 if [[ -z "$DIST_RELEASE_DIR" ]]; then
   RELEASE_SIGNING_PUBLIC_KEY="$(cat "${TEST_ROOT}/signing/release-signing.pub")"
 fi
