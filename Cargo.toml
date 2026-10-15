@@ -4,17 +4,6 @@ members = [
     "crates/deku",
     "crates/dekud",
     "crates/deku-core",
-    "crates/deku-plugin-sdk",
-    "plugins/deku-plugin-postgres",
-    "plugins/deku-plugin-redis",
-    "plugins/deku-plugin-mysql",
-    "plugins/deku-plugin-letsencrypt",
-    "plugins/deku-plugin-checks",
-    "plugins/deku-plugin-storage",
-    "plugins/deku-plugin-network",
-    "plugins/deku-plugin-cron",
-    "plugins/deku-plugin-git",
-    "plugins/deku-plugin-domains",
 ]
 
 [workspace.dependencies]
@@ -41,7 +30,6 @@ tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "cors", "fs"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
-libloading = "0.9"
 async-trait = "0.1"
 hex = "0.4"
 percent-encoding = "2"

@@ -20,7 +20,6 @@ pub mod maintenance;
 pub mod mysql;
 pub mod network;
 pub mod objectstore;
-pub mod plugins;
 pub mod postgres;
 pub mod ps;
 pub mod redirects;

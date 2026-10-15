@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::models::{HostConfig, Mount, MountType, PortBinding};
+use bollard::models::{HostConfig, Mount, MountType, RestartPolicy, RestartPolicyNameEnum};
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, CreateImageOptionsBuilder, LogsOptionsBuilder,
     RemoveContainerOptionsBuilder, RemoveVolumeOptionsBuilder, WaitContainerOptionsBuilder,
@@ -14,8 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 use crate::config::DekuConfig;
@@ -36,7 +35,11 @@ pub struct DbServiceSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServiceConfig {
     pub password: String,
-    pub host_port: u16,
+    /// The host port a service created before services moved onto the shared
+    /// Deku network was published on. Only read to recognize those services;
+    /// apps reach a service by container name instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
     pub name: String,
     pub volume: String,
 }
@@ -189,6 +192,12 @@ pub fn spec_for(plugin: &str) -> Option<DbServiceSpec> {
     }
 }
 
+/// The container a managed service runs in, which is also its hostname on the
+/// shared Deku network.
+pub fn service_container_name(plugin: &str, name: &str) -> String {
+    format!("deku-{plugin}-{name}")
+}
+
 pub fn parse_service_config(config: &str) -> Result<ServiceConfig> {
     serde_json::from_str(config).map_err(|e| anyhow!("invalid service config: {e}"))
 }
@@ -198,10 +207,11 @@ pub fn connection_info(
     service: &queries::Service,
 ) -> Result<ServiceConnectionInfo> {
     let config = parse_service_config(&service.config)?;
+    let host = service_container_name(spec.plugin, &service.name);
     Ok(ServiceConnectionInfo {
         env_key: spec.env_key,
-        host: "127.0.0.1".to_string(),
-        port: config.host_port,
+        host: host.clone(),
+        port: spec.container_port,
         password: config.password.clone(),
         username: spec.username.map(str::to_string),
         database: if spec.plugin == "redis" {
@@ -209,12 +219,7 @@ pub fn connection_info(
         } else {
             Some(config.name.clone())
         },
-        url: (spec.make_url)(
-            &config.password,
-            "127.0.0.1",
-            config.host_port,
-            &config.name,
-        ),
+        url: (spec.make_url)(&config.password, &host, spec.container_port, &config.name),
         volume: config.volume,
     })
 }
@@ -304,18 +309,74 @@ async fn wait_for_service_ready(
     ))
 }
 
-async fn wait_for_tcp_port(host_port: u16) -> Result<()> {
-    let address = format!("127.0.0.1:{host_port}");
-    for _attempt in 0..30 {
-        if timeout(Duration::from_secs(1), TcpStream::connect(&address))
-            .await
-            .is_ok_and(|result| result.is_ok())
-        {
-            return Ok(());
-        }
-        sleep(Duration::from_secs(1)).await;
+/// Create and start a service container on the shared Deku network.
+///
+/// No port is published: linked apps reach the service by container name, and
+/// the daemon's own probes, backups and restores run through `docker exec`. A
+/// container that fails to start is removed; its volume is left to the caller.
+async fn start_service_container(
+    docker: &Docker,
+    spec: &DbServiceSpec,
+    name: &str,
+    password: &str,
+    volume_name: &str,
+) -> Result<String> {
+    let container_name = service_container_name(spec.plugin, name);
+    let body = bollard::models::ContainerCreateBody {
+        image: Some(spec.image.to_string()),
+        env: Some((spec.make_env)(name, password)),
+        cmd: (spec.make_cmd)(name, password),
+        labels: Some(HashMap::from([(
+            "deku.managed".to_string(),
+            "true".to_string(),
+        )])),
+        host_config: Some(HostConfig {
+            network_mode: Some(crate::container::DEKU_NETWORK.to_string()),
+            mounts: Some(vec![Mount {
+                source: Some(volume_name.to_string()),
+                target: Some(spec.data_dir.to_string()),
+                typ: Some(MountType::VOLUME),
+                read_only: Some(false),
+                ..Default::default()
+            }]),
+            // Come back after a host or Docker restart, like app containers.
+            restart_policy: Some(RestartPolicy {
+                name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
+                maximum_retry_count: None,
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let created = docker
+        .create_container(
+            Some(
+                CreateContainerOptionsBuilder::default()
+                    .name(&container_name)
+                    .build(),
+            ),
+            body,
+        )
+        .await?;
+
+    if let Err(error) = docker
+        .start_container(
+            &created.id,
+            None::<bollard::query_parameters::StartContainerOptions>,
+        )
+        .await
+    {
+        let _ = docker
+            .remove_container(
+                &created.id,
+                Some(RemoveContainerOptionsBuilder::default().force(true).build()),
+            )
+            .await;
+        return Err(error.into());
     }
-    Err(anyhow!("service on {address} did not become ready in time"))
+
+    Ok(created.id)
 }
 
 pub async fn create(
@@ -336,97 +397,27 @@ pub async fn create(
     );
     while stream.next().await.is_some() {}
 
+    crate::container::ensure_deku_network(docker).await?;
+
     // Generate password
     let password = uuid::Uuid::new_v4().simple().to_string();
 
-    // Build port bindings
-    let port_key = format!("{}/tcp", spec.container_port);
-    let mut bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
-    bindings.insert(
-        port_key.clone(),
-        Some(vec![PortBinding {
-            host_ip: Some(String::new()),
-            host_port: Some("0".to_string()),
-        }]),
-    );
-
-    let exposed: Vec<String> = vec![port_key.clone()];
-
-    let envs: Vec<String> = (spec.make_env)(name, &password);
-    let cmd = (spec.make_cmd)(name, &password);
-
-    let container_name = format!("deku-{}-{name}", spec.plugin);
+    let container_name = service_container_name(spec.plugin, name);
     let volume_name = format!("deku-{}-{name}-data", spec.plugin);
 
-    let body = bollard::models::ContainerCreateBody {
-        image: Some(spec.image.to_string()),
-        env: Some(envs),
-        cmd,
-        exposed_ports: Some(exposed),
-        host_config: Some(HostConfig {
-            port_bindings: Some(bindings),
-            mounts: Some(vec![Mount {
-                source: Some(volume_name.clone()),
-                target: Some(spec.data_dir.to_string()),
-                typ: Some(MountType::VOLUME),
-                read_only: Some(false),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    let resp = docker
-        .create_container(
-            Some(
-                CreateContainerOptionsBuilder::default()
-                    .name(&container_name)
-                    .build(),
-            ),
-            body,
-        )
-        .await?;
-    let container_id = resp.id;
-
-    docker
-        .start_container(
-            &container_id,
-            None::<bollard::query_parameters::StartContainerOptions>,
-        )
-        .await?;
-
-    // Inspect to get assigned host port
-    let inspect = docker.inspect_container(&container_id, None).await?;
-    let host_port: u16 = inspect
-        .network_settings
-        .as_ref()
-        .and_then(|ns| ns.ports.as_ref())
-        .and_then(|ports| {
-            let key = format!("{}/tcp", spec.container_port);
-            ports.get(&key)
-        })
-        .and_then(|bindings| bindings.as_ref())
-        .and_then(|b| b.first())
-        .and_then(|b| b.host_port.as_deref())
-        .and_then(|p| p.parse().ok())
-        .ok_or_else(|| anyhow!("could not determine host port for service container"))?;
-
-    if let Err(error) = wait_for_tcp_port(host_port).await {
-        let _ = docker
-            .remove_container(
-                &container_name,
-                Some(RemoveContainerOptionsBuilder::default().force(true).build()),
-            )
-            .await;
-        let _ = docker
-            .remove_volume(
-                &volume_name,
-                Some(RemoveVolumeOptionsBuilder::default().force(true).build()),
-            )
-            .await;
-        return Err(error);
-    }
+    let container_id =
+        match start_service_container(docker, &spec, name, &password, &volume_name).await {
+            Ok(id) => id,
+            Err(error) => {
+                let _ = docker
+                    .remove_volume(
+                        &volume_name,
+                        Some(RemoveVolumeOptionsBuilder::default().force(true).build()),
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
 
     if let Err(error) =
         wait_for_service_ready(docker, spec.plugin, &container_name, &password).await
@@ -448,7 +439,7 @@ pub async fn create(
 
     let config = serde_json::to_string(&ServiceConfig {
         password,
-        host_port,
+        host_port: None,
         name: name.to_string(),
         volume: volume_name,
     })?;
@@ -456,6 +447,177 @@ pub async fn create(
     let svc =
         queries::create_service(pool, name, spec.plugin, Some(&container_id), &config).await?;
     Ok(svc)
+}
+
+/// Every plugin a managed service can be created from.
+const SERVICE_PLUGINS: [&str; 5] = ["postgres", "redis", "mysql", "mariadb", "mongodb"];
+
+/// Move services created before the shared Deku network onto it, and point
+/// every linked app at the service's container name.
+///
+/// Those containers published a random host port on every interface, and
+/// linked apps were given a `127.0.0.1` URL, which inside an app container is
+/// the app itself. Each one is recreated on its existing data volume; a
+/// recreation that fails puts the original container back. Returns the names
+/// of apps whose linked URL changed, which pick it up on their next deploy.
+pub async fn migrate_to_shared_network(
+    pool: &SqlitePool,
+    docker: &Docker,
+    cfg: &DekuConfig,
+) -> Result<Vec<String>> {
+    let mut changed_apps = Vec::new();
+
+    for plugin in SERVICE_PLUGINS {
+        let Some(spec) = spec_for(plugin) else {
+            continue;
+        };
+        for service in queries::list_services(pool, plugin).await? {
+            if let Err(error) = migrate_service(pool, docker, &spec, &service).await {
+                tracing::warn!(
+                    service = %service.name,
+                    "could not move the service onto the shared network: {error}"
+                );
+                continue;
+            }
+
+            let service = queries::get_service_by_id(pool, &service.id).await?;
+            let expected = connection_info(&spec, &service)?.url;
+            for link in queries::list_service_links(pool, &service.id).await? {
+                let current = crate::secrets::get_config_vars(pool, cfg, &link.app_id)
+                    .await?
+                    .into_iter()
+                    .find(|var| var.key == link.env_key)
+                    .map(|var| var.value);
+                if current.as_deref() == Some(expected.as_str()) {
+                    continue;
+                }
+                crate::secrets::set_config_var(
+                    pool,
+                    cfg,
+                    &link.app_id,
+                    &link.env_key,
+                    &expected,
+                    false,
+                )
+                .await?;
+                let app = queries::get_app_by_id(pool, &link.app_id).await?;
+                changed_apps.push(app.name);
+            }
+        }
+    }
+
+    changed_apps.sort();
+    changed_apps.dedup();
+    Ok(changed_apps)
+}
+
+/// Whether a service container predates the shared network: it is not on it,
+/// or it publishes a host port.
+fn is_legacy_service_container(inspect: &bollard::models::ContainerInspectResponse) -> bool {
+    let Some(host_config) = inspect.host_config.as_ref() else {
+        return true;
+    };
+    let on_network = host_config.network_mode.as_deref() == Some(crate::container::DEKU_NETWORK);
+    let publishes = host_config
+        .port_bindings
+        .as_ref()
+        .is_some_and(|bindings| bindings.values().any(Option::is_some));
+    !on_network || publishes
+}
+
+async fn migrate_service(
+    pool: &SqlitePool,
+    docker: &Docker,
+    spec: &DbServiceSpec,
+    service: &queries::Service,
+) -> Result<()> {
+    let container_name = service_container_name(spec.plugin, &service.name);
+    let inspect = docker.inspect_container(&container_name, None).await?;
+    if !is_legacy_service_container(&inspect) {
+        return Ok(());
+    }
+
+    let mut config = parse_service_config(&service.config)?;
+    tracing::info!(service = %service.name, "moving the service onto the shared network");
+
+    let retired_name = format!("{container_name}-pre-network");
+    let _ = docker
+        .stop_container(
+            &container_name,
+            Some(
+                bollard::query_parameters::StopContainerOptionsBuilder::default()
+                    .t(30)
+                    .build(),
+            ),
+        )
+        .await;
+    docker
+        .rename_container(
+            &container_name,
+            bollard::query_parameters::RenameContainerOptionsBuilder::default()
+                .name(&retired_name)
+                .build(),
+        )
+        .await?;
+
+    let replaced = async {
+        let id = start_service_container(
+            docker,
+            spec,
+            &service.name,
+            &config.password,
+            &config.volume,
+        )
+        .await?;
+        if let Err(error) =
+            wait_for_service_ready(docker, spec.plugin, &container_name, &config.password).await
+        {
+            let _ = docker
+                .remove_container(
+                    &id,
+                    Some(RemoveContainerOptionsBuilder::default().force(true).build()),
+                )
+                .await;
+            return Err(error);
+        }
+        Ok::<String, anyhow::Error>(id)
+    }
+    .await;
+
+    let new_id = match replaced {
+        Ok(id) => id,
+        Err(error) => {
+            // Put the original back so the service keeps running as it was.
+            docker
+                .rename_container(
+                    &retired_name,
+                    bollard::query_parameters::RenameContainerOptionsBuilder::default()
+                        .name(&container_name)
+                        .build(),
+                )
+                .await?;
+            docker
+                .start_container(
+                    &container_name,
+                    None::<bollard::query_parameters::StartContainerOptions>,
+                )
+                .await?;
+            return Err(error);
+        }
+    };
+
+    // The data lives in the named volume, which removing the container keeps.
+    docker
+        .remove_container(
+            &retired_name,
+            Some(RemoveContainerOptionsBuilder::default().force(true).build()),
+        )
+        .await?;
+
+    config.host_port = None;
+    queries::update_service_container(pool, &service.id, &new_id, &serde_json::to_string(&config)?)
+        .await?;
+    Ok(())
 }
 
 pub async fn destroy(pool: &SqlitePool, docker: &Docker, name: &str) -> Result<()> {
@@ -510,14 +672,7 @@ pub async fn link(
         ));
     }
 
-    let config = parse_service_config(&svc.config)?;
-
-    let url = (spec.make_url)(
-        &config.password,
-        "127.0.0.1",
-        config.host_port,
-        &config.name,
-    );
+    let url = connection_info(spec, &svc)?.url;
     crate::secrets::set_config_var(pool, cfg, &app.id, spec.env_key, &url, false).await?;
     queries::link_service(pool, &svc.id, &app.id, spec.env_key).await?;
     Ok(())
@@ -1239,7 +1394,7 @@ pub async fn restore_redis(
             None::<bollard::query_parameters::StartContainerOptions>,
         )
         .await?;
-    wait_for_tcp_port(service_config.host_port).await?;
+    wait_for_service_ready(docker, "redis", &container_name, &service_config.password).await?;
 
     queries::mark_service_backup_restored(pool, &backup.id).await?;
     queries::get_service_backup_for_service(pool, &service.id, backup_id)
@@ -1709,8 +1864,14 @@ pub async fn get_logs(docker: &Docker, plugin: &str, name: &str, n: usize) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{open_backup, parse_service_config, redis_spec, seal_backup, ServiceConfig};
+    use super::{
+        connection_info, is_legacy_service_container, open_backup, parse_service_config,
+        postgres_spec, redis_spec, seal_backup, ServiceConfig,
+    };
     use crate::config::{DekuConfig, EncryptionConfig};
+    use crate::db::queries;
+    use bollard::models::HostConfig;
+    use std::collections::HashMap;
 
     fn cfg_with_key() -> DekuConfig {
         DekuConfig {
@@ -1760,11 +1921,255 @@ mod tests {
             parsed,
             ServiceConfig {
                 password: "secret".to_string(),
-                host_port: 5432,
+                host_port: Some(5432),
                 name: "app-db".to_string(),
                 volume: "deku-postgres-app-db-data".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn parses_service_config_without_a_host_port() {
+        let raw = r#"{"password":"secret","name":"app-db","volume":"deku-postgres-app-db-data"}"#;
+        let parsed = parse_service_config(raw).expect("service config should parse");
+        assert_eq!(parsed.host_port, None);
+        let written = serde_json::to_string(&parsed).expect("serialize");
+        assert!(!written.contains("host_port"), "{written}");
+    }
+
+    #[test]
+    fn linked_url_uses_the_container_name_on_the_shared_network() {
+        let service = queries::Service {
+            id: "svc".to_string(),
+            name: "app-db".to_string(),
+            plugin: "postgres".to_string(),
+            container_id: None,
+            status: "running".to_string(),
+            config: r#"{"password":"secret","host_port":49153,"name":"app-db","volume":"v"}"#
+                .to_string(),
+            created_at: chrono::Utc::now(),
+        };
+        let connection = connection_info(&postgres_spec(), &service).expect("connection info");
+        assert_eq!(connection.host, "deku-postgres-app-db");
+        assert_eq!(connection.port, 5432);
+        assert!(
+            connection.url.contains("@deku-postgres-app-db:5432/"),
+            "{}",
+            connection.url
+        );
+    }
+
+    fn inspect_with(
+        network_mode: &str,
+        published: bool,
+    ) -> bollard::models::ContainerInspectResponse {
+        let bindings = published.then(|| {
+            vec![bollard::models::PortBinding {
+                host_ip: Some(String::new()),
+                host_port: Some("49153".to_string()),
+            }]
+        });
+        bollard::models::ContainerInspectResponse {
+            host_config: Some(HostConfig {
+                network_mode: Some(network_mode.to_string()),
+                port_bindings: Some(HashMap::from([("5432/tcp".to_string(), bindings)])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn detects_service_containers_from_before_the_shared_network() {
+        assert!(is_legacy_service_container(&inspect_with("bridge", true)));
+        assert!(is_legacy_service_container(&inspect_with("bridge", false)));
+        assert!(is_legacy_service_container(&inspect_with("deku", true)));
+        assert!(!is_legacy_service_container(&inspect_with("deku", false)));
+    }
+
+    /// Create a Redis service the way releases before the shared network did:
+    /// on the default bridge, with a random host port published on every
+    /// interface, and linked with a `127.0.0.1` URL.
+    async fn create_legacy_redis(
+        pool: &sqlx::SqlitePool,
+        cfg: &DekuConfig,
+        docker: &bollard::Docker,
+        name: &str,
+        app_id: &str,
+    ) -> String {
+        use bollard::models::{ContainerCreateBody, PortBinding};
+        use bollard::query_parameters::CreateContainerOptionsBuilder;
+
+        let spec = redis_spec();
+        let password = "legacy-secret";
+        let volume = format!("deku-redis-{name}-data");
+        let container_name = super::service_container_name("redis", name);
+        let body = ContainerCreateBody {
+            image: Some(spec.image.to_string()),
+            cmd: (spec.make_cmd)(name, password),
+            exposed_ports: Some(vec!["6379/tcp".to_string()]),
+            host_config: Some(HostConfig {
+                port_bindings: Some(HashMap::from([(
+                    "6379/tcp".to_string(),
+                    Some(vec![PortBinding {
+                        host_ip: Some(String::new()),
+                        host_port: Some("0".to_string()),
+                    }]),
+                )])),
+                mounts: Some(vec![bollard::models::Mount {
+                    source: Some(volume.clone()),
+                    target: Some(spec.data_dir.to_string()),
+                    typ: Some(bollard::models::MountType::VOLUME),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let created = docker
+            .create_container(
+                Some(
+                    CreateContainerOptionsBuilder::default()
+                        .name(&container_name)
+                        .build(),
+                ),
+                body,
+            )
+            .await
+            .expect("legacy container");
+        docker
+            .start_container(
+                &created.id,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await
+            .expect("legacy start");
+
+        let config = serde_json::to_string(&ServiceConfig {
+            password: password.to_string(),
+            host_port: Some(49_999),
+            name: name.to_string(),
+            volume,
+        })
+        .expect("config");
+        let service = queries::create_service(pool, name, "redis", Some(&created.id), &config)
+            .await
+            .expect("service row");
+        let legacy_url = format!("redis://:{password}@127.0.0.1:49999");
+        crate::secrets::set_config_var(pool, cfg, app_id, "REDIS_URL", &legacy_url, false)
+            .await
+            .expect("legacy link var");
+        queries::link_service(pool, &service.id, app_id, "REDIS_URL")
+            .await
+            .expect("link");
+        container_name
+    }
+
+    #[tokio::test]
+    async fn a_legacy_service_moves_onto_the_shared_network() {
+        if std::env::var("DEKU_DOCKER_IT").is_err() {
+            return;
+        }
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cfg = DekuConfig {
+            data_dir: temp.path().to_path_buf(),
+            ..DekuConfig::default()
+        };
+        let pool = crate::db::connect(&cfg).await.expect("connect");
+        crate::db::migrate(&pool).await.expect("migrate");
+        let docker = crate::container::connect().expect("docker");
+        crate::container::ensure_deku_network(&docker)
+            .await
+            .expect("network");
+
+        let name = format!("it{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let app = queries::create_app(
+            &pool,
+            &deku_core::types::NewApp {
+                name: format!("{name}-app"),
+            },
+        )
+        .await
+        .expect("app");
+        let container_name = create_legacy_redis(&pool, &cfg, &docker, &name, &app.id).await;
+
+        let changed = super::migrate_to_shared_network(&pool, &docker, &cfg)
+            .await
+            .expect("migration");
+        assert_eq!(changed, vec![app.name.clone()]);
+
+        let inspect = docker
+            .inspect_container(&container_name, None)
+            .await
+            .expect("inspect");
+        assert!(!is_legacy_service_container(&inspect), "{inspect:?}");
+        let host_config = inspect.host_config.expect("host config");
+        assert_eq!(
+            host_config
+                .restart_policy
+                .and_then(|policy| policy.name)
+                .map(|name| name.to_string()),
+            Some("unless-stopped".to_string())
+        );
+
+        let url = crate::secrets::get_config_vars(&pool, &cfg, &app.id)
+            .await
+            .expect("vars")
+            .into_iter()
+            .find(|var| var.key == "REDIS_URL")
+            .expect("linked var")
+            .value;
+        assert_eq!(url, format!("redis://:legacy-secret@{container_name}:6379"));
+
+        // An app container on the network reaches the service at that host and
+        // port. redis-cli's own URI parser rejects an empty username, which
+        // client libraries accept, so the parts are passed separately.
+        let mut output = String::new();
+        let exit = crate::console::run_once(
+            &docker,
+            &format!("{name}-probe"),
+            "redis:7-alpine",
+            &[],
+            &[],
+            &[
+                "redis-cli".to_string(),
+                "-h".to_string(),
+                container_name.clone(),
+                "-p".to_string(),
+                "6379".to_string(),
+                "-a".to_string(),
+                "legacy-secret".to_string(),
+                "ping".to_string(),
+            ],
+            |_, line| output.push_str(line),
+        )
+        .await
+        .expect("probe");
+        assert_eq!(exit, 0, "{output}");
+        assert!(output.contains("PONG"), "{output}");
+
+        // Running it again changes nothing.
+        let again = super::migrate_to_shared_network(&pool, &docker, &cfg)
+            .await
+            .expect("second migration");
+        assert!(again.is_empty());
+
+        let _ = docker
+            .remove_container(
+                &container_name,
+                Some(
+                    bollard::query_parameters::RemoveContainerOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await;
+        let _ = docker
+            .remove_volume(
+                &format!("deku-redis-{name}-data"),
+                None::<bollard::query_parameters::RemoveVolumeOptions>,
+            )
+            .await;
     }
 
     #[test]

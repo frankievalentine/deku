@@ -9,15 +9,22 @@ use bollard::query_parameters::{
 };
 use bollard::Docker;
 use deku_core::error::{DekuError, Result};
-use deku_core::types::{parse_procfile, DekuToml, ProcfileEntry};
-use deku_plugin_sdk::context::BuildContext;
+use deku_core::types::{parse_procfile, App, DekuToml, ProcfileEntry};
 use futures::StreamExt;
 
 use crate::container::{create_tar_gz, tag_image};
 use crate::events::EventSender;
 use bollard::body_full;
 
-// ── Output types ──────────────────────────────────────────────────────────────
+// ── Input and output types ────────────────────────────────────────────────────
+
+/// What a builder needs to turn a source tree into an image.
+#[derive(Debug, Clone)]
+pub struct BuildContext {
+    pub app: App,
+    pub source_dir: std::path::PathBuf,
+    pub buildkit_host: Option<String>,
+}
 
 pub struct BuiltImage {
     pub tag: String,

@@ -73,8 +73,6 @@ enum Commands {
     Run(commands::console::RunArgs),
     /// Run a command inside a running app container
     Exec(commands::console::ExecArgs),
-    /// Plugin management
-    Plugins(commands::plugins::PluginsArgs),
     /// Postgres managed database
     Postgres(commands::postgres::PostgresArgs),
     /// Redis managed cache
@@ -144,7 +142,6 @@ async fn main() -> Result<()> {
                 Commands::Logs(args) => commands::logs::run(args, &client).await,
                 Commands::Run(args) => commands::console::run(args, &client).await,
                 Commands::Exec(args) => commands::console::exec(args, &client).await,
-                Commands::Plugins(args) => commands::plugins::run(args, &client).await,
                 Commands::Postgres(args) => commands::postgres::run(args, &client).await,
                 Commands::Redis(args) => commands::redis::run(args, &client).await,
                 Commands::Mysql(args) => commands::mysql::run(args, &client).await,

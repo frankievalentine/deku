@@ -27,7 +27,36 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
+        # Includes the deploy and service migration tests that run real
+        # containers against the runner's Docker daemon.
+        env:
+          DEKU_DOCKER_IT: "1"
         run: cargo test --all
+
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # rust-toolchain.toml selects stable, so the declared floor is named
+      # explicitly with `+` rather than through the default toolchain.
+      - name: Install Rust 1.94.0
+        run: rustup toolchain install 1.94.0 --profile minimal
+      - name: Check
+        run: cargo +1.94.0 check --workspace --all-targets --locked
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit
+        run: cargo audit
 
   install-smoke:
     name: Install Smoke

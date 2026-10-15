@@ -97,12 +97,6 @@ export interface SshKey {
   fingerprint: string | null;
 }
 
-export interface Plugin {
-  name: string;
-  version: string | null;
-  path: string;
-}
-
 export const MANAGED_SERVICE_KINDS = ['postgres', 'redis', 'mysql', 'mariadb', 'mongodb'] as const;
 
 export type ManagedServiceKind = (typeof MANAGED_SERVICE_KINDS)[number];
@@ -619,13 +613,9 @@ export async function fetchLogs(
   return response.lines;
 }
 
-export function appLogStreamUrl(appName: string, token?: string, filters: LogFilters = {}): string {
+export function appLogStreamPath(appName: string, filters: LogFilters = {}): string {
   const query = logQueryString(filters);
-  const url = `${BASE_URL}/api/apps/${encodeURIComponent(appName)}/logs/stream${
-    query ? `?${query}` : ''
-  }`;
-  if (!token) return url;
-  return `${url}${query ? '&' : '?'}token=${encodeURIComponent(token)}`;
+  return `/api/apps/${encodeURIComponent(appName)}/logs/stream${query ? `?${query}` : ''}`;
 }
 
 export function fetchSshKeys(): Promise<SshKey[]> {
@@ -643,21 +633,6 @@ export function deleteSshKey(name: string): Promise<void> {
   return apiFetch<void>(`/api/ssh-keys/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
-export function fetchPlugins(): Promise<Plugin[]> {
-  return apiFetch<Plugin[]>('/api/plugins');
-}
-
-export function installPlugin(path: string): Promise<{ name: string }> {
-  return apiFetch<{ name: string }>('/api/plugins', {
-    method: 'POST',
-    body: JSON.stringify({ path }),
-  });
-}
-
-export function deletePlugin(name: string): Promise<void> {
-  return apiFetch<void>(`/api/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
-}
-
 export function fetchAlerts(): Promise<AlertRecord[]> {
   return apiFetch<AlertRecord[]>('/api/alerts');
 }
@@ -667,10 +642,8 @@ export function fetchEvents(appId?: string): Promise<EventRecord[]> {
   return apiFetch<EventRecord[]>(`/api/events${suffix}`);
 }
 
-export function appEventStreamUrl(appName: string, token?: string): string {
-  const url = `${BASE_URL}/api/apps/${encodeURIComponent(appName)}/events/stream`;
-  if (!token) return url;
-  return `${url}?token=${encodeURIComponent(token)}`;
+export function appEventStreamPath(appName: string): string {
+  return `/api/apps/${encodeURIComponent(appName)}/events/stream`;
 }
 
 export function fetchNetworks(): Promise<NetworkRecord[]> {
@@ -1206,6 +1179,82 @@ export function deleteEnvironment(appName: string, slug: string): Promise<void> 
 }
 
 /**
+ * Read server-sent events from a response body and pass each frame's `data`
+ * field to `onData`. Comment lines, such as the daemon's keep-alives, carry no
+ * data and are skipped. Resolves when the body ends.
+ */
+async function readSseData(
+  body: ReadableStream<Uint8Array>,
+  onData: (data: string) => void
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary !== -1) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const data = rawEvent
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n');
+      if (data) onData(data);
+      boundary = buffer.indexOf('\n\n');
+    }
+  }
+}
+
+export interface EventStreamHandlers {
+  onOpen?: () => void;
+  onMessage: (data: string) => void;
+  onError?: (message: string) => void;
+}
+
+/**
+ * Open an authenticated GET event stream and return an abort function.
+ *
+ * `EventSource` cannot send an Authorization header, and the daemon does not
+ * accept the token in the URL, so the stream is read with `fetch`. A stream
+ * that fails or ends calls `onError`; reconnecting is left to the caller.
+ */
+export function openEventStream(path: string, handlers: EventStreamHandlers): () => void {
+  const controller = new AbortController();
+
+  void (async () => {
+    try {
+      const token = getToken();
+      const headers: Record<string, string> = { Accept: 'text/event-stream' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const response = await fetch(`${BASE_URL}${path}`, {
+        headers,
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        handlers.onError?.(`Stream request failed (${response.status})`);
+        return;
+      }
+
+      handlers.onOpen?.();
+      await readSseData(response.body, handlers.onMessage);
+      if (!controller.signal.aborted) handlers.onError?.('Stream ended.');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      handlers.onError?.(error instanceof Error ? error.message : 'Stream interrupted.');
+    }
+  })();
+
+  return () => controller.abort();
+}
+
+/**
  * `run` and `exec` stream server-sent `{stream,line}` frames ending with
  * `{exit_code}`. `EventSource` cannot POST, so this reads the response body
  * directly and parses the SSE frames by hand. Returns an abort function.
@@ -1250,44 +1299,23 @@ export function streamConsoleCommand(
         return;
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) return;
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        let boundary = buffer.indexOf('\n\n');
-        while (boundary !== -1) {
-          const rawEvent = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          const data = rawEvent
-            .split('\n')
-            .filter((line) => line.startsWith('data:'))
-            .map((line) => line.slice(5).trimStart())
-            .join('\n');
-          if (data) {
-            try {
-              const frame: unknown = JSON.parse(data);
-              if (frame && typeof frame === 'object' && 'line' in frame && 'stream' in frame) {
-                const parsed = frame as { line: string; stream: string };
-                handlers.onOutput?.({
-                  stream: parsed.stream === 'stderr' ? 'stderr' : 'stdout',
-                  line: parsed.line,
-                });
-              } else if (frame && typeof frame === 'object' && 'exit_code' in frame) {
-                handlers.onExit?.(Number((frame as { exit_code: number }).exit_code));
-              }
-            } catch {
-              // Ignore malformed frames and keep streaming.
-            }
+      if (!response.body) return;
+      await readSseData(response.body, (data) => {
+        try {
+          const frame: unknown = JSON.parse(data);
+          if (frame && typeof frame === 'object' && 'line' in frame && 'stream' in frame) {
+            const parsed = frame as { line: string; stream: string };
+            handlers.onOutput?.({
+              stream: parsed.stream === 'stderr' ? 'stderr' : 'stdout',
+              line: parsed.line,
+            });
+          } else if (frame && typeof frame === 'object' && 'exit_code' in frame) {
+            handlers.onExit?.(Number((frame as { exit_code: number }).exit_code));
           }
-          boundary = buffer.indexOf('\n\n');
+        } catch {
+          // Ignore malformed frames and keep streaming.
         }
-      }
+      });
     } catch (error) {
       if (controller.signal.aborted) return;
       handlers.onError?.(error instanceof Error ? error.message : 'Console command failed.');

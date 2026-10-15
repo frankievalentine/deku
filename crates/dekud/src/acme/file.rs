@@ -107,6 +107,9 @@ pub async fn apply(pool: &SqlitePool, cfg: &DekuConfig, email: Option<&str>) -> 
     let wanted = wanted(cfg, email)?;
 
     if wanted.is_none() && configs_serve_wildcard(&cfg.angie_conf_dir) {
+        // The dashboard is only ever served with the wildcard, so it is
+        // withdrawn with it rather than rewritten to plain HTTP.
+        crate::proxy::dashboard::remove(&cfg.angie_conf_dir)?;
         rewrite_apps_without_wildcard(pool, cfg).await?;
     }
 

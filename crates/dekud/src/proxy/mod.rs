@@ -1,3 +1,4 @@
+pub mod dashboard;
 pub mod reloader;
 pub mod writer;
 

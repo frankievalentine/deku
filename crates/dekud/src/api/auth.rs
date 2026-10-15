@@ -85,6 +85,21 @@ fn rate_limit_allow(ip: IpAddr) -> bool {
         .try_take(now)
 }
 
+/// The address a request is rate-limited by.
+///
+/// A request through the dashboard's Angie vhost arrives from loopback, which
+/// the limiter exempts, so the client address Angie forwards in `X-Real-IP` is
+/// used instead. The header is only trusted from loopback: a remote client
+/// connecting directly cannot use it to pose as someone else.
+fn client_ip(peer: IpAddr, real_ip: Option<&str>) -> IpAddr {
+    if !peer.is_loopback() {
+        return peer;
+    }
+    real_ip
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(peer)
+}
+
 async fn verify_token(token: String, hash: String) -> bool {
     let Ok(_permit) = verify_permits().acquire().await else {
         return false;
@@ -159,6 +174,20 @@ async fn authorize_deploy_token(
     }
 }
 
+/// The deploy token carried in a `token=` query parameter, if any.
+///
+/// Only app-scoped deploy tokens are read from the query, for provider webhooks
+/// that cannot set headers. The dashboard token grants the whole API, so it must
+/// arrive in the Authorization header: URLs end up in browser history and proxy
+/// access logs.
+fn query_deploy_token(query: Option<&str>) -> Option<String> {
+    query?
+        .split('&')
+        .find_map(|part| part.strip_prefix("token="))
+        .filter(|token| deploy_token::looks_like_deploy_token(token))
+        .map(str::to_owned)
+}
+
 /// Axum middleware that validates the dashboard bearer token on TCP requests.
 /// Apply only to the TCP router — the Unix socket router is trusted local access.
 pub async fn require_auth(
@@ -170,7 +199,11 @@ pub async fn require_auth(
     let path = request.uri().path().to_owned();
 
     if let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() {
-        if !rate_limit_allow(peer.ip()) {
+        let real_ip = request
+            .headers()
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok());
+        if !rate_limit_allow(client_ip(peer.ip(), real_ip)) {
             warn!(%method, %path, "dashboard auth rate limit exceeded");
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -189,13 +222,7 @@ pub async fn require_auth(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned));
 
-    let query_token = request.uri().query().and_then(|query| {
-        query
-            .split('&')
-            .find_map(|part| part.strip_prefix("token=").map(str::to_owned))
-    });
-
-    let presented = auth_header.or(query_token);
+    let presented = auth_header.or_else(|| query_deploy_token(request.uri().query()));
 
     // App-scoped deploy tokens for CI and provider webhooks.
     if let Some(token) = presented.as_deref() {
@@ -248,8 +275,39 @@ pub fn log_dashboard_session_verified() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Bucket, RATE_LIMIT_CAPACITY};
+    use super::{client_ip, query_deploy_token, Bucket, RATE_LIMIT_CAPACITY};
+    use crate::services::deploy_token::DEPLOY_TOKEN_PREFIX;
+    use std::net::IpAddr;
     use std::time::Instant;
+
+    #[test]
+    fn proxied_requests_are_limited_by_the_forwarded_client() {
+        let loopback: IpAddr = "127.0.0.1".parse().expect("ip");
+        let remote: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(client_ip(loopback, Some("203.0.113.7")), remote);
+        assert_eq!(client_ip(loopback, None), loopback);
+        assert_eq!(client_ip(loopback, Some("not-an-ip")), loopback);
+    }
+
+    #[test]
+    fn a_direct_client_cannot_choose_its_address() {
+        let remote: IpAddr = "203.0.113.7".parse().expect("ip");
+        assert_eq!(client_ip(remote, Some("127.0.0.1")), remote);
+    }
+
+    #[test]
+    fn query_accepts_a_deploy_token() {
+        let token = format!("{DEPLOY_TOKEN_PREFIX}abc123");
+        let query = format!("ref=main&token={token}");
+        assert_eq!(query_deploy_token(Some(&query)), Some(token));
+    }
+
+    #[test]
+    fn query_ignores_a_dashboard_token() {
+        assert_eq!(query_deploy_token(Some("token=dku_dashboard_secret")), None);
+        assert_eq!(query_deploy_token(Some("search=error")), None);
+        assert_eq!(query_deploy_token(None), None);
+    }
 
     #[test]
     fn rate_limit_bucket_allows_burst_then_denies() {

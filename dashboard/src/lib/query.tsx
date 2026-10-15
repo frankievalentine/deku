@@ -37,7 +37,6 @@ import {
   fetchManagedServiceLogs,
   fetchManagedServices,
   fetchObjectStoreConfig,
-  fetchPlugins,
   fetchPorts,
   fetchProcesses,
   fetchRoutingStatus,
@@ -76,7 +75,6 @@ export interface SettingsSummary {
   objectStoreConfigured: boolean;
   objectStoreProvider: string | null;
   sshKeyCount: number;
-  pluginCount: number;
   totalServices: number;
 }
 
@@ -148,9 +146,6 @@ export const queryKeys = {
   },
   sshKeys: {
     list: ['ssh-keys', 'list'] as const,
-  },
-  plugins: {
-    list: ['plugins', 'list'] as const,
   },
   objectStore: {
     config: ['object-store', 'config'] as const,
@@ -420,15 +415,12 @@ export function settingsSummaryQueryOptions(options?: QueryEnabledOnly) {
   return queryOptions({
     queryKey: queryKeys.settings.summary,
     queryFn: async (): Promise<SettingsSummary> => {
-      const [apps, tls, objectStore, sshKeys, plugins, postgres, redis, mysql] = await Promise.all([
+      const [apps, tls, objectStore, sshKeys, services] = await Promise.all([
         fetchApps(),
         fetchLetsEncryptConfig(),
         fetchObjectStoreConfig(),
         fetchSshKeys(),
-        fetchPlugins(),
-        fetchManagedServices('postgres'),
-        fetchManagedServices('redis'),
-        fetchManagedServices('mysql'),
+        Promise.all(MANAGED_SERVICE_KINDS.map((kind) => fetchManagedServices(kind))),
       ]);
 
       return {
@@ -438,8 +430,7 @@ export function settingsSummaryQueryOptions(options?: QueryEnabledOnly) {
         objectStoreConfigured: objectStore.configured,
         objectStoreProvider: objectStore.object_store?.provider ?? null,
         sshKeyCount: sshKeys.length,
-        pluginCount: plugins.length,
-        totalServices: postgres.length + redis.length + mysql.length,
+        totalServices: services.reduce((total, list) => total + list.length, 0),
       };
     },
     enabled: options?.enabled,

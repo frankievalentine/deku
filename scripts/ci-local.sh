@@ -25,6 +25,13 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 log "Running Rust tests"
 cargo test --all
 
+log "Auditing Rust dependencies"
+if command -v cargo-audit >/dev/null 2>&1; then
+  cargo audit
+else
+  log "cargo-audit is not installed; skipping (cargo install cargo-audit)"
+fi
+
 log "Running installer smoke test"
 "${ROOT_DIR}/scripts/test-install-smoke.sh"
 

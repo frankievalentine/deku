@@ -6,17 +6,43 @@ DEKU_REPO="${DEKU_REPO:-frankievalentine/deku}"
 DEKU_RELEASE_BASE_URL="${DEKU_RELEASE_BASE_URL:-}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 SHARE_DIR="${SHARE_DIR:-/usr/local/share/deku}"
-CONFIG_DIR="${DEKU_CONFIG_DIR:-${HOME:-/root}/.deku}"
+# New installs keep config in /etc/deku and state in /var/lib/deku. Installs from
+# before that layout keep using ~/.deku, which `deku` and `dekud` also look for.
+LEGACY_CONFIG_DIR="${HOME:-/root}/.deku"
+if [[ -n "${DEKU_CONFIG_DIR:-}" ]]; then
+  CONFIG_DIR="${DEKU_CONFIG_DIR}"
+elif [[ ! -f /etc/deku/config.toml && -f "${LEGACY_CONFIG_DIR}/config.toml" ]]; then
+  CONFIG_DIR="${LEGACY_CONFIG_DIR}"
+else
+  CONFIG_DIR="/etc/deku"
+fi
 ANGIE_CONF_DIR="${ANGIE_CONF_DIR:-/etc/angie/conf.d/deku}"
 ANGIE_BASE_CONF="${ANGIE_BASE_CONF:-/etc/angie/conf.d/deku-default.conf}"
 SYSTEMD_UNIT_PATH="${SYSTEMD_UNIT_PATH:-/etc/systemd/system/deku.service}"
 DEKU_GLOBAL_DOMAIN="${DEKU_GLOBAL_DOMAIN:-}"
 DEKU_API_PORT="${DEKU_API_PORT:-2810}"
+# Address the dashboard listens on. Empty keeps `deku setup`'s default, loopback.
+DEKU_API_BIND="${DEKU_API_BIND:-}"
 DEKU_SSH_PORT="${DEKU_SSH_PORT:-2222}"
-DEKU_DATA_DIR="${DEKU_DATA_DIR:-${CONFIG_DIR}}"
+if [[ "${CONFIG_DIR}" == "/etc/deku" ]]; then
+  DEKU_DATA_DIR="${DEKU_DATA_DIR:-/var/lib/deku}"
+else
+  DEKU_DATA_DIR="${DEKU_DATA_DIR:-${CONFIG_DIR}}"
+fi
+
+# The public key that signs each release's SHA256SUMS. The private half lives in
+# the release workflow's secrets; scripts/release-signing-keygen.sh writes this.
+# BEGIN RELEASE SIGNING KEY
+# END RELEASE SIGNING KEY
+
+# Releases before this one were published without a signature. They still install,
+# checked against SHA256SUMS only, with a warning; from this version on a missing
+# or invalid signature stops the install.
+FIRST_SIGNED_VERSION="v0.2.1"
 
 TMP_DIR="$(mktemp -d)"
 CHECKSUMS_FILE="${TMP_DIR}/SHA256SUMS"
+CHECKSUMS_SIGNATURE_FILE="${TMP_DIR}/SHA256SUMS.sig"
 RESOLVED_VERSION=""
 SETUP_RAN=0
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -200,13 +226,51 @@ download_checksums() {
   local base_url
   base_url="$(release_base_url)"
 
-  if curl --fail --location --silent --retry 3 \
+  if ! curl --fail --location --silent --retry 3 \
     "${base_url}/SHA256SUMS" \
     -o "${CHECKSUMS_FILE}"; then
+    fail "SHA256SUMS not found for this release; refusing to install unverified binaries"
+  fi
+
+  if curl --fail --location --silent --retry 3 \
+    "${base_url}/SHA256SUMS.sig" \
+    -o "${CHECKSUMS_SIGNATURE_FILE}"; then
+    verify_checksums_signature "${CHECKSUMS_FILE}" "${CHECKSUMS_SIGNATURE_FILE}"
     return 0
   fi
 
-  fail "SHA256SUMS not found for this release; refusing to install unverified binaries"
+  local version
+  version="$(resolve_requested_version)"
+  if release_requires_signature "$version"; then
+    fail "SHA256SUMS.sig not found for ${version}; refusing to install an unsigned release"
+  fi
+  warn "${version} predates signed releases; verifying checksums only"
+}
+
+# Whether a release is new enough that it must carry a signature.
+release_requires_signature() {
+  local version="$1"
+  local oldest
+  oldest="$(printf '%s\n%s\n' "$FIRST_SIGNED_VERSION" "$version" | sort -V | head -n 1)"
+  [[ "$oldest" == "$FIRST_SIGNED_VERSION" ]]
+}
+
+# Check SHA256SUMS against the release signing key, so a release whose assets
+# were replaced without the key is refused even when its checksums match.
+verify_checksums_signature() {
+  local checksums="$1"
+  local signature="$2"
+
+  if [[ -z "${RELEASE_SIGNING_PUBLIC_KEY:-}" ]]; then
+    fail "this installer has no release signing key; refusing to install"
+  fi
+  command -v openssl >/dev/null 2>&1 || fail "openssl is required to verify the release signature"
+
+  local key_file="${TMP_DIR}/release-signing.pub"
+  printf '%s\n' "$RELEASE_SIGNING_PUBLIC_KEY" > "$key_file"
+  if ! openssl dgst -sha256 -verify "$key_file" -signature "$signature" "$checksums" >/dev/null 2>&1; then
+    fail "SHA256SUMS signature verification failed; refusing to install"
+  fi
 }
 
 download_dashboard_bundle() {
@@ -244,7 +308,7 @@ install_prerequisites() {
 
   log "Installing system packages"
   quiet_run apt-get update -qq
-  quiet_run apt-get install -y -qq ca-certificates curl gnupg tar
+  quiet_run apt-get install -y -qq ca-certificates curl gnupg openssl tar
 }
 
 angie_repo_line() {
@@ -346,6 +410,10 @@ run_setup() {
     cmd+=(--api-port "${DEKU_API_PORT}")
   fi
 
+  if [[ -n "${DEKU_API_BIND}" ]]; then
+    cmd+=(--api-bind "${DEKU_API_BIND}")
+  fi
+
   if [[ "${DEKU_SSH_PORT}" != "2222" ]]; then
     cmd+=(--ssh-port "${DEKU_SSH_PORT}")
   fi
@@ -409,6 +477,13 @@ configured_data_dir() {
   fi
 
   printf '%s\n' "$data_dir"
+}
+
+# Prints the configured api_bind, or nothing for a config from before the
+# setting existed, which listens on every interface.
+configured_api_bind() {
+  local config_path="${CONFIG_DIR}/config.toml"
+  sed -n 's/^api_bind = "\(.*\)"$/\1/p' "$config_path" | head -n 1
 }
 
 configured_api_port() {
@@ -611,9 +686,25 @@ print_setup_summary() {
     printf 'Dashboard token: %s\n' "$dashboard_token"
   fi
 
+  print_dashboard_access "$api_port" "$dashboard_host" "$4"
+}
+
+print_dashboard_access() {
+  local api_port="$1"
+  local dashboard_host="$2"
+  local api_bind="$3"
+
+  if [[ "$api_bind" == 127.* || "$api_bind" == "::1" ]]; then
+    printf 'Dashboard URL: %s\n' "$(bold "http://127.0.0.1:${api_port}")"
+    printf 'SSH tunnel:    ssh -L %s:127.0.0.1:%s root@%s\n' "$api_port" "$api_port" "$dashboard_host"
+    printf 'The dashboard listens on loopback only. Start the tunnel, then open the URL above.\n'
+    return
+  fi
+
   printf 'Dashboard URL: %s\n' "$(bold "http://${dashboard_host}:${api_port}")"
   printf 'Local URL:     %s\n' "$(bold "http://127.0.0.1:${api_port}")"
   printf 'SSH tunnel:    ssh -L %s:127.0.0.1:%s root@%s\n' "$api_port" "$api_port" "$dashboard_host"
+  warn "The dashboard is served over plain HTTP on every interface. Set api_bind = \"127.0.0.1\" in ${CONFIG_DIR}/config.toml and use the SSH tunnel."
 }
 
 print_get_started() {
@@ -650,6 +741,8 @@ main() {
   data_dir="$(configured_data_dir)"
   local api_port
   api_port="$(configured_api_port)"
+  local api_bind
+  api_bind="$(configured_api_bind)"
   local ssh_port
   ssh_port="$(configured_ssh_port)"
   install_dashboard_assets "$data_dir"
@@ -666,14 +759,12 @@ main() {
   fi
 
   if [[ "$SETUP_RAN" == "1" ]]; then
-    print_setup_summary "$api_port" "$dashboard_token" "$dashboard_host"
+    print_setup_summary "$api_port" "$dashboard_token" "$dashboard_host" "$api_bind"
   else
     printf '\n'
     success "Deku successfully installed."
     printf '\n'
-    printf 'Dashboard URL: %s\n' "$(bold "http://${dashboard_host}:${api_port}")"
-    printf 'Local URL:     %s\n' "$(bold "http://127.0.0.1:${api_port}")"
-    printf 'SSH tunnel:    ssh -L %s:127.0.0.1:%s root@%s\n' "$api_port" "$api_port" "$dashboard_host"
+    print_dashboard_access "$api_port" "$dashboard_host" "$api_bind"
   fi
   printf '\n'
   print_get_started

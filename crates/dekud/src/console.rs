@@ -62,6 +62,8 @@ pub async fn run_once(
         )])),
         host_config: Some(HostConfig {
             mounts: Some(mounts),
+            // On the shared network so a one-off task reaches linked services.
+            network_mode: Some(crate::container::DEKU_NETWORK.to_string()),
             ..Default::default()
         }),
         ..Default::default()

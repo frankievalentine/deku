@@ -36,7 +36,6 @@ use deku_core::{
     auth::{issue_dashboard_token, DashboardTokenState},
     types::{NewApp, ObjectStoreConfig, Upstream},
 };
-use deku_plugin_sdk::context::AppContext;
 
 mod acme;
 pub mod auth;
@@ -54,7 +53,6 @@ pub struct AppState {
     pub events: EventSender,
     pub logs: std::sync::Arc<crate::logs::LogBus>,
     pub docker: DockerClient,
-    pub plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     pub deploy_locks: crate::deploy_lock::AppDeployLocks,
 }
 
@@ -65,7 +63,6 @@ impl AppState {
         events: EventSender,
         logs: std::sync::Arc<crate::logs::LogBus>,
         docker: DockerClient,
-        plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     ) -> Arc<Self> {
         Arc::new(Self {
             dashboard_auth: RwLock::new(config.dashboard_auth.clone()),
@@ -75,7 +72,6 @@ impl AppState {
             events,
             logs,
             docker,
-            plugins,
             deploy_locks: crate::deploy_lock::AppDeployLocks::default(),
         })
     }
@@ -177,9 +173,6 @@ fn build_api_router(state: SharedState) -> Router {
         .route("/api/ssh-keys", get(list_ssh_keys).post(add_ssh_key))
         .route("/api/ssh-keys/{name}", delete(remove_ssh_key))
         // Plugins
-        .route("/api/plugins", get(list_plugins).post(install_plugin))
-        .route("/api/plugins/runtime", get(get_plugins_runtime))
-        .route("/api/plugins/{name}", delete(uninstall_plugin))
         // Object store
         .route(
             "/api/objectstore",
@@ -588,8 +581,8 @@ pub async fn serve(state: SharedState) -> anyhow::Result<()> {
         .merge(tcp_api)
         .layer(TraceLayer::new_for_http().make_span_with(make_span));
 
-    let tcp_addr = format!("0.0.0.0:{}", state.config.api_port);
-    let tcp_listener = TcpListener::bind(&tcp_addr).await?;
+    let tcp_addr = state.config.api_listen_addr();
+    let tcp_listener = TcpListener::bind(tcp_addr).await?;
     info!("API listening on {tcp_addr}");
 
     let sock_path = &state.config.socket_path;
@@ -612,8 +605,9 @@ pub async fn serve(state: SharedState) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Force no-referrer and no-store on API responses so a token carried in a URL
-/// is not propagated to other origins or retained by caches.
+/// Force no-referrer and no-store on API responses so a deploy token carried in
+/// a webhook URL is not propagated to other origins, and API responses are not
+/// retained by caches.
 async fn security_headers(request: axum::extract::Request, next: middleware::Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -1197,10 +1191,11 @@ async fn revoke_app_deploy_token(
 /// Reload the fields managed through the config API (object store, registry,
 /// build host) so changes take effect without restarting `dekud`. Paths, ports,
 /// and other startup settings stay frozen at their running values.
-fn current_config(state: &SharedState) -> DekuConfig {
+pub(crate) fn current_config(state: &SharedState) -> DekuConfig {
     match crate::config::load() {
         Ok(fresh) => {
             let mut cfg = state.config.clone();
+            cfg.dashboard_domain = fresh.dashboard_domain;
             cfg.object_store = fresh.object_store;
             cfg.registry = fresh.registry;
             cfg.build_host = fresh.build_host;
@@ -1699,13 +1694,6 @@ async fn create_app(
                 "app.created",
                 Some(serde_json::json!({ "name": app.name })),
             );
-            state
-                .plugins
-                .run_app_create(&AppContext {
-                    app: app.clone(),
-                    data_dir: state.config.data_dir.clone(),
-                })
-                .await;
             if let Err(error) = crate::hooks::fire(
                 &current_config(&state),
                 crate::hooks::HookEvent::AppCreated,
@@ -1782,13 +1770,6 @@ async fn delete_app(
             if let Err(e) = crate::proxy::reload().await {
                 tracing::warn!("angie reload failed after app delete: {e}");
             }
-            state
-                .plugins
-                .run_app_destroy(&AppContext {
-                    app: app.clone(),
-                    data_dir: state.config.data_dir.clone(),
-                })
-                .await;
             if let Err(error) = crate::hooks::fire(
                 &current_config(&state),
                 crate::hooks::HookEvent::AppDestroyed,
@@ -2665,6 +2646,11 @@ async fn doctor(State(state): State<SharedState>) -> impl IntoResponse {
     }
 
     checks.push(encryption_at_rest_check(&state).await);
+    checks.push(published_ports_check(&state.docker).await);
+    checks.push(api_bind_check(&state.config));
+    if let Some(check) = dashboard_domain_check(&state).await {
+        checks.push(check);
+    }
 
     // Certificate settings are only checked when a certificate is wanted, so a
     // host that has not configured one does not report noise about it.
@@ -2684,6 +2670,121 @@ async fn doctor(State(state): State<SharedState>) -> impl IntoResponse {
         Json(serde_json::json!({ "status": overall, "checks": checks })),
     )
         .into_response()
+}
+
+/// Warn when the dashboard and TCP API listen beyond loopback, where the
+/// dashboard token crosses the network over plain HTTP.
+fn api_bind_check(cfg: &crate::config::DekuConfig) -> serde_json::Value {
+    let addr = cfg.api_listen_addr();
+    if addr.ip().is_loopback() {
+        serde_json::json!({
+            "name": "api_bind",
+            "status": "ok",
+            "detail": format!("dashboard listens on {addr}; reach it through an SSH tunnel"),
+        })
+    } else {
+        serde_json::json!({
+            "name": "api_bind",
+            "status": "warn",
+            "detail": format!(
+                "dashboard listens on {addr} over plain HTTP; set api_bind = \"127.0.0.1\" and use an SSH tunnel, or restrict port {} in the firewall",
+                cfg.api_port
+            ),
+        })
+    }
+}
+
+/// Report whether a configured `dashboard_domain` is being served.
+async fn dashboard_domain_check(state: &SharedState) -> Option<serde_json::Value> {
+    let cfg = current_config(state);
+    let wildcard_issued = cfg.acme.enabled
+        && cfg.acme.wildcard
+        && crate::acme::file::wildcard_certificate(&cfg.acme).exists();
+    let app_domains = queries::list_all_domain_names(&state.pool)
+        .await
+        .unwrap_or_default();
+    match crate::proxy::dashboard::desired(&cfg, wildcard_issued, &app_domains) {
+        crate::proxy::dashboard::Desired::Disabled => None,
+        crate::proxy::dashboard::Desired::Published { domain } => Some(serde_json::json!({
+            "name": "dashboard_domain",
+            "status": "ok",
+            "detail": format!("dashboard published at https://{domain}"),
+        })),
+        crate::proxy::dashboard::Desired::Unavailable { domain, reason } => {
+            Some(serde_json::json!({
+                "name": "dashboard_domain",
+                "status": "warn",
+                "detail": format!("{domain} is not published: {reason}"),
+            }))
+        }
+    }
+}
+
+/// Warn about Deku containers that publish a port on every interface.
+///
+/// Docker writes its own firewall rules, so such a port is reachable from
+/// outside the host even behind UFW, and it bypasses Angie's auth, maintenance
+/// and redirect rules. Containers from before replicas bound to loopback keep
+/// their binding until the app is redeployed.
+async fn published_ports_check(docker: &crate::container::DockerClient) -> serde_json::Value {
+    let options = bollard::query_parameters::ListContainersOptionsBuilder::default()
+        .filters(&std::collections::HashMap::from([(
+            "label",
+            vec!["deku.managed=true"],
+        )]))
+        .build();
+    match docker.list_containers(Some(options)).await {
+        Ok(containers) => {
+            let exposed = containers_published_on_all_interfaces(&containers);
+            if exposed.is_empty() {
+                serde_json::json!({
+                    "name": "published_ports",
+                    "status": "ok",
+                    "detail": "no Deku container publishes a port beyond loopback",
+                })
+            } else {
+                serde_json::json!({
+                    "name": "published_ports",
+                    "status": "warn",
+                    "detail": format!(
+                        "reachable from outside the host, bypassing Angie: {}; redeploy their apps to bind to loopback",
+                        exposed.join(", ")
+                    ),
+                })
+            }
+        }
+        Err(error) => serde_json::json!({
+            "name": "published_ports",
+            "status": "warn",
+            "detail": format!("could not list containers: {error}"),
+        }),
+    }
+}
+
+/// Names of containers with a host port bound to anything but loopback.
+fn containers_published_on_all_interfaces(
+    containers: &[bollard::models::ContainerSummary],
+) -> Vec<String> {
+    containers
+        .iter()
+        .filter(|container| {
+            container.ports.iter().flatten().any(|port| {
+                port.public_port.is_some()
+                    && port
+                        .ip
+                        .as_deref()
+                        .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
+                        .is_none_or(|ip| !ip.is_loopback())
+            })
+        })
+        .filter_map(|container| {
+            container
+                .names
+                .as_ref()
+                .and_then(|names| names.first())
+                .map(|name| name.trim_start_matches('/').to_string())
+        })
+        .collect()
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -3412,12 +3513,11 @@ async fn list_deployments(
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct DeployBody {
-    /// "source" | "image" | "archive"
+    /// Only "image" is accepted. Source archives are uploaded to
+    /// `/api/apps/{name}/deploy/archive` instead.
     source: String,
     /// Image reference (when source = "image")
     image: Option<String>,
-    /// Archive path or URL (when source = "archive")
-    archive: Option<String>,
     /// Force a specific builder
     builder: Option<String>,
     /// Build host selection: omit for the configured default, "local" to build
@@ -3425,6 +3525,22 @@ struct DeployBody {
     build_host: Option<String>,
     /// Environment slug to deploy into. Omit for production.
     environment: Option<String>,
+}
+
+/// The deploy source a JSON deploy request may name.
+///
+/// Only image deploys are accepted here. This route is open to app-scoped
+/// deploy tokens, so it must never take a host path or URL for the daemon to
+/// read: source archives arrive as uploads on the multipart route instead.
+fn json_deploy_source(source: &str, image: Option<String>) -> Result<DeploySource, &'static str> {
+    match source {
+        "image" => image
+            .map(|reference| DeploySource::Image { reference })
+            .ok_or("image is required for source=image"),
+        _ => {
+            Err("source must be 'image'; upload source archives to /api/apps/{name}/deploy/archive")
+        }
+    }
 }
 
 /// Resolve a deploy's target environment id, or a response describing why not.
@@ -3499,40 +3615,9 @@ async fn trigger_deploy(
             Err(response) => return response.into_response(),
         };
 
-    let deploy_source = match body.source.as_str() {
-        "image" => {
-            let image = match body.image {
-                Some(i) => i,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": "image is required for source=image" })),
-                    )
-                        .into_response();
-                }
-            };
-            DeploySource::Image { reference: image }
-        }
-        "archive" => {
-            let archive = match body.archive {
-                Some(a) => a,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": "archive is required for source=archive" })),
-                    )
-                        .into_response();
-                }
-            };
-            DeploySource::Archive { path: archive }
-        }
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "source must be 'image' or 'archive'" })),
-            )
-                .into_response();
-        }
+    let deploy_source = match json_deploy_source(&body.source, body.image) {
+        Ok(source) => source,
+        Err(message) => return bad_request(message).into_response(),
     };
 
     let req = DeployRequest {
@@ -3549,17 +3634,13 @@ async fn trigger_deploy(
     let events = state.events.clone();
     let logs = state.logs.clone();
     let cfg = current_config(&state);
-    let plugins = state.plugins.clone();
     let app_id = app.id.clone();
     let deploy_lock = state.deploy_locks.for_app(&app.id);
 
     // Run deploy in background so the HTTP response returns immediately
     tokio::spawn(async move {
         let _guard = deploy_lock.lock().await;
-        if let Err(e) =
-            crate::deploy::run_deploy(&pool, &docker, &events, &logs, &cfg, plugins.as_ref(), req)
-                .await
-        {
+        if let Err(e) = crate::deploy::run_deploy(&pool, &docker, &events, &logs, &cfg, req).await {
             tracing::error!(app = %app_id, "deploy failed: {e}");
         }
     });
@@ -3604,7 +3685,6 @@ async fn trigger_rollback(
     let events = state.events.clone();
     let logs = state.logs.clone();
     let cfg = state.config.clone();
-    let plugins = state.plugins.clone();
     // Resolve before spawning so an unknown environment fails the request.
     let environment_id =
         match resolve_deploy_environment(&state, &app.id, body.environment.as_deref()).await {
@@ -3647,7 +3727,6 @@ async fn trigger_rollback(
             &events,
             &logs,
             &cfg,
-            plugins.as_ref(),
             &app_id,
             &name,
             Some(&environment_id),
@@ -4634,103 +4713,6 @@ async fn remove_ssh_key(
     }
 }
 
-// ── Plugins ───────────────────────────────────────────────────────────────────
-
-#[utoipa::path(
-    get,
-    path = "/api/plugins",
-    tag = "plugins",
-    responses((status = 200, description = "List installed plugins"))
-)]
-async fn list_plugins(State(state): State<SharedState>) -> impl IntoResponse {
-    let plugins = state.plugins.list_plugins().await;
-    let json: Vec<_> = plugins
-        .iter()
-        .map(|(name, version, path)| {
-            serde_json::json!({
-                "name": name,
-                "version": version,
-                "path": path.display().to_string(),
-            })
-        })
-        .collect();
-    (StatusCode::OK, Json(serde_json::json!(json))).into_response()
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/plugins/runtime",
-    tag = "plugins",
-    responses((status = 200, description = "Dynamic plugin runtime availability", body = openapi::PluginRuntimeSchema))
-)]
-async fn get_plugins_runtime() -> impl IntoResponse {
-    let available = crate::plugins::dynamic_runtime_available();
-    let mut payload = serde_json::json!({ "available": available });
-    if !available {
-        payload["message"] =
-            serde_json::Value::String(crate::plugins::runtime_unavailable_message().to_string());
-    }
-    (StatusCode::OK, Json(payload)).into_response()
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-struct InstallPluginBody {
-    path: String,
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/plugins",
-    tag = "plugins",
-    request_body = InstallPluginBody,
-    responses((status = 201, description = "Install a plugin"))
-)]
-async fn install_plugin(
-    State(state): State<SharedState>,
-    Json(body): Json<InstallPluginBody>,
-) -> impl IntoResponse {
-    if !crate::plugins::dynamic_runtime_available() {
-        return (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(serde_json::json!({
-                "error": crate::plugins::runtime_unavailable_message(),
-            })),
-        )
-            .into_response();
-    }
-
-    let path = std::path::Path::new(&body.path);
-    match state.plugins.load_plugin(path).await {
-        Ok(name) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "name": name })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-#[utoipa::path(
-    delete,
-    path = "/api/plugins/{name}",
-    tag = "plugins",
-    params(("name" = String, Path, description = "Plugin name")),
-    responses((status = 204, description = "No content"))
-)]
-async fn uninstall_plugin(
-    State(state): State<SharedState>,
-    axum::extract::Path(name): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    match state.plugins.unload_plugin(&name).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => not_found(e).into_response(),
-    }
-}
-
 // ── Archive deploy ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -4874,13 +4856,11 @@ async fn deploy_archive(
                 .into_response();
         }
     };
-    let path_str = tmp_path.to_string_lossy().to_string();
-
     let req = DeployRequest {
         app_id: app.id.clone(),
         app_name: name.clone(),
         source: DeploySource::Archive {
-            path: path_str.clone(),
+            path: tmp_path.clone(),
         },
         force_builder: params.builder,
         build_host: params.build_host,
@@ -4892,19 +4872,15 @@ async fn deploy_archive(
     let events = state.events.clone();
     let logs = state.logs.clone();
     let cfg = current_config(&state);
-    let plugins = state.plugins.clone();
     let app_id = app.id.clone();
     let deploy_lock = state.deploy_locks.for_app(&app.id);
 
     tokio::spawn(async move {
         let _guard = deploy_lock.lock().await;
-        if let Err(e) =
-            crate::deploy::run_deploy(&pool, &docker, &events, &logs, &cfg, plugins.as_ref(), req)
-                .await
-        {
+        if let Err(e) = crate::deploy::run_deploy(&pool, &docker, &events, &logs, &cfg, req).await {
             tracing::error!(app = %app_id, "archive deploy failed: {e}");
         }
-        let _ = std::fs::remove_file(&path_str);
+        let _ = std::fs::remove_file(&tmp_path);
     });
 
     (
@@ -4912,6 +4888,67 @@ async fn deploy_archive(
         Json(serde_json::json!({ "message": "deploy started", "app": name })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod published_ports_tests {
+    use super::containers_published_on_all_interfaces;
+    use bollard::models::{ContainerSummary, PortSummary};
+
+    fn container(name: &str, ip: Option<&str>, public_port: Option<u16>) -> ContainerSummary {
+        ContainerSummary {
+            names: Some(vec![format!("/{name}")]),
+            ports: Some(vec![PortSummary {
+                ip: ip.map(str::to_string),
+                private_port: 3000,
+                public_port,
+                typ: None,
+            }]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reports_ports_bound_beyond_loopback() {
+        let containers = vec![
+            container("deku.web.a", Some("0.0.0.0"), Some(49153)),
+            container("deku.web.b", Some("::"), Some(49154)),
+            container("deku.web.c", Some("127.0.0.1"), Some(49155)),
+            container("deku-postgres-db", None, None),
+        ];
+        assert_eq!(
+            containers_published_on_all_interfaces(&containers),
+            vec!["deku.web.a".to_string(), "deku.web.b".to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod json_deploy_source_tests {
+    use super::json_deploy_source;
+    use crate::deploy::DeploySource;
+
+    #[test]
+    fn accepts_an_image_reference() {
+        let source = json_deploy_source("image", Some("nginx:alpine".to_string()));
+        assert!(matches!(
+            source,
+            Ok(DeploySource::Image { ref reference }) if reference == "nginx:alpine"
+        ));
+    }
+
+    #[test]
+    fn requires_an_image_for_an_image_deploy() {
+        assert!(json_deploy_source("image", None).is_err());
+    }
+
+    #[test]
+    fn rejects_an_archive_path_or_url() {
+        // A deploy token reaches this route, so a caller-named archive would let
+        // it read host files or make the daemon fetch arbitrary URLs.
+        assert!(json_deploy_source("archive", None).is_err());
+        assert!(json_deploy_source("source", None).is_err());
+    }
 }
 
 #[cfg(test)]

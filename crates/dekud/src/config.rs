@@ -13,11 +13,21 @@ pub struct DekuConfig {
     pub socket_path: PathBuf,
     #[serde(default = "default_api_port")]
     pub api_port: u16,
+    /// Address the TCP API and dashboard listen on. Absent means every
+    /// interface, which installs from before this setting relied on; `deku
+    /// setup` writes loopback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_bind: Option<std::net::IpAddr>,
     #[serde(default = "default_dashboard_port")]
     pub dashboard_port: u16,
     #[serde(default = "default_ssh_port")]
     pub ssh_port: u16,
     pub global_domain: Option<String>,
+    /// Publish the dashboard through Angie at this hostname, over HTTPS with the
+    /// global domain's wildcard certificate. Must be one label below
+    /// `global_domain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard_domain: Option<String>,
     #[serde(default = "default_container_backend")]
     pub container_backend: String,
     /// Reserved for future compatibility. Dashboard access no longer uses this field.
@@ -404,9 +414,11 @@ struct RawDekuConfig {
     data_dir: Option<PathBuf>,
     socket_path: Option<PathBuf>,
     api_port: Option<u16>,
+    api_bind: Option<std::net::IpAddr>,
     dashboard_port: Option<u16>,
     ssh_port: Option<u16>,
     global_domain: Option<String>,
+    dashboard_domain: Option<String>,
     container_backend: Option<String>,
     auth_secret: Option<String>,
     angie_conf_dir: Option<PathBuf>,
@@ -424,16 +436,8 @@ struct RawDekuConfig {
     acme: Option<AcmeConfig>,
 }
 
-fn default_config_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/root"))
-        .join(".deku")
-}
-
 fn config_dir() -> PathBuf {
-    std::env::var_os("DEKU_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(default_config_dir)
+    deku_core::paths::config_dir()
 }
 
 fn config_path() -> PathBuf {
@@ -441,7 +445,7 @@ fn config_path() -> PathBuf {
 }
 
 fn default_data_dir() -> PathBuf {
-    default_config_dir()
+    deku_core::paths::default_data_dir_for(&config_dir())
 }
 
 fn default_socket_path() -> PathBuf {
@@ -450,6 +454,16 @@ fn default_socket_path() -> PathBuf {
 
 fn default_socket_path_for(data_dir: &Path) -> PathBuf {
     data_dir.join("deku.sock")
+}
+
+impl DekuConfig {
+    /// The socket address the TCP API binds.
+    pub fn api_listen_addr(&self) -> std::net::SocketAddr {
+        let ip = self
+            .api_bind
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        std::net::SocketAddr::new(ip, self.api_port)
+    }
 }
 
 fn default_api_port() -> u16 {
@@ -510,9 +524,11 @@ impl Default for DekuConfig {
             data_dir: default_data_dir(),
             socket_path: default_socket_path(),
             api_port: default_api_port(),
+            api_bind: None,
             dashboard_port: default_dashboard_port(),
             ssh_port: default_ssh_port(),
             global_domain: None,
+            dashboard_domain: None,
             container_backend: default_container_backend(),
             auth_secret: None,
             angie_conf_dir: default_angie_conf_dir(),
@@ -702,9 +718,11 @@ pub fn load() -> Result<DekuConfig> {
             .socket_path
             .unwrap_or_else(|| default_socket_path_for(&data_dir)),
         api_port: raw.api_port.unwrap_or_else(default_api_port),
+        api_bind: raw.api_bind,
         dashboard_port: raw.dashboard_port.unwrap_or_else(default_dashboard_port),
         ssh_port: raw.ssh_port.unwrap_or_else(default_ssh_port),
         global_domain: raw.global_domain,
+        dashboard_domain: raw.dashboard_domain,
         container_backend: raw
             .container_backend
             .unwrap_or_else(default_container_backend),
@@ -753,6 +771,22 @@ pub fn dashboard_assets_available(cfg: &DekuConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_unset_api_bind_listens_on_every_interface() {
+        let cfg = DekuConfig::default();
+        assert_eq!(cfg.api_listen_addr().to_string(), "0.0.0.0:2810");
+    }
+
+    #[test]
+    fn api_bind_sets_the_listen_address() {
+        let cfg = DekuConfig {
+            api_bind: Some("127.0.0.1".parse().expect("ip")),
+            api_port: 2900,
+            ..DekuConfig::default()
+        };
+        assert_eq!(cfg.api_listen_addr().to_string(), "127.0.0.1:2900");
+    }
 
     #[test]
     fn at_rest_cipher_is_absent_without_configuration() {

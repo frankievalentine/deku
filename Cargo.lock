@@ -971,12 +971,14 @@ dependencies = [
  "flate2",
  "futures",
  "percent-encoding",
+ "rand 0.10.2",
  "reqwest",
  "russh",
  "serde",
  "serde_json",
  "sqlx",
  "tar",
+ "tempfile",
  "tokio",
  "toml",
 ]
@@ -988,112 +990,13 @@ dependencies = [
  "argon2",
  "chrono",
  "rand 0.10.2",
+ "rustix",
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.20",
  "uuid",
-]
-
-[[package]]
-name = "deku-plugin-checks"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-cron"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-domains"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-git"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-letsencrypt"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-mysql"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-network"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-postgres"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-redis"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
-]
-
-[[package]]
-name = "deku-plugin-sdk"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-core",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "deku-plugin-storage"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "deku-plugin-sdk",
- "tracing",
 ]
 
 [[package]]
@@ -1111,15 +1014,12 @@ dependencies = [
  "chrono",
  "config",
  "deku-core",
- "deku-plugin-sdk",
- "dirs",
  "flate2",
  "futures",
  "handlebars",
  "hex",
  "hmac 0.13.0",
  "libc",
- "libloading",
  "percent-encoding",
  "pwhash",
  "rand 0.10.2",
@@ -1678,11 +1578,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2355,16 +2253,6 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
-
-[[package]]
-name = "libloading"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
-dependencies = [
- "cfg-if",
- "windows-link",
-]
 
 [[package]]
 name = "libredox"
@@ -3047,15 +2935,16 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.15"
+version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
+checksum = "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
 dependencies = [
  "aws-lc-rs",
  "bytes",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "lru-slab",
- "rand 0.9.5",
+ "rand 0.10.2",
+ "rand_pcg",
  "ring",
  "rustc-hash",
  "rustls",
@@ -3177,6 +3066,15 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rand_pcg"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+dependencies = [
+ "rand_core 0.10.1",
+]
 
 [[package]]
 name = "redox_syscall"
@@ -3462,9 +3360,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "once_cell",

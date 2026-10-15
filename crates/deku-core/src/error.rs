@@ -26,9 +26,6 @@ pub enum DekuError {
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    #[error("plugin error: {0}")]
-    Plugin(String),
-
     #[error("unauthorized")]
     Unauthorized,
 

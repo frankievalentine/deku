@@ -468,7 +468,6 @@ async fn run_git_deploy(
         &state.events,
         &state.logs,
         &state.config,
-        state.plugins.as_ref(),
         req,
     )
     .await?;

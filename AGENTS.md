@@ -179,7 +179,7 @@ deku letsencrypt status <app>  # TLS certificates
 ## What Not To Do
 
 - Do not make `git push` the default deployment path
-- Do not use the dynamic plugin runtime for first-party workflows: it is compiled out by default, and HTTP lifecycle hooks are the supported integration point
+- Do not look for an in-process plugin system: HTTP lifecycle hooks are the integration point
 - Do not attempt broad unattended platform administration
 - Do not assume MCP exists today
 - Do not run interactive commands: `deku run` and `deku exec` do not attach a terminal
@@ -201,7 +201,6 @@ Supported today:
 
 Out of scope today:
 
-- Plugin authoring with a dynamic `cdylib`
 - MCP implementation
 - Broad unattended platform administration
 
@@ -209,4 +208,4 @@ Out of scope today:
 
 The CLI and daemon HTTP API already cover the coding-agent workflow, so MCP is not required today.
 
-Revisit MCP when external assistants without shell access need structured access to a stable subset: apps, deploy, config, domains, logs, and deployments. Leave dynamic plugin surfaces out of any first design.
+Revisit MCP when external assistants without shell access need structured access to a stable subset: apps, deploy, config, domains, logs, and deployments.

@@ -1,12 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import {
-  appEventStreamUrl,
-  appLogStreamUrl,
+  appEventStreamPath,
+  appLogStreamPath,
   type EventRecord,
-  getToken,
   type LogFilters,
   type LogLine,
+  openEventStream,
 } from '../lib/api';
 import { type AppLogEntry, queryKeys, useAppLogsQuery } from '../lib/query';
 import SelectField from './SelectField';
@@ -19,6 +19,7 @@ type LogTrackingState = 'live' | 'retrying' | 'not_live';
 
 const TAIL_SIZE = 200;
 const MAX_ENTRIES = 1000;
+const RECONNECT_DELAY_MS = 2500;
 
 export default function LogStream({ appName }: LogStreamProps) {
   const queryClient = useQueryClient();
@@ -31,8 +32,6 @@ export default function LogStream({ appName }: LogStreamProps) {
   const [source, setSource] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const reconnectRef = useRef<number | null>(null);
 
   // Stable identity so the query key and the live append target the same cache entry.
   const filters = useMemo<LogFilters>(() => {
@@ -90,41 +89,35 @@ export default function LogStream({ appName }: LogStreamProps) {
     setTrackingState('not_live');
     setClearedCount(0);
 
+    let closeStream: (() => void) | null = null;
+    let reconnectTimer: number | null = null;
+
     function connect() {
       if (cancelled) return;
-      const token = getToken();
-      const source = new EventSource(appLogStreamUrl(appName, token ?? undefined, filters));
-      eventSourceRef.current = source;
-
-      source.onopen = () => {
-        setError(null);
-        setTrackingState('live');
-      };
-
-      source.onmessage = (message) => {
-        const line = parseLogLine(message.data);
-        if (line) handleIncomingLine(line);
-      };
-
-      source.onerror = () => {
-        setTrackingState('retrying');
-        setError('Stream interrupted. Retrying…');
-        source.close();
-        if (reconnectRef.current !== null) {
-          window.clearTimeout(reconnectRef.current);
-        }
-        reconnectRef.current = window.setTimeout(connect, 2500);
-      };
+      closeStream = openEventStream(appLogStreamPath(appName, filters), {
+        onOpen: () => {
+          setError(null);
+          setTrackingState('live');
+        },
+        onMessage: (data) => {
+          const line = parseLogLine(data);
+          if (line) handleIncomingLine(line);
+        },
+        onError: () => {
+          if (cancelled) return;
+          setTrackingState('retrying');
+          setError('Stream interrupted. Retrying…');
+          reconnectTimer = window.setTimeout(connect, RECONNECT_DELAY_MS);
+        },
+      });
     }
 
     connect();
 
     return () => {
       cancelled = true;
-      eventSourceRef.current?.close();
-      if (reconnectRef.current !== null) {
-        window.clearTimeout(reconnectRef.current);
-      }
+      closeStream?.();
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
     };
   }, [appName, filters]);
 
@@ -145,13 +138,31 @@ export default function LogStream({ appName }: LogStreamProps) {
 
   useEffect(() => {
     if (!appName) return;
-    const token = getToken();
-    const source = new EventSource(appEventStreamUrl(appName, token ?? undefined));
-    source.onmessage = (message) => {
-      const event = parseEvent(message.data);
-      if (event) handleLifecycleEvent(event);
+    let cancelled = false;
+    let closeStream: (() => void) | null = null;
+    let reconnectTimer: number | null = null;
+
+    function connect() {
+      if (cancelled) return;
+      closeStream = openEventStream(appEventStreamPath(appName), {
+        onMessage: (data) => {
+          const event = parseEvent(data);
+          if (event) handleLifecycleEvent(event);
+        },
+        onError: () => {
+          if (cancelled) return;
+          reconnectTimer = window.setTimeout(connect, RECONNECT_DELAY_MS);
+        },
+      });
+    }
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      closeStream?.();
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
     };
-    return () => source.close();
   }, [appName]);
 
   useEffect(() => {

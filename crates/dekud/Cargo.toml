@@ -4,21 +4,12 @@ version = "0.1.12"
 edition = "2021"
 rust-version.workspace = true
 
-[features]
-# The in-process cdylib plugin runtime is experimental and off by default, so
-# release binaries never load foreign shared libraries into the daemon. Build
-# with `--features dynamic-plugins` to enable it. First-party integrations
-# should use out-of-process hooks instead.
-default = []
-dynamic-plugins = ["dep:libloading"]
-
 [[bin]]
 name = "dekud"
 path = "src/main.rs"
 
 [dependencies]
 deku-core = { path = "../deku-core" }
-deku-plugin-sdk = { path = "../deku-plugin-sdk" }
 tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
@@ -38,13 +29,11 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
-libloading = { workspace = true, optional = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 utoipa = { workspace = true }
 pwhash = { workspace = true }
 axum-extra = { version = "0.12", features = ["typed-header"] }
-dirs = "7"
 async-trait = "0.1"
 tar = "0.4"
 flate2 = "1"

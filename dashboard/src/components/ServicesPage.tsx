@@ -485,7 +485,7 @@ function ServicesInner() {
 
               <dl className="data-grid">
                 <div>
-                  <dt>Plugin</dt>
+                  <dt>Type</dt>
                   <dd className="font-mono">{activeDetail.plugin}</dd>
                 </div>
                 <div>

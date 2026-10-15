@@ -1,0 +1,33 @@
+server {
+    listen 80;
+    server_name {{domain}};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2  on;
+    server_name {{domain}};
+
+    ssl_certificate     $acme_cert_{{client}};
+    ssl_certificate_key $acme_cert_key_{{client}};
+
+    access_log /var/log/angie/deku_dashboard_access.log;
+    error_log  /var/log/angie/deku_dashboard_error.log;
+
+    # Source archives upload through the API.
+    client_max_body_size 512m;
+
+    location / {
+        proxy_pass         http://{{upstream_host}}:{{upstream_port}};
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        # The daemon rate-limits sign-in attempts by this address.
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        # Log and event streams stay open; deliver each event as it arrives.
+        proxy_buffering    off;
+        proxy_read_timeout 1h;
+    }
+}

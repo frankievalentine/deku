@@ -49,6 +49,7 @@ fn show_dashboard_info(as_json: bool) -> Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({
                 "url": url,
                 "local_url": local_url,
+                "published_url": config.dashboard_domain.as_ref().map(|domain| format!("https://{domain}")),
                 "host": config.effective_dashboard_host(),
                 "config_path": config_path,
                 "token_configured": token_configured,
@@ -60,6 +61,9 @@ fn show_dashboard_info(as_json: bool) -> Result<()> {
 
     println!("Dashboard URL: {}", url);
     println!("Local URL:     {}", local_url);
+    if let Some(domain) = &config.dashboard_domain {
+        println!("Published URL: https://{domain} (deku doctor reports whether it is live)");
+    }
     println!("Config path:   {}", config_path.display());
     println!(
         "Token status:  {}",
@@ -136,9 +140,24 @@ pub fn print_token_notice(config: &LocalDekuConfig, token: &str, active_now: boo
 }
 
 fn print_access_guidance(config: &LocalDekuConfig) {
+    if config.api_is_loopback_only() {
+        println!("Remote access:  the dashboard listens on loopback only; use an SSH tunnel");
+        println!(
+            "SSH tunnel:     ssh -L {port}:127.0.0.1:{port} root@{host}",
+            port = config.effective_api_port(),
+            host = config.effective_dashboard_host()
+        );
+        println!("Then open:      {}", config.local_dashboard_url());
+        return;
+    }
+
     println!(
         "Remote access:  make TCP port {} reachable from your browser, or use an SSH tunnel",
         config.effective_api_port()
+    );
+    println!(
+        "Warning:        the dashboard is served over plain HTTP on every interface; set api_bind = \"127.0.0.1\" in {} and use a tunnel",
+        config.config_path().display()
     );
     println!(
         "SSH tunnel:     ssh -L {port}:127.0.0.1:{port} root@{host}",

@@ -28,6 +28,10 @@ jobs:
           tool: cross@0.2.5
       - name: Build release artifacts
         run: ./scripts/build-release.sh
+      - name: Sign checksums
+        env:
+          DEKU_RELEASE_SIGNING_KEY: ${{ secrets.DEKU_RELEASE_SIGNING_KEY }}
+        run: ./scripts/sign-release.sh dist
       - name: Smoke test built release bundle
         env:
           DEKU_INSTALL_SMOKE_RELEASE_DIR: ${{ github.workspace }}/dist

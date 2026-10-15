@@ -9,15 +9,16 @@
 //! Storage is bounded by a per-app line cap so a chatty app cannot fill the disk.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bollard::query_parameters::LogsOptionsBuilder;
 use bollard::Docker;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::interval;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -38,6 +39,15 @@ const BROADCAST_CAPACITY: usize = 2048;
 
 /// Maximum lines returned by one query.
 pub const MAX_QUERY_LINES: i64 = 2_000;
+
+/// Most lines the writer commits in one transaction.
+const WRITE_BATCH_LINES: usize = 500;
+
+/// How long the writer waits for more lines before committing what it has.
+const WRITE_BATCH_WINDOW: Duration = Duration::from_millis(50);
+
+/// Lines queued for the writer before appenders wait for it to catch up.
+const WRITE_QUEUE_CAPACITY: usize = 10_000;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LogLine {
@@ -85,16 +95,41 @@ impl LogQuery {
     }
 }
 
+enum WriteOp {
+    Line(LogLine),
+    /// Answered once every line queued before it is stored.
+    Flush(oneshot::Sender<()>),
+}
+
 /// Persist and broadcast log lines.
+///
+/// Lines are written by one background task in batched transactions. The state
+/// database is shared with deploys, config and routing, so a chatty app writing
+/// a row per line would hold SQLite's single write lock and the connection pool
+/// for everything else. Appenders queue and return; when the queue is full they
+/// wait, which slows reading container output rather than dropping lines.
 pub struct LogBus {
     tx: broadcast::Sender<LogLine>,
-    pool: SqlitePool,
+    writer: mpsc::Sender<WriteOp>,
 }
 
 impl LogBus {
     pub fn new(pool: SqlitePool) -> Arc<Self> {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-        Arc::new(Self { tx, pool })
+        let (writer, queue) = mpsc::channel(WRITE_QUEUE_CAPACITY);
+        tokio::spawn(run_writer(pool, queue));
+        Arc::new(Self { tx, writer })
+    }
+
+    /// Wait until every line appended so far is stored.
+    pub async fn flush(&self) -> Result<()> {
+        let (ack, done) = oneshot::channel();
+        self.writer
+            .send(WriteOp::Flush(ack))
+            .await
+            .map_err(|_| anyhow!("the log writer has stopped"))?;
+        done.await
+            .map_err(|_| anyhow!("the log writer stopped before flushing"))
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<LogLine> {
@@ -126,6 +161,54 @@ impl LogBus {
             created_at: Utc::now(),
         };
 
+        // No subscribers is not an error.
+        let _ = self.tx.send(line.clone());
+        self.writer
+            .send(WriteOp::Line(line.clone()))
+            .await
+            .map_err(|_| anyhow!("the log writer has stopped"))?;
+        Ok(line)
+    }
+}
+
+/// Drain the queue into batched transactions until every sender is gone.
+async fn run_writer(pool: SqlitePool, mut queue: mpsc::Receiver<WriteOp>) {
+    while let Some(first) = queue.recv().await {
+        let mut batch = Vec::new();
+        let mut acks = Vec::new();
+        take_op(first, &mut batch, &mut acks);
+
+        // Collect more until the batch is full, the window closes, or a flush
+        // asks for what is queued now.
+        let deadline = tokio::time::Instant::now() + WRITE_BATCH_WINDOW;
+        while acks.is_empty() && batch.len() < WRITE_BATCH_LINES {
+            match tokio::time::timeout_at(deadline, queue.recv()).await {
+                Ok(Some(op)) => take_op(op, &mut batch, &mut acks),
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        if !batch.is_empty() {
+            if let Err(error) = write_batch(&pool, &batch).await {
+                warn!(lines = batch.len(), error = %error, "failed to store log lines");
+            }
+        }
+        for ack in acks {
+            let _ = ack.send(());
+        }
+    }
+}
+
+fn take_op(op: WriteOp, batch: &mut Vec<LogLine>, acks: &mut Vec<oneshot::Sender<()>>) {
+    match op {
+        WriteOp::Line(line) => batch.push(line),
+        WriteOp::Flush(ack) => acks.push(ack),
+    }
+}
+
+async fn write_batch(pool: &SqlitePool, batch: &[LogLine]) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    for line in batch {
         sqlx::query(
             "INSERT INTO log_lines \
              (id, app_id, deployment_id, environment_id, source, stream, level, message, created_at) \
@@ -140,13 +223,11 @@ impl LogBus {
         .bind(&line.level)
         .bind(&line.message)
         .bind(line.created_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-
-        // No subscribers is not an error.
-        let _ = self.tx.send(line.clone());
-        Ok(line)
     }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Start log maintenance: reattach to containers that are already running, then
@@ -604,6 +685,7 @@ mod tests {
         .await
         .expect("append");
 
+        logs.flush().await.expect("flush");
         let lines = query(&pool, &app_id, &LogQuery::default())
             .await
             .expect("query");
@@ -640,6 +722,7 @@ mod tests {
         .await
         .expect("append");
 
+        logs.flush().await.expect("flush");
         let hits = query(
             &pool,
             &app_id,
@@ -675,6 +758,7 @@ mod tests {
 
         // None of these should error, even though they are FTS syntax in raw form.
         for raw in ["12:00:01", "AND OR NOT", "(unbalanced", "trailing*"] {
+            logs.flush().await.expect("flush");
             let result = query(
                 &pool,
                 &app_id,
@@ -709,6 +793,7 @@ mod tests {
         .await
         .expect("append");
 
+        logs.flush().await.expect("flush");
         let build_only = query(
             &pool,
             &app_id,
@@ -794,6 +879,7 @@ mod tests {
             .expect("append");
         }
 
+        logs.flush().await.expect("flush");
         let removed = super::prune_all(&pool, 2).await.expect("prune all");
         assert_eq!(removed, 6);
         assert_eq!(
@@ -813,6 +899,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lines_spanning_several_batches_are_all_stored_in_order() {
+        let (pool, app_id) = pool_with_app("batch").await;
+        let logs = LogBus::new(pool.clone());
+        let total = super::WRITE_BATCH_LINES * 3 + 7;
+        for index in 0..total {
+            logs.append(
+                &app_id,
+                None,
+                None,
+                "runtime",
+                "stdout",
+                &format!("line {index}"),
+            )
+            .await
+            .expect("append");
+        }
+        logs.flush().await.expect("flush");
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM log_lines WHERE app_id = ?1")
+            .bind(&app_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, total as i64);
+
+        let last: String = sqlx::query_scalar(
+            "SELECT message FROM log_lines WHERE app_id = ?1 ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(&app_id)
+        .fetch_one(&pool)
+        .await
+        .expect("last");
+        assert_eq!(last, format!("line {}", total - 1));
+    }
+
+    #[tokio::test]
     async fn pruning_keeps_the_newest_lines_and_the_index_in_step() {
         let (pool, app_id) = pool_with_app("five").await;
         let logs = LogBus::new(pool.clone());
@@ -829,6 +951,7 @@ mod tests {
             .expect("append");
         }
 
+        logs.flush().await.expect("flush");
         let removed = prune(&pool, &app_id, 4).await.expect("prune");
         assert_eq!(removed, 6);
 

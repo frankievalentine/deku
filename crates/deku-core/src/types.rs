@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// The Docker bridge network every Deku-managed app and service container joins.
+pub const DEKU_NETWORK: &str = "deku";
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct App {
     pub id: String,

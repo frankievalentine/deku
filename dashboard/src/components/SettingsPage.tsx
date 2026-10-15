@@ -14,7 +14,6 @@ import { copyText, showToast } from '../lib/shell';
 import ConfirmModal from './ConfirmModal';
 import ConnectScreen from './ConnectScreen';
 import Icon from './Icon';
-import PluginsPanel from './PluginsPanel';
 import Spinner from './Spinner';
 
 interface SettingsState {
@@ -24,7 +23,6 @@ interface SettingsState {
   objectStoreConfigured: boolean;
   objectStoreProvider: string | null;
   sshKeyCount: number;
-  pluginCount: number;
   totalServices: number;
 }
 const EMPTY_SETTINGS_STATE: SettingsState = {
@@ -34,7 +32,6 @@ const EMPTY_SETTINGS_STATE: SettingsState = {
   objectStoreConfigured: false,
   objectStoreProvider: null,
   sshKeyCount: 0,
-  pluginCount: 0,
   totalServices: 0,
 };
 
@@ -175,7 +172,7 @@ function SettingsInner() {
       <section className="hero-panel">
         <div className="stack-md">
           <h1 className="page-title">Dashboard settings</h1>
-          <p className="page-copy">Access token, release version, and plugins.</p>
+          <p className="page-copy">Access token and release version.</p>
         </div>
         <div className="metrics-grid">
           <Metric
@@ -296,8 +293,6 @@ function SettingsInner() {
           ) : null}
         </article>
       </section>
-
-      <PluginsPanel />
 
       <ConfirmModal
         open={confirmRotate}

@@ -14,6 +14,55 @@ use futures::StreamExt;
 
 pub use bollard::Docker as DockerClient;
 
+/// The bridge network every Deku-managed app and service container joins.
+///
+/// Apps reach managed services on it by container name, so a service needs no
+/// published host port. Docker's embedded DNS only answers inside containers,
+/// which is why web replicas still publish a host port for Angie, bound to
+/// loopback so it is not reachable from outside the host.
+pub const DEKU_NETWORK: &str = deku_core::types::DEKU_NETWORK;
+
+/// Interface web replicas publish their port on. Loopback, so traffic can only
+/// arrive through Angie and its auth, maintenance and redirect rules.
+pub const PUBLISH_HOST_IP: &str = "127.0.0.1";
+
+/// Create the shared Deku network if it does not exist yet.
+pub async fn ensure_deku_network(docker: &Docker) -> anyhow::Result<()> {
+    if docker
+        .inspect_network(
+            DEKU_NETWORK,
+            None::<bollard::query_parameters::InspectNetworkOptions>,
+        )
+        .await
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    let created = docker
+        .create_network(bollard::models::NetworkCreateRequest {
+            name: DEKU_NETWORK.to_string(),
+            driver: Some("bridge".to_string()),
+            labels: Some(HashMap::from([(
+                "deku.managed".to_string(),
+                "true".to_string(),
+            )])),
+            ..Default::default()
+        })
+        .await;
+    match created {
+        Ok(_) => {
+            tracing::info!(network = DEKU_NETWORK, "created the shared Deku network");
+            Ok(())
+        }
+        // Another deploy or service creation got there first.
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 409, ..
+        }) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Connect to the Docker daemon using the system default socket.
 pub fn connect() -> anyhow::Result<Docker> {
     Docker::connect_with_socket_defaults()
@@ -47,7 +96,7 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
             (
                 container_port_proto.clone(),
                 Some(vec![PortBinding {
-                    host_ip: Some("0.0.0.0".to_string()),
+                    host_ip: Some(PUBLISH_HOST_IP.to_string()),
                     host_port: Some(host_port.to_string()),
                 }]),
             )
@@ -67,6 +116,7 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
         .collect();
 
     let host_config = HostConfig {
+        network_mode: Some(DEKU_NETWORK.to_string()),
         port_bindings: Some(port_bindings),
         mounts: Some(mounts),
         memory: spec.memory,
@@ -95,15 +145,26 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
         .build();
 
     let resp = docker.create_container(Some(options), config).await?;
-    docker
+    if let Err(error) = docker
         .start_container(
             &resp.id,
             None::<bollard::query_parameters::StartContainerOptions>,
         )
-        .await?;
+        .await
+    {
+        // Leave nothing behind under this name, so a retry can reuse it.
+        let _ = remove_container(docker, &resp.id).await;
+        return Err(error.into());
+    }
 
     tracing::info!(container_id = %resp.id, name = spec.name, "container started");
     Ok(resp.id)
+}
+
+/// Whether a container failed to start because its host port was taken.
+pub fn is_port_conflict(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("port is already allocated") || message.contains("address already in use")
 }
 
 /// Stop a container gracefully. `timeout_secs` is seconds before SIGKILL.
@@ -201,4 +262,23 @@ pub async fn tag_image(docker: &Docker, source: &str, repo: &str, tag: &str) -> 
         .build();
     docker.tag_image(source, Some(opts)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_port_conflict;
+
+    #[test]
+    fn recognizes_a_taken_host_port() {
+        let allocated = anyhow::anyhow!(
+            "Docker responded with status code 500: driver failed programming external connectivity on endpoint deku.web: Bind for 127.0.0.1:49153 failed: port is already allocated"
+        );
+        assert!(is_port_conflict(&allocated));
+        assert!(is_port_conflict(&anyhow::anyhow!(
+            "listen tcp4 127.0.0.1:49153: bind: address already in use"
+        )));
+        assert!(!is_port_conflict(&anyhow::anyhow!(
+            "No such image: app:latest"
+        )));
+    }
 }

@@ -62,6 +62,7 @@ case "${1:-}" in
 
     data_dir="${DEKU_CONFIG_DIR}"
     api_port="2810"
+    api_bind="127.0.0.1"
     ssh_port="2222"
     angie_conf_dir="/etc/angie/conf.d/deku"
     global_domain=""
@@ -76,6 +77,10 @@ case "${1:-}" in
           ;;
         --api-port)
           api_port="$2"
+          shift 2
+          ;;
+        --api-bind)
+          api_bind="$2"
           shift 2
           ;;
         --ssh-port)
@@ -112,6 +117,7 @@ case "${1:-}" in
     {
       printf 'data_dir = "%s"\n' "$data_dir"
       printf 'api_port = %s\n' "$api_port"
+      printf 'api_bind = "%s"\n' "$api_bind"
       printf 'ssh_port = %s\n' "$ssh_port"
       printf 'angie_conf_dir = "%s"\n' "$angie_conf_dir"
       if [[ -n "$global_domain" ]]; then
@@ -232,7 +238,18 @@ EOF
   do
     printf '%s  %s\n' "$(checksum_file "${fixture_dir}/${artifact}")" "$artifact" >> "${fixture_dir}/SHA256SUMS"
   done
+
+  openssl dgst -sha256 -sign "${TEST_ROOT}/signing/release-signing.key" \
+    -out "${fixture_dir}/SHA256SUMS.sig" "${fixture_dir}/SHA256SUMS"
 }
+
+# Fixtures are signed with a throwaway key; a built release is verified against
+# the key embedded in the installer.
+mkdir -p "${TEST_ROOT}/signing"
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+  -out "${TEST_ROOT}/signing/release-signing.key" 2>/dev/null
+openssl pkey -in "${TEST_ROOT}/signing/release-signing.key" -pubout \
+  -out "${TEST_ROOT}/signing/release-signing.pub" 2>/dev/null
 
 if [[ -z "$DIST_RELEASE_DIR" ]]; then
   mkdir -p "${TEST_ROOT}/fixtures/v1" "${TEST_ROOT}/fixtures/v2"
@@ -358,6 +375,9 @@ export DEKU_INSTALL_FORCE_DEFAULTS="1"
 mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")"
 
 source "${ROOT_DIR}/scripts/install.sh"
+if [[ -z "$DIST_RELEASE_DIR" ]]; then
+  RELEASE_SIGNING_PUBLIC_KEY="$(cat "${TEST_ROOT}/signing/release-signing.pub")"
+fi
 
 [[ "$(angie_repo_line debian 13 trixie)" == \
   "deb [signed-by=/usr/share/keyrings/angie-signing.gpg] https://download.angie.software/angie/debian/13 trixie main" ]]
@@ -378,6 +398,8 @@ download_artifact() {
 }
 download_checksums() {
   cp "${CURRENT_RELEASE_DIR}/SHA256SUMS" "$CHECKSUMS_FILE"
+  cp "${CURRENT_RELEASE_DIR}/SHA256SUMS.sig" "$CHECKSUMS_SIGNATURE_FILE"
+  verify_checksums_signature "$CHECKSUMS_FILE" "$CHECKSUMS_SIGNATURE_FILE"
 }
 verify_artifact() {
   local artifact="$1"
@@ -441,9 +463,11 @@ if [[ -f "${DEKU_SETUP_COUNT_FILE}" ]]; then
   [[ "$(cat "${DEKU_SETUP_COUNT_FILE}")" == "1" ]]
 fi
 [[ "$first_output" == *"Dashboard token:"* ]]
-[[ "$first_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
-[[ "$first_output" == *"Local URL:     http://127.0.0.1:2810"* ]]
+grep -q 'api_bind = "127.0.0.1"' "${DEKU_CONFIG_DIR}/config.toml"
+[[ "$first_output" == *"Dashboard URL: http://127.0.0.1:2810"* ]]
 [[ "$first_output" == *"SSH tunnel:    ssh -L 2810:127.0.0.1:2810 root@203.0.113.10"* ]]
+[[ "$first_output" == *"The dashboard listens on loopback only."* ]]
+[[ "$first_output" != *"Dashboard URL: http://203.0.113.10:2810"* ]]
 [[ "$first_output" == *"deku deploy run my-app --path /absolute/path/to/app"* ]]
 [[ "$first_output" == *"Deku successfully installed."* ]]
 [[ "$first_output" != *"Start \`dekud\`"* ]]
@@ -477,8 +501,7 @@ fi
 if [[ -z "$DIST_RELEASE_DIR" ]]; then
   [[ "$second_output" != *"Dashboard token:"* ]]
   [[ "$second_output" == *"Config already exists; keeping current settings"* ]]
-  [[ "$second_output" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
-  [[ "$second_output" == *"Local URL:     http://127.0.0.1:2810"* ]]
+  [[ "$second_output" == *"Dashboard URL: http://127.0.0.1:2810"* ]]
   [[ "$second_output" == *"SSH tunnel:    ssh -L 2810:127.0.0.1:2810 root@203.0.113.10"* ]]
   [[ "$second_output" != *"Dashboard assets:"* ]]
   [[ "$second_output" != *"Setup complete."* ]]
@@ -493,6 +516,32 @@ else
   [[ "$second_output" != *"Local URL:"* ]]
   [[ "$second_output" != *"SSH tunnel:"* ]]
 fi
+
+# A tampered SHA256SUMS fails signature verification even with a valid signature file.
+if [[ -z "$DIST_RELEASE_DIR" ]]; then
+  cp "${TEST_ROOT}/fixtures/v2/SHA256SUMS" "${TEST_ROOT}/tampered-sums"
+  printf '%s  %s\n' "$(printf '0%.0s' {1..64})" "evil-binary" >> "${TEST_ROOT}/tampered-sums"
+  if (verify_checksums_signature "${TEST_ROOT}/tampered-sums" "${TEST_ROOT}/fixtures/v2/SHA256SUMS.sig") 2>/dev/null; then
+    echo "tampered SHA256SUMS passed signature verification" >&2
+    exit 1
+  fi
+fi
+
+# Releases from before signing may be installed unsigned only when pinned.
+release_requires_signature v0.2.1
+release_requires_signature v0.10.0
+release_requires_signature v1.0.0
+for unsigned_version in v0.2.0 v0.1.12 v0.1.9; do
+  if release_requires_signature "$unsigned_version"; then
+    echo "${unsigned_version} should predate signed releases" >&2
+    exit 1
+  fi
+done
+
+# A config from before api_bind existed listens everywhere and is warned about.
+legacy_access="$(print_dashboard_access 2810 203.0.113.10 "" 2>&1)"
+[[ "$legacy_access" == *"Dashboard URL: http://203.0.113.10:2810"* ]]
+[[ "$legacy_access" == *"plain HTTP on every interface"* ]]
 
 third_restart_count="$(wc -l < "${DEKU_SYSTEMCTL_LOG_FILE}")"
 third_installed_version="$("${INSTALL_DIR}/deku" version)"

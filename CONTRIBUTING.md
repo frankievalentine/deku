@@ -21,7 +21,6 @@ Contributions should improve:
 - `crates/deku-core`: shared types and auth utilities
 - `dashboard/`: Astro + React dashboard
 - `docs/`: Starlight documentation site
-- `plugins/`: first-party plugin crates
 - `scripts/`: installer, release packaging, smoke tests, and local CI helpers
 
 ## Recommended Workflow

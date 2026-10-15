@@ -37,29 +37,28 @@ use super::{
     __path_delete_environment_handler, __path_deploy_archive, __path_doctor, __path_get_app,
     __path_get_app_auth_handler, __path_get_app_checks, __path_get_app_object_store_link,
     __path_get_build_host, __path_get_limits, __path_get_logs, __path_get_maintenance,
-    __path_get_object_store_config, __path_get_plugins_runtime, __path_get_registry,
-    __path_get_routing_status, __path_get_routing_status_for_app, __path_get_scale,
-    __path_get_version_status, __path_health_check, __path_import_app_config,
-    __path_init_build_host, __path_install_plugin, __path_link_app_object_store,
-    __path_list_alerts_handler, __path_list_app_deploy_tokens, __path_list_apps,
-    __path_list_config, __path_list_deployments, __path_list_domains,
-    __path_list_environments_handler, __path_list_events, __path_list_plugins, __path_list_ports,
-    __path_list_processes, __path_list_redirects_handler, __path_list_routing,
-    __path_list_ssh_keys, __path_metrics_handler, __path_remove_domain, __path_remove_port,
+    __path_get_object_store_config, __path_get_registry, __path_get_routing_status,
+    __path_get_routing_status_for_app, __path_get_scale, __path_get_version_status,
+    __path_health_check, __path_import_app_config, __path_init_build_host,
+    __path_link_app_object_store, __path_list_alerts_handler, __path_list_app_deploy_tokens,
+    __path_list_apps, __path_list_config, __path_list_deployments, __path_list_domains,
+    __path_list_environments_handler, __path_list_events, __path_list_ports, __path_list_processes,
+    __path_list_redirects_handler, __path_list_routing, __path_list_ssh_keys,
+    __path_metrics_handler, __path_remove_domain, __path_remove_port,
     __path_remove_redirect_handler, __path_remove_ssh_key, __path_rename_app,
     __path_revoke_app_deploy_token, __path_rotate_dashboard_token, __path_set_app_auth_handler,
     __path_set_build_host, __path_set_config, __path_set_limits, __path_set_maintenance,
     __path_set_object_store_config, __path_set_registry, __path_set_scale,
     __path_stream_app_events, __path_stream_app_logs, __path_stream_events,
     __path_test_object_store_config, __path_trigger_deploy, __path_trigger_rollback,
-    __path_uninstall_plugin, __path_unlink_app_object_store, __path_unset_build_host,
-    __path_unset_config, __path_unset_object_store_config, __path_unset_registry,
-    __path_update_routing, __path_verify_dashboard_session,
+    __path_unlink_app_object_store, __path_unset_build_host, __path_unset_config,
+    __path_unset_object_store_config, __path_unset_registry, __path_update_routing,
+    __path_verify_dashboard_session,
 };
 use super::{
     AddDomainBody, AddPortBody, AddRedirectBody, AddSshKeyBody, CreateDeployTokenBody, DeployBody,
-    ImportConfigBody, InstallPluginBody, ObjectStoreAppLinkBody, RenameAppBody, RollbackBody,
-    SetConfigBody, SetLimitsBody, SetMaintenanceBody, SetScaleBody,
+    ImportConfigBody, ObjectStoreAppLinkBody, RenameAppBody, RollbackBody, SetConfigBody,
+    SetLimitsBody, SetMaintenanceBody, SetScaleBody,
 };
 use axum::response::{Html, IntoResponse};
 use utoipa::OpenApi;
@@ -259,15 +258,6 @@ pub struct ConfigImportSummarySchema {
     pub skipped: Vec<String>,
 }
 
-#[derive(utoipa::ToSchema)]
-#[allow(dead_code)]
-pub struct PluginRuntimeSchema {
-    /// Whether this dekud binary includes the in-process cdylib runtime.
-    pub available: bool,
-    /// How to enable it. Present only when `available` is false.
-    pub message: Option<String>,
-}
-
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -284,7 +274,6 @@ pub struct PluginRuntimeSchema {
         create_environment_handler,
         delete_environment_handler,
         stream_app_logs,
-        get_plugins_runtime,
         rename_app,
         clone_app,
         list_app_deploy_tokens,
@@ -327,14 +316,12 @@ pub struct PluginRuntimeSchema {
         get_version_status,
         health_check,
         init_build_host,
-        install_plugin,
         link_app_object_store,
         list_apps,
         list_config,
         list_deployments,
         list_domains,
         list_events,
-        list_plugins,
         list_ports,
         list_processes,
         list_redirects_handler,
@@ -358,7 +345,6 @@ pub struct PluginRuntimeSchema {
         test_object_store_config,
         trigger_deploy,
         trigger_rollback,
-        uninstall_plugin,
         unlink_app_object_store,
         unset_build_host,
         unset_config,
@@ -443,7 +429,6 @@ pub struct PluginRuntimeSchema {
         RegistryStatusSchema,
         BuildHostCheckSchema,
         BuildHostInitSchema,
-        PluginRuntimeSchema,
         CreateDeployTokenBody,
         ImportConfigBody,
         RenameAppBody,
@@ -464,7 +449,6 @@ pub struct PluginRuntimeSchema {
         SetLimitsBody,
         SetScaleBody,
         AddSshKeyBody,
-        InstallPluginBody,
         CreateServiceBody,
         LeConfigBody,
         CreateNetworkBody,
@@ -557,7 +541,6 @@ mod tests {
         ("delete", "/api/mysql/services/{name}/link/{app}"),
         ("delete", "/api/networks/{name}"),
         ("delete", "/api/objectstore"),
-        ("delete", "/api/plugins/{name}"),
         ("delete", "/api/postgres/services/{name}"),
         ("delete", "/api/postgres/services/{name}/link/{app}"),
         ("delete", "/api/redis/services/{name}"),
@@ -607,8 +590,6 @@ mod tests {
         ("get", "/api/mysql/services/{name}/logs"),
         ("get", "/api/networks"),
         ("get", "/api/objectstore"),
-        ("get", "/api/plugins"),
-        ("get", "/api/plugins/runtime"),
         ("get", "/api/postgres/services"),
         ("get", "/api/postgres/services/{name}"),
         ("get", "/api/postgres/services/{name}/backups"),
@@ -671,7 +652,6 @@ mod tests {
         ("post", "/api/networks"),
         ("post", "/api/objectstore"),
         ("post", "/api/objectstore/test"),
-        ("post", "/api/plugins"),
         ("post", "/api/postgres/services"),
         ("post", "/api/postgres/services/{name}/backups"),
         ("post", "/api/postgres/services/{name}/link/{app}"),

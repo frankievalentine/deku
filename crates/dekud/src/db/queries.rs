@@ -766,6 +766,15 @@ pub async fn list_domain_names(pool: &SqlitePool, app_id: &str) -> Result<Vec<St
     Ok(rows.into_iter().map(|d| d.domain).collect())
 }
 
+/// Every domain any app has claimed.
+pub async fn list_all_domain_names(pool: &SqlitePool) -> Result<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT domain FROM domains ORDER BY domain")
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
 // ── Port mappings ─────────────────────────────────────────────────────────────
 
 pub async fn list_port_mappings(pool: &SqlitePool, app_id: &str) -> Result<Vec<PortMapping>> {
@@ -1448,6 +1457,22 @@ pub async fn list_services(pool: &SqlitePool, plugin: &str) -> Result<Vec<Servic
             created_at: r.created_at,
         })
         .collect())
+}
+
+/// Point a service at a recreated container and its updated config.
+pub async fn update_service_container(
+    pool: &SqlitePool,
+    id: &str,
+    container_id: &str,
+    config: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE services SET container_id = ?1, config = ?2 WHERE id = ?3")
+        .bind(container_id)
+        .bind(config)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn delete_service(pool: &SqlitePool, name: &str) -> Result<Vec<ServiceLink>> {

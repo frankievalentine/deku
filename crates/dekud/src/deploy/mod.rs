@@ -3,13 +3,11 @@ use std::collections::HashMap;
 use deku_core::types::{
     AppStatus, BuilderType, DekuToml, DeployStatus, ObjectStoreConfig, ProcfileEntry,
 };
-use deku_plugin_sdk::context::BuildContext;
-use deku_plugin_sdk::context::DeployContext;
 use sqlx::SqlitePool;
 
 use crate::build::{
     deployment_image_id, deployment_image_repo, deployment_image_tag, get_exposed_ports,
-    select_builder, BuiltImage,
+    select_builder, BuildContext, BuiltImage,
 };
 use crate::config::DekuConfig;
 use crate::container::{self, ContainerSpec, DockerClient};
@@ -26,8 +24,9 @@ pub enum DeploySource {
     Source { path: std::path::PathBuf },
     /// Deploy a pre-built image directly
     Image { reference: String },
-    /// Build from a tar archive (path or URL)
-    Archive { path: String },
+    /// Build from an uploaded tar.gz archive the daemon has already written to
+    /// a local temp file. Never a caller-supplied path or URL.
+    Archive { path: std::path::PathBuf },
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +71,6 @@ async fn build_from_source(
     docker: &DockerClient,
     events: &EventSender,
     cfg: &DekuConfig,
-    plugins: &crate::plugins::PluginRegistry,
     req: &DeployRequest,
     app: &deku_core::types::App,
     deploy_id: &str,
@@ -104,20 +102,12 @@ async fn build_from_source(
             .map(|host| host.name.as_str())
             .unwrap_or("build host");
 
-        let ctx = BuildContext {
-            app: app.clone(),
-            source_dir: source_path.to_path_buf(),
-            data_dir: cfg.data_dir.clone(),
-            buildkit_host: None,
-        };
-
         tracing::info!(
             app = %app.name,
             builder = builder_name,
             build_host = host_name,
             "building on remote build host"
         );
-        plugins.run_pre_build(&ctx).await;
         crate::hooks::fire(
             cfg,
             crate::hooks::HookEvent::PreBuild,
@@ -142,7 +132,6 @@ async fn build_from_source(
             &reference,
         )
         .await?;
-        plugins.run_post_build(&ctx).await;
         crate::hooks::fire(
             cfg,
             crate::hooks::HookEvent::PostBuild,
@@ -198,12 +187,10 @@ async fn build_from_source(
     let ctx = BuildContext {
         app: app.clone(),
         source_dir: source_path.to_path_buf(),
-        data_dir: cfg.data_dir.clone(),
         buildkit_host,
     };
 
     tracing::info!(app = %app.name, builder = builder_name, "selected builder");
-    plugins.run_pre_build(&ctx).await;
     crate::hooks::fire(
         cfg,
         crate::hooks::HookEvent::PreBuild,
@@ -218,7 +205,6 @@ async fn build_from_source(
         .build(&ctx, deku_toml.as_ref(), docker, events, image_tag)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    plugins.run_post_build(&ctx).await;
     crate::hooks::fire(
         cfg,
         crate::hooks::HookEvent::PostBuild,
@@ -276,6 +262,35 @@ fn find_free_port() -> anyhow::Result<u16> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     Ok(port)
+}
+
+/// How many fresh ports a web replica tries before its deploy fails.
+const WEB_PORT_ATTEMPTS: usize = 3;
+
+/// Start a web replica on a free loopback port and return its container id
+/// and host port.
+///
+/// The port is found by binding it and letting it go, so another process can
+/// take it before Docker binds it. A start that loses that race is retried on a
+/// fresh port instead of failing the deploy.
+async fn start_web_replica(
+    docker: &DockerClient,
+    spec: &mut ContainerSpec<'_>,
+    container_port: u16,
+) -> anyhow::Result<(String, u16)> {
+    let mut attempt = 1;
+    loop {
+        let port = find_free_port()?;
+        spec.port_bindings = HashMap::from([(format!("{container_port}/tcp"), port)]);
+        match container::start_container(docker, spec).await {
+            Ok(id) => return Ok((id, port)),
+            Err(error) if attempt < WEB_PORT_ATTEMPTS && container::is_port_conflict(&error) => {
+                tracing::warn!(port, name = spec.name, "host port was taken; retrying");
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn release_artifact_key(
@@ -340,7 +355,6 @@ pub async fn run_deploy(
     events: &EventSender,
     logs: &std::sync::Arc<crate::logs::LogBus>,
     cfg: &DekuConfig,
-    plugins: &crate::plugins::PluginRegistry,
     req: DeployRequest,
 ) -> anyhow::Result<String> {
     let app_id = &req.app_id;
@@ -400,7 +414,6 @@ pub async fn run_deploy(
         events,
         logs,
         cfg,
-        plugins,
         &req,
         &mut deployment,
         &environment,
@@ -479,7 +492,6 @@ async fn do_deploy(
     events: &EventSender,
     logs: &std::sync::Arc<crate::logs::LogBus>,
     cfg: &DekuConfig,
-    plugins: &crate::plugins::PluginRegistry,
     req: &DeployRequest,
     deployment: &mut deku_core::types::Deployment,
     environment: &crate::db::queries::Environment,
@@ -557,13 +569,9 @@ async fn do_deploy(
         }
 
         DeploySource::Archive { path } => {
-            // Download/extract to temp dir, then run source build
+            // Extract to a temp dir, then run source build
             let tmp_dir = tempfile::tempdir()?;
-            let archive_bytes = if path.starts_with("http://") || path.starts_with("https://") {
-                reqwest::get(path.as_str()).await?.bytes().await?.to_vec()
-            } else {
-                std::fs::read(path)?
-            };
+            let archive_bytes = std::fs::read(path)?;
 
             if let Some(object_store) = cfg.object_store.as_ref() {
                 retain_release_artifact(
@@ -589,7 +597,6 @@ async fn do_deploy(
                 docker,
                 events,
                 cfg,
-                plugins,
                 req,
                 &app,
                 deploy_id,
@@ -634,7 +641,6 @@ async fn do_deploy(
                 docker,
                 events,
                 cfg,
-                plugins,
                 req,
                 &app,
                 deploy_id,
@@ -684,6 +690,9 @@ async fn do_deploy(
         .filter(|e| e.process_type != "release")
         .collect();
 
+    // The release task and every replica join the shared network.
+    container::ensure_deku_network(docker).await?;
+
     // ── Release phase ─────────────────────────────────────────────────────────
 
     if let Some(release) = release_entry {
@@ -710,13 +719,6 @@ async fn do_deploy(
     queries::update_deployment(pool, deploy_id, DeployStatus::Deploying, Some(&built.tag)).await?;
     deployment.status = DeployStatus::Deploying;
     deployment.image_tag = Some(built.tag.clone());
-    plugins
-        .run_pre_deploy(&DeployContext {
-            app: app.clone(),
-            deployment: deployment.clone(),
-            data_dir: cfg.data_dir.clone(),
-        })
-        .await;
 
     // A blocking pre_deploy hook can stop the rollout before any container moves.
     crate::hooks::fire(
@@ -787,23 +789,7 @@ async fn do_deploy(
         let is_web = proc_type == "web";
 
         for i in 0..scale {
-            let host_port = if is_web {
-                let p = find_free_port()?;
-                if i == 0 {
-                    web_host_port = Some(p);
-                }
-                web_replicas.push((i, p));
-                p
-            } else {
-                0 // non-web processes don't need host port binding
-            };
-
             let container_name = format!("deku.{app_name}.{proc_type}.{}-{i}", &deploy_id[..8]);
-
-            let mut port_bindings = HashMap::new();
-            if is_web && host_port > 0 {
-                port_bindings.insert(format!("{web_container_port}/tcp"), host_port);
-            }
 
             let cmd = if entry.command.is_empty() {
                 None
@@ -825,18 +811,28 @@ async fn do_deploy(
                 .and_then(|rl| rl.cpu.as_deref())
                 .and_then(parse_cpu_quota);
 
-            let spec = ContainerSpec {
+            let mut spec = ContainerSpec {
                 image: &built.tag,
                 name: &container_name,
                 env: env.clone(),
-                port_bindings,
+                port_bindings: HashMap::new(),
                 volumes: volumes.clone(),
                 memory,
                 cpu_quota,
                 cmd,
             };
 
-            let container_id = container::start_container(docker, &spec).await?;
+            // Non-web processes don't need a host port binding.
+            let (container_id, host_port) = if is_web {
+                let (id, port) = start_web_replica(docker, &mut spec, web_container_port).await?;
+                if i == 0 {
+                    web_host_port = Some(port);
+                }
+                web_replicas.push((i, port));
+                (id, port)
+            } else {
+                (container::start_container(docker, &spec).await?, 0)
+            };
 
             queries::record_container(
                 pool,
@@ -1105,14 +1101,6 @@ async fn do_deploy(
         }
     }
 
-    plugins
-        .run_post_deploy(&DeployContext {
-            app: app.clone(),
-            deployment: deployment.clone(),
-            data_dir: cfg.data_dir.clone(),
-        })
-        .await;
-
     if let Err(error) = crate::hooks::fire(
         cfg,
         crate::hooks::HookEvent::PostDeploy,
@@ -1168,6 +1156,90 @@ async fn do_deploy(
     Ok(built.tag)
 }
 
+// ── Restart recovery ──────────────────────────────────────────────────────────
+
+/// An app whose in-progress deployment was failed during restart recovery.
+pub struct RecoveredApp {
+    pub id: String,
+    pub name: String,
+}
+
+/// Fail the deployments a previous daemon left in progress.
+///
+/// A deploy runs inside the daemon, so one that was mid-flight when the daemon
+/// stopped never finishes on its own. Each is marked failed, the containers it
+/// started are removed, and its app's status is set from whether a live
+/// deployment remains. Returns the affected apps, whose routing the caller
+/// rewrites from their live deployment. Must run before the API accepts
+/// deploys, so it never touches a deploy that is actually running.
+pub async fn recover_interrupted_deploys(
+    pool: &SqlitePool,
+    docker: &DockerClient,
+) -> anyhow::Result<Vec<RecoveredApp>> {
+    use sqlx::Row;
+
+    // The statuses a deployment only holds while `run_deploy` is driving it.
+    let rows = sqlx::query(
+        "SELECT d.id AS id, d.app_id AS app_id, d.image_tag AS image_tag, a.name AS app_name
+         FROM deployments d JOIN apps a ON a.id = d.app_id
+         WHERE d.status IN ('pending', 'building', 'built', 'deploying', 'health_checking')",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut recovered: Vec<RecoveredApp> = Vec::new();
+    for row in rows {
+        let deploy_id: String = row.get("id");
+        let app_id: String = row.get("app_id");
+        let app_name: String = row.get("app_name");
+        let image_tag: Option<String> = row.get("image_tag");
+
+        let containers: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM containers WHERE deployment_id = ?1 AND status != 'removed'",
+        )
+        .bind(&deploy_id)
+        .fetch_all(pool)
+        .await?;
+        for container_id in &containers {
+            // Already gone is fine: the goal is that it is not running.
+            let _ = container::stop_container(docker, container_id, 10).await;
+            let _ = container::remove_container(docker, container_id).await;
+            queries::update_container_status(pool, container_id, "removed").await?;
+        }
+
+        queries::update_deployment(pool, &deploy_id, DeployStatus::Failed, image_tag.as_deref())
+            .await?;
+
+        let live: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM deployments WHERE app_id = ?1 AND status = 'live'",
+        )
+        .bind(&app_id)
+        .fetch_one(pool)
+        .await?;
+        let app_status = if live > 0 {
+            AppStatus::Deployed
+        } else {
+            AppStatus::Error
+        };
+        queries::update_app_status(pool, &app_id, app_status).await?;
+
+        tracing::warn!(
+            app = %app_name,
+            deploy_id = %deploy_id,
+            removed_containers = containers.len(),
+            "failed a deployment the daemon was running when it stopped"
+        );
+        if !recovered.iter().any(|app| app.id == app_id) {
+            recovered.push(RecoveredApp {
+                id: app_id,
+                name: app_name,
+            });
+        }
+    }
+
+    Ok(recovered)
+}
+
 // ── Release phase ─────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -1213,6 +1285,11 @@ async fn run_release_phase(
             command.to_string(),
         ]),
         env: Some(env),
+        // On the shared network so a migration can reach linked services.
+        host_config: Some(bollard::models::HostConfig {
+            network_mode: Some(container::DEKU_NETWORK.to_string()),
+            ..Default::default()
+        }),
         ..Default::default()
     };
 
@@ -1277,7 +1354,6 @@ pub async fn rollback(
     events: &EventSender,
     logs: &std::sync::Arc<crate::logs::LogBus>,
     cfg: &DekuConfig,
-    plugins: &crate::plugins::PluginRegistry,
     app_id: &str,
     app_name: &str,
     environment_id: Option<&str>,
@@ -1346,7 +1422,7 @@ pub async fn rollback(
         environment_id: Some(environment.id.clone()),
     };
 
-    run_deploy(pool, docker, events, logs, cfg, plugins, req).await?;
+    run_deploy(pool, docker, events, logs, cfg, req).await?;
 
     // Mark the previous current deployment as rolled_back
     queries::update_deployment(
@@ -1438,6 +1514,70 @@ mod tests {
         assert_eq!(parse_cpu_quota("fast"), None);
     }
 
+    #[tokio::test]
+    async fn recovery_fails_only_deployments_left_in_progress() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cfg = DekuConfig {
+            data_dir: temp.path().to_path_buf(),
+            ..DekuConfig::default()
+        };
+        let pool = crate::db::connect(&cfg).await.expect("connect");
+        crate::db::migrate(&pool).await.expect("migrate");
+        // No containers are recorded, so the client is never used.
+        let docker = container::connect().expect("docker client");
+
+        let app = queries::create_app(
+            &pool,
+            &deku_core::types::NewApp {
+                name: "recover-me".to_string(),
+            },
+        )
+        .await
+        .expect("create app");
+        let environment = queries::ensure_production_environment(&pool, &app.id)
+            .await
+            .expect("environment");
+        let live = queries::create_deployment(&pool, &app.id, &environment.id, BuilderType::Image)
+            .await
+            .expect("live deployment");
+        queries::update_deployment(&pool, &live.id, DeployStatus::Live, Some("app:1"))
+            .await
+            .expect("mark live");
+        let stuck = queries::create_deployment(&pool, &app.id, &environment.id, BuilderType::Image)
+            .await
+            .expect("stuck deployment");
+        queries::update_deployment(
+            &pool,
+            &stuck.id,
+            DeployStatus::HealthChecking,
+            Some("app:2"),
+        )
+        .await
+        .expect("mark in progress");
+
+        let recovered = recover_interrupted_deploys(&pool, &docker)
+            .await
+            .expect("recover");
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].name, "recover-me");
+
+        let stuck = queries::get_deployment(&pool, &stuck.id)
+            .await
+            .expect("stuck");
+        assert!(matches!(stuck.status, DeployStatus::Failed));
+        let live = queries::get_deployment(&pool, &live.id)
+            .await
+            .expect("live");
+        assert!(matches!(live.status, DeployStatus::Live));
+        let app = queries::get_app_by_id(&pool, &app.id).await.expect("app");
+        assert!(matches!(app.status, AppStatus::Deployed));
+
+        let again = recover_interrupted_deploys(&pool, &docker)
+            .await
+            .expect("recover again");
+        assert!(again.is_empty(), "recovery is idempotent");
+    }
+
     fn docker_tests_enabled() -> bool {
         std::env::var("DEKU_DOCKER_IT").is_ok()
     }
@@ -1449,7 +1589,6 @@ mod tests {
         events: EventSender,
         logs: std::sync::Arc<crate::logs::LogBus>,
         cfg: DekuConfig,
-        plugins: std::sync::Arc<crate::plugins::PluginRegistry>,
     }
 
     impl Harness {
@@ -1480,7 +1619,6 @@ mod tests {
                 events,
                 logs,
                 cfg,
-                plugins: crate::plugins::PluginRegistry::new(),
             })
         }
 
@@ -1495,7 +1633,6 @@ mod tests {
                 &self.events,
                 &self.logs,
                 &self.cfg,
-                &self.plugins,
                 DeployRequest {
                     app_id: app.id.clone(),
                     app_name: app.name.clone(),
@@ -1544,6 +1681,36 @@ mod tests {
         assert!(!first_tag.ends_with(":latest"));
         assert!(first_tag.ends_with(&deployment_image_id(&first_id)));
 
+        // Web replicas join the shared network and publish on loopback only.
+        for record in queries::list_containers_for_app(&h.pool, &app.id)
+            .await
+            .expect("containers")
+        {
+            let inspect = h
+                .docker
+                .inspect_container(&record.id, None)
+                .await
+                .expect("inspect replica");
+            let host_config = inspect.host_config.expect("host config");
+            assert_eq!(
+                host_config.network_mode.as_deref(),
+                Some(container::DEKU_NETWORK)
+            );
+            let host_ips: Vec<String> = host_config
+                .port_bindings
+                .unwrap_or_default()
+                .into_values()
+                .flatten()
+                .flatten()
+                .filter_map(|binding| binding.host_ip)
+                .collect();
+            assert!(!host_ips.is_empty(), "a web replica publishes a port");
+            assert!(
+                host_ips.iter().all(|ip| ip == container::PUBLISH_HOST_IP),
+                "{host_ips:?}"
+            );
+        }
+
         let second_id = h
             .deploy_image(&app, "nginx:alpine")
             .await
@@ -1560,7 +1727,6 @@ mod tests {
             &h.events,
             &h.logs,
             &h.cfg,
-            &h.plugins,
             &app.id,
             &app.name,
             None,

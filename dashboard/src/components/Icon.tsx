@@ -13,7 +13,6 @@ import {
   MoonStar,
   Package,
   PanelLeft,
-  PlugZap,
   Plus,
   RefreshCw,
   Router,
@@ -33,7 +32,6 @@ export type IconName =
   | 'services'
   | 'object-store'
   | 'ssh-keys'
-  | 'plugins'
   | 'settings'
   | 'api'
   | 'search'
@@ -58,7 +56,6 @@ const ICONS: Record<IconName, ComponentType<SVGProps<SVGSVGElement>>> = {
   services: Database,
   'object-store': Cloud,
   'ssh-keys': KeyRound,
-  plugins: PlugZap,
   settings: Settings2,
   api: Braces,
   search: Search,

@@ -1,0 +1,5 @@
+[advisories]
+# rsa: the Marvin timing side channel (RUSTSEC-2023-0071) has no fixed release.
+# It targets RSA private-key operations. dekud's SSH host key is Ed25519, so the
+# daemon only verifies RSA client signatures, which uses the public key.
+ignore = ["RUSTSEC-2023-0071"]

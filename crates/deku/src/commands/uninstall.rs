@@ -517,11 +517,10 @@ async fn read_database_state(layout: &Layout) -> Result<DatabaseState> {
         .map(|row| row.get::<String, _>("image_tag"))
         .collect::<Vec<_>>();
 
-    let service_rows = sqlx::query(
-        "SELECT container_id, config FROM services WHERE plugin IN ('postgres', 'redis', 'mysql')",
-    )
-    .fetch_all(&pool)
-    .await?;
+    // Every managed service, whatever its type, so none is left running.
+    let service_rows = sqlx::query("SELECT container_id, config FROM services")
+        .fetch_all(&pool)
+        .await?;
 
     let mut service_container_ids = Vec::new();
     let mut service_volumes = Vec::new();
@@ -538,12 +537,15 @@ async fn read_database_state(layout: &Layout) -> Result<DatabaseState> {
         }
     }
 
-    let network_names = sqlx::query("SELECT name FROM networks ORDER BY name")
+    let mut network_names = sqlx::query("SELECT name FROM networks ORDER BY name")
         .fetch_all(&pool)
         .await?
         .into_iter()
         .map(|row| row.get::<String, _>("name"))
         .collect::<Vec<_>>();
+    // The shared network every app and service joined. Removed after the
+    // containers, so nothing is still attached to it.
+    network_names.push(deku_core::types::DEKU_NETWORK.to_string());
 
     pool.close().await;
 
@@ -1330,7 +1332,10 @@ mod tests {
         assert_eq!(plan.mode, UninstallMode::FullRemove);
         assert!(plan.host_artifacts.systemd_unit_exists);
         assert_eq!(plan.image_tags, vec!["deku/my-app:latest".to_string()]);
-        assert_eq!(plan.network_names, vec!["shared-net".to_string()]);
+        assert_eq!(
+            plan.network_names,
+            vec!["shared-net".to_string(), "deku".to_string()]
+        );
         assert_eq!(
             plan.service_volumes,
             vec!["deku-postgres-db-data".to_string()]
