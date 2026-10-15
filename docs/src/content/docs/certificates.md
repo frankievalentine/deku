@@ -1,14 +1,80 @@
 ---
 title: Automatic certificates
-description: Request and renew one wildcard certificate for the generated hostnames, with Deku answering the DNS challenge.
+description: How Deku serves HTTPS — certificates Angie requests and renews for app domains, one wildcard for generated hostnames, or certificates you install.
 ---
+
+Deku serves a domain over HTTPS in one of three ways:
+
+| Way | Covers | Who renews it |
+| --- | --- | --- |
+| [Automatic, per domain](#app-domains) | Each domain you add to an app | Angie, on its own |
+| [Wildcard](#generated-hostnames-wildcard) | Every generated hostname under `global_domain` | Angie, on its own |
+| [Installed](#installed-certificates) | An app's domains, with files you provide | You |
+
+## App domains
+
+Add a domain to an app, point its DNS at the server, and Angie requests a Let's Encrypt certificate
+for it over the HTTP-01 challenge, then renews it 30 days before it expires. New installs have this
+on. On a host installed earlier, turn it on with:
+
+```bash
+deku acme custom-domains on
+```
+
+Each domain gets its own certificate, so one domain whose DNS is wrong never holds up the others.
+Port 80 has to be open to the internet; the challenge is answered there.
+
+### What happens after you add a domain
+
+1. **Checking.** Deku fetches `http://<domain>/.well-known/deku-check` and expects this server to
+   answer. Until it does, the domain is served over HTTP and nothing is asked of Let's Encrypt.
+   The check repeats every few minutes at first, then hourly.
+2. **Issuing.** Deku adds the domain's ACME client to the app's Angie config and Angie requests the
+   certificate. This usually takes seconds.
+3. **Active.** Once the certificate is issued, the domain is served over HTTPS and plain HTTP
+   redirects to it. Renewals replace the certificate without any config change.
+
+If two requests in a row fail, Deku stops Angie from asking again (Let's Encrypt allows only a few
+failed validations per hour) and marks the domain **failed** with the reason. It checks again after
+an hour, then four hours, then daily. After fixing the cause, retry at once:
+
+```bash
+deku domains list shop            # each domain's certificate state, and why it is waiting
+deku domains retry shop shop.example.com
+```
+
+Behind a CDN or proxy, the check and the challenge both pass as long as HTTP requests for
+`/.well-known/` reach this server.
+
+### Choosing per domain
+
+```bash
+deku domains tls shop shop.example.com auto     # Angie requests and renews (the default)
+deku domains tls shop shop.example.com manual   # serve the certificate you installed
+deku domains tls shop shop.example.com off      # HTTP only
+```
+
+A wildcard domain such as `*.example.com` cannot be validated over HTTP, and neither can an IP
+address; use `manual` for those. A domain one label below `global_domain` uses the wildcard
+certificate when one is issued, instead of requesting its own.
+
+### Watching it
+
+- `deku domains list <app>` shows each domain's state, expiry, and the last reason it is waiting.
+- `deku doctor` reports domains that are paused or not reachable yet.
+- The alert watcher raises `certificate_failed` for a paused domain, and `certificate_expiring` only
+  when an automatic certificate is inside 14 days of expiry, which means renewal has been failing for
+  two weeks.
+- Hooks receive `certificate.issued` and `certificate.failed`.
+
+## Generated hostnames (wildcard)
 
 Environment and per-deployment hostnames are served over **HTTP** by default, because no certificate
 covers a name like `demo-staging.apps.test`. Deku can have Angie obtain a single wildcard
 certificate for `<global_domain>` and `*.<global_domain>`, which covers every generated hostname of
 every app.
 
-## What it needs
+### What it needs
 
 - A `global_domain` in the daemon config. Without one there is no name to certify.
 - A DNS provider API token. Only **Cloudflare** is built in, and the token needs `Zone:Read` and
@@ -16,7 +82,7 @@ every app.
 - Angie built with its ACME module. Angie's own packages include it; a build from source needs
   `--with-http_acme_module`. `deku doctor` reports which one you have.
 
-## Enabling it
+### Enabling it
 
 In the dashboard, **Routing → Automatic certificates**: turn it on, switch the wildcard on, paste
 the token, and save. Or write the daemon config directly:
@@ -43,7 +109,7 @@ certificate uses:
 deku letsencrypt config --email ops@example.com
 ```
 
-## What happens
+### What happens
 
 Deku writes `deku+acme.conf` next to the app configs. It names the client, the names the certificate
 has to cover, and a hook location Angie calls during validation:
@@ -76,15 +142,15 @@ API and answers `200`, which is what Angie waits for. The certificate and its ke
   account.key  certificate.pem  private.key
 ```
 
-## Serving it
+### Serving it
 
 A vhost cannot name a certificate that does not exist yet, so the generated hostnames stay HTTP-only
-until the certificate has been issued. Once `certificate.pem` is there, the next thing that rewrites
-the app's config puts it in front of them — the next deploy, or a domain or upstream change. Renewal
-needs nothing: the vhosts reference the certificate by variable, so what they serve is replaced
-without them being written again.
+until the certificate has been issued. The daemon's certificate watcher looks every minute, and once
+`certificate.pem` holds a certificate it rewrites every app's config to serve it. Renewal needs
+nothing: the vhosts reference the certificate by variable, so what they serve is replaced without
+them being written again.
 
-## Checking it
+### Checking it
 
 ```bash
 deku acme status     # settings, token source, and whether a certificate was issued
@@ -94,7 +160,7 @@ deku doctor          # angie_acme_module, acme, and acme_certificate rows
 `deku acme status` exits non-zero when the certificate exists but is expired or unreadable, since
 Angie will re-request it and nothing is being served meanwhile.
 
-## Cautions
+### Cautions
 
 - **A reload re-requests an invalid certificate immediately**, ignoring Angie's retry delay. A host
   that reloads repeatedly while issuance is failing will keep asking the certificate authority. Deku
@@ -108,3 +174,16 @@ Angie will re-request it and nothing is being served meanwhile.
   install at `/etc/angie/ssl/deku_<app>.crt` and `.key`; `deku letsencrypt enable <app>` turns HTTPS on
   once both files exist. Deku does not issue or renew that certificate. See
   [Certificate expiry](/diagnostics/#certificate-expiry) for how Deku warns before it expires.
+
+## Installed certificates
+
+To serve a certificate you obtain yourself, put the certificate and key at
+`/etc/angie/ssl/deku_<app>.crt` and `/etc/angie/ssl/deku_<app>.key`, then:
+
+```bash
+deku domains tls shop shop.example.com manual
+```
+
+Deku serves those files but does not renew them. It warns before they expire: see [Certificate
+expiry](/diagnostics/#certificate-expiry). `deku letsencrypt enable <app>` still works and puts every
+domain of the app in `manual`, but it is deprecated.

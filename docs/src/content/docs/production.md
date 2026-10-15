@@ -13,7 +13,7 @@ Open only what the host serves:
 
 | Port | Needed for |
 | --- | --- |
-| `80/tcp`, `443/tcp` | App traffic through Angie, and certificate challenges |
+| `80/tcp`, `443/tcp` | App traffic through Angie. Port 80 also answers the certificate challenges, so keep it open even when everything is served over HTTPS |
 | `2222/tcp` | Only if you deploy with `git push` over SSH |
 | `22/tcp` | Your own SSH access |
 
@@ -21,6 +21,12 @@ Docker writes its own firewall rules, so a container port published on every int
 reachable even behind UFW. Deku avoids that: web replicas publish only on `127.0.0.1`, and managed
 services publish no port at all. `deku doctor` reports any Deku container that still publishes
 beyond loopback.
+
+## Certificates
+
+New installs request a certificate for every domain you add to an app and renew it automatically.
+Point the domain's DNS at the server and check progress with `deku domains list <app>`; a domain
+that cannot be reached shows why. See [Automatic certificates](/certificates/).
 
 ## Dashboard access
 
@@ -73,4 +79,5 @@ to you:
 | Dashboard binding | A config without `api_bind` keeps listening on every interface. Add `api_bind = "127.0.0.1"` and restart `dekud`. |
 | Encryption key | Not generated for an existing install. Add one as described in [Backups](/backups/#encryption-at-rest). |
 | File locations | An install under `~/.deku` keeps using it. |
+| Certificates for app domains | Off until you run `deku acme custom-domains on`. Apps with installed certificates keep serving them. |
 | Interrupted deploys | A deploy that was running when `dekud` stopped is marked failed on start, and its containers are removed. |

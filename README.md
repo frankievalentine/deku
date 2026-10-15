@@ -9,14 +9,14 @@
   </picture>
 </p>
 
-Deku turns a Linux server into your own hosting platform. Deploy with one command and get databases, backups, rollbacks and HTTPS on your domain, without paying per app.
+Deku turns a Linux server into your own hosting platform. Deploy with one command and get HTTPS, databases, backups and rollbacks, without paying per app.
 
 ## Why Deku
 
 - **Deploy the way you already work.** Send a project folder, a Docker image, or `git push`. Deku builds it with your Dockerfile, or works out how to build it when there is none, then starts it and serves it on your domain.
 - **A broken deploy never reaches your users.** Your release command runs migrations first, and every new replica must pass its health check before it gets traffic. If any step fails, the current version keeps serving.
 - **Undo a bad release with one command.** Every deploy is kept, and `deku deploy rollback` puts the previous version back.
-- **HTTPS on your domain.** With the domain on Cloudflare, every app gets an HTTPS address under it, and Deku keeps one wildcard certificate renewed. For other domains, install your own certificate and Deku serves it. Redirects, maintenance pages, and password or forward auth are settings, not config files.
+- **HTTPS without the busywork.** Add a domain and point it at your server: Deku checks that it reaches the server, gets a Let's Encrypt certificate for it, and keeps it renewed. With a Cloudflare token, one wildcard certificate also covers every staging and preview address. Redirects, maintenance pages, and password or forward auth are settings, not config files.
 - **Databases in one command.** Run Postgres, MySQL, MariaDB, Redis or MongoDB next to your app. Linking one gives the app its connection URL.
 - **Backups you do not have to remember.** Schedule encrypted backups to any S3-compatible storage, and restore one when you need it.
 - **Room to grow.** Scale each process type, set memory and CPU limits, run scheduled jobs, give staging and previews their own config, and offload builds to another machine.
@@ -25,7 +25,7 @@ Deku turns a Linux server into your own hosting platform. Deploy with one comman
 ## What You Get
 
 - **A CLI and a daemon**: `dekud` runs the platform and `deku` drives it on the server. Both are Rust binaries.
-- **Docker** runs your apps and services; **Angie** routes traffic and serves TLS.
+- **Docker** runs your apps and services; **Angie** routes traffic and requests and renews certificates.
 - **A dashboard** for apps, deploys, logs, services, routing, backups and host checks, served by the daemon itself.
 - **An HTTP API** with an OpenAPI 3.1 reference at `/api/docs`, and app-scoped deploy tokens for CI.
 - **Lifecycle hooks** that post build, deploy and app events to an HTTP endpoint and can gate a deploy.

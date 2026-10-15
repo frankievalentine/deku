@@ -79,6 +79,11 @@ deku checks routing my-app
 deku doctor
 ```
 
+After `deku domains add`, point the domain's DNS at the server. Angie requests a certificate for it
+and the domain switches to HTTPS on its own, usually within a minute of DNS resolving. `deku domains
+list my-app` shows where each domain is and, if it is waiting, why. See [Automatic
+certificates](/certificates/).
+
 Day-to-day operations:
 
 ```bash

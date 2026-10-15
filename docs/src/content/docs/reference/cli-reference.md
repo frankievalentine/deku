@@ -20,9 +20,10 @@ Current release-facing `deku` command surface.
 - `deku config list|set|unset`
 - `deku deploy run|list|rollback|token`
 - `deku doctor`
+- `deku acme status|custom-domains`
 - `deku alerts [--all]`
 - `deku env list|create|remove`
-- `deku domains list|add|remove`
+- `deku domains list|add|remove|tls|retry`
 - `deku exec <app> <command>...`
 - `deku letsencrypt enable|disable|status|config`
 - `deku logs [-n] [--follow] [--timeout]`
@@ -119,9 +120,12 @@ A deploy token can only trigger deploys for its own app. See [Deploy tokens](/de
 
 ### `deku domains`
 
-- `domains list <app>`
+- `domains list <app>` — each domain with how it is served over TLS and, while it waits, why
 - `domains add <app> <domain>`
 - `domains remove <app> <domain>`
+- `domains tls <app> <domain> auto|manual|off` — `auto` has Angie request and renew a certificate,
+  `manual` serves the files you installed, `off` serves HTTP only
+- `domains retry <app> <domain>` — check a waiting or paused domain again and request now
 
 ### `deku logs`
 
@@ -182,19 +186,21 @@ See [Resource limits](/resource-limits/) for accepted formats.
 
 ### `deku letsencrypt`
 
-- `letsencrypt enable <app>`
-- `letsencrypt disable <app>`
+Deprecated: use `deku domains tls`. These keep working.
+
+- `letsencrypt enable <app>` — serve the installed certificate for every domain (puts them in `manual`)
+- `letsencrypt disable <app>` — stop serving it (puts them back in `auto`)
 - `letsencrypt status <app> [--json]` — human-readable summary, including days until expiry
 - `letsencrypt config --email <address>` — the ACME account contact, also used by
   [automatic certificates](/certificates/)
 
 ### `deku acme`
 
-Automatic certificates for generated hostnames. See [Automatic
-certificates](/certificates/).
+Automatic certificates. See [Automatic certificates](/certificates/).
 
-- `acme status` — what was asked for, where the token comes from, and whether a certificate has been
+- `acme status` — what was asked for, where the token comes from, and whether the wildcard has been
   issued yet; exits non-zero when the certificate exists but cannot be used
+- `acme custom-domains on|off` — request certificates for app domains automatically
 
 ### `deku objectstore`
 
@@ -323,8 +329,10 @@ environment tracks; it is metadata today, and nothing auto-deploys on push. See
 - `alerts` — active alerts (severity, rule, subject, first seen, message)
 - `alerts --all` — alert history, including resolved alerts
 
-Deku does not renew or issue certificates; the alert watcher reports expiry so an operator or
-external automation can act.
+Automatic certificates renew on their own, so for them the alert watcher raises
+`certificate_failed` when requests are paused and `certificate_expiring` only when renewal has been
+failing. Installed certificates are not renewed by Deku; their expiry alerts give an operator or
+external automation time to act.
 
 ### `deku doctor`
 

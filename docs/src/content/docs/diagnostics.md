@@ -46,9 +46,10 @@ The timer resets on every line, so the command exits 30 seconds after the app st
 
 ## Certificate expiry
 
-Deku does not issue or renew certificates. `deku letsencrypt enable` requires the certificate and
-key files to exist already, so renewal is an operator or external-automation concern. What Deku
-does provide is visibility:
+Certificates Angie requests for app domains and the wildcard renew on their own; see [Automatic
+certificates](/certificates/) for how their state is reported. This section is about certificates
+you install yourself (`manual` mode), which Deku serves but does not renew. For those, Deku provides
+visibility:
 
 - `deku letsencrypt status <app>` prints the expiry date and days remaining, and warns when the
   certificate is expiring (inside 14 days), expired, missing, or unreadable. `--json` returns the
