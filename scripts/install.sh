@@ -33,6 +33,10 @@ fi
 # The public key that signs each release's SHA256SUMS. The private half lives in
 # the release workflow's secrets; scripts/release-signing-keygen.sh writes this.
 # BEGIN RELEASE SIGNING KEY
+RELEASE_SIGNING_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwAFUV6URdZrRPLFBkeCYKwNim+cN
+g3Aqvgp79q1RFxqvM5v0uel7bS19+fzwm00UCX8/eAG1JGNt41/Z/tRdSA==
+-----END PUBLIC KEY-----'
 # END RELEASE SIGNING KEY
 
 # Releases before this one were published without a signature. They still install,
