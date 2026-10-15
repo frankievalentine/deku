@@ -1,0 +1,195 @@
+@import "tailwindcss";
+
+@import "@fontsource-variable/archivo/wdth.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Components use these semantic names only. The light and dark values below supply them, so the
+   theme is an attribute on <html>, never a code change. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-sunk: var(--sunk);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-wash: var(--accent-wash);
+  --color-on-accent: var(--on-accent);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-busy: var(--busy);
+  --color-term: var(--term);
+  --color-term-ink: var(--term-ink);
+
+  --font-display: var(--font-display-family);
+  --font-sans: var(--font-body-family);
+  --font-mono: var(--font-mono-family);
+}
+
+/* The landing page carried into the app: warm neutrals on hue 95 and one vermilion signal colour
+   for live state and primary actions. */
+:root {
+  --font-display-family: "Archivo Variable", "IBM Plex Sans", sans-serif;
+  --font-body-family: "IBM Plex Sans", ui-sans-serif, sans-serif;
+  --font-mono-family: "IBM Plex Mono", ui-monospace, monospace;
+  --display-stretch: 108%;
+  --display-weight: 750;
+  --radius: 6px;
+
+  --bg: oklch(0.975 0.006 95);
+  --surface: oklch(0.993 0.003 95);
+  --sunk: oklch(0.948 0.008 95);
+  --ink: oklch(0.21 0.01 95);
+  --ink-2: oklch(0.43 0.01 95);
+  --ink-3: oklch(0.59 0.01 95);
+  --line: oklch(0.89 0.007 95);
+  --line-2: oklch(0.8 0.009 95);
+  --accent: oklch(0.58 0.19 35);
+  --accent-ink: oklch(0.5 0.18 35);
+  --accent-wash: oklch(0.94 0.035 40);
+  --on-accent: oklch(0.99 0.004 95);
+  --ok: oklch(0.58 0.14 150);
+  --warn: oklch(0.68 0.15 75);
+  --bad: oklch(0.56 0.2 28);
+  --busy: oklch(0.6 0.13 240);
+  --term: oklch(0.21 0.008 95);
+  --term-ink: oklch(0.9 0.006 95);
+}
+
+[data-theme="dark"] {
+  --bg: oklch(0.17 0.006 95);
+  --surface: oklch(0.2 0.007 95);
+  --sunk: oklch(0.145 0.006 95);
+  --ink: oklch(0.94 0.006 95);
+  --ink-2: oklch(0.76 0.008 95);
+  --ink-3: oklch(0.59 0.008 95);
+  --line: oklch(0.27 0.007 95);
+  --line-2: oklch(0.37 0.008 95);
+  --accent: oklch(0.7 0.17 40);
+  --accent-ink: oklch(0.77 0.14 42);
+  --accent-wash: oklch(0.29 0.06 40);
+  --on-accent: oklch(0.16 0.01 40);
+  --ok: oklch(0.74 0.15 150);
+  --warn: oklch(0.8 0.14 80);
+  --bad: oklch(0.7 0.18 28);
+  --busy: oklch(0.74 0.12 240);
+  --term: oklch(0.13 0.006 95);
+  --term-ink: oklch(0.9 0.006 95);
+}
+
+html {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body-family);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.font-display {
+  font-family: var(--font-display-family);
+  font-stretch: var(--display-stretch);
+  font-weight: var(--display-weight);
+  letter-spacing: -0.02em;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.rounded-ui {
+  border-radius: var(--radius);
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-wash);
+  color: var(--ink);
+}
+
+/* A status dot that is working pulses; everything else holds still. */
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, currentColor 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+.dot-pulse {
+  animation: pulse-ring 1.4s ease-out infinite;
+}
+
+@keyframes enter-line {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.line-enter {
+  animation: enter-line 180ms ease-out;
+}
+
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.bar-indeterminate {
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-pulse,
+  .line-enter,
+  .bar-indeterminate {
+    animation: none;
+  }
+}
+
+[cmdk-item][data-selected="true"] {
+  background: var(--sunk);
+}
+
+[cmdk-group-heading] {
+  padding: 10px 12px 4px;
+  font-family: var(--font-mono-family);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
