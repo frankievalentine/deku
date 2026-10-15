@@ -1,0 +1,332 @@
+---
+import '../styles/tokens.css';
+import '../styles/landing.css';
+
+const installCommand = 'curl -fsSL https://get-deku.vercel.app/install.sh | sudo bash';
+const github = 'https://github.com/frankievalentine/deku';
+
+const steps = [
+  {
+    event: 'build',
+    title: 'Build',
+    copy: 'Deku builds your Dockerfile, or works out how to build the app when there is none.',
+  },
+  {
+    event: 'deploy.release',
+    title: 'Migrate',
+    copy: 'Your release command runs next. If a migration fails, the deploy stops here.',
+  },
+  {
+    event: 'deploy.health_checking',
+    title: 'Check',
+    copy: 'Every new copy of the app has to answer its health check before it gets traffic.',
+  },
+  {
+    event: 'deploy.live',
+    title: 'Switch',
+    copy: 'Traffic moves to the new version. The old one stays ready if you need to roll back.',
+  },
+];
+
+const benefits = [
+  {
+    title: 'Deploy the way you already work',
+    copy: 'Send a project folder, a Docker image, or git push. Deku builds it, starts it, and serves it on your domain.',
+    command: 'deku deploy run shop --path .',
+  },
+  {
+    title: 'Undo a bad release with one command',
+    copy: 'Every deploy is kept. If something looks wrong after a release, put the previous version back.',
+    command: 'deku deploy rollback shop',
+  },
+  {
+    title: 'HTTPS on your domain',
+    copy: 'Manage your domain on Cloudflare and every app gets an HTTPS address under it, with the certificate kept renewed. Redirects, maintenance pages and password protection are settings, not config files.',
+    command: 'deku acme status',
+  },
+  {
+    title: 'Databases in one command',
+    copy: 'Run Postgres, MySQL, MariaDB, Redis or MongoDB next to your app. Linking one gives the app its connection URL.',
+    command: 'deku postgres link shop-db shop',
+  },
+  {
+    title: 'Backups you do not have to remember',
+    copy: 'Schedule encrypted backups to any S3-compatible storage, and restore one when you need it.',
+    command: 'deku backup schedule shop-db --keep 7',
+  },
+  {
+    title: 'Room to grow',
+    copy: 'Add copies of the app, set memory and CPU limits, run scheduled jobs, and give staging its own settings.',
+    command: 'deku ps scale shop web=3',
+  },
+];
+
+const consoleNotes = [
+  ['Every step as it happens', 'See the build, the migration and the health check, with the output streaming underneath.'],
+  ['The command for every button', 'Each action shows the CLI command that does the same thing, so you can script it later.'],
+  ['Problems at the top', 'A failed deploy or a host that needs attention is the first thing you see, with what to do about it.'],
+];
+
+const defaults = [
+  ['The dashboard is not public', 'It only answers on the server itself. Open it through an SSH tunnel, or serve it over HTTPS on your own domain.'],
+  ['Databases are not exposed', 'Apps reach them over a private network. No database port is opened on the server.'],
+  ['Apps are only reachable through the proxy', 'So password protection and maintenance pages cannot be bypassed.'],
+  ['Secrets are encrypted', 'Config values and backups are encrypted with a key that setup creates for you.'],
+  ['A restart never leaves a half-finished deploy', 'If the server restarts mid-deploy, Deku cleans up and the previous version keeps serving.'],
+  ['Downloads are checked', 'The installer verifies every download before it runs, and refuses a signed release whose signature does not match.'],
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deku: deploy apps to your own server</title>
+    <meta
+      name="description"
+      content="Deku gives your own server what a hosting platform gives you: one-command deploys, databases, backups, rollbacks and HTTPS on your domain."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta property="og:title" content="Deku" />
+    <meta property="og:description" content="Deploy apps to your own server, with databases, backups and rollbacks built in." />
+    <meta property="og:image" content="https://get-deku.vercel.app/images/og-dashboard.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="750" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script is:inline>
+      // Follow the theme chosen in the docs; otherwise the system preference applies.
+      try {
+        const stored = localStorage.getItem('starlight-theme');
+        if (stored === 'light' || stored === 'dark') {
+          document.documentElement.dataset.theme = stored;
+        }
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="bar">
+      <div class="frame bar-inner">
+        <a class="wordmark" href="/" aria-label="Deku home">deku</a>
+        <nav aria-label="Primary">
+          <a href="/installation/">Install</a>
+          <a href="/get-started/">Docs</a>
+          <a href="/reference/cli-reference/">CLI</a>
+          <a href={github}>GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero frame" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow reveal" style="--i: 0">Open source · Self-hosted</p>
+          <h1 id="hero-title" class="reveal" style="--i: 1">Ship to your<br />own server.</h1>
+          <p class="lede reveal" style="--i: 2">
+            Deku turns a Linux server into your own hosting platform. Deploy with one command and
+            get databases, backups, rollbacks and HTTPS on your domain, without paying per app.
+          </p>
+          <div class="install reveal" style="--i: 3">
+            <code id="install-command">{installCommand}</code>
+            <button type="button" class="copy" data-copy="install-command">Copy</button>
+            <span class="copy-status" role="status" aria-live="polite"></span>
+          </div>
+          <div class="actions reveal" style="--i: 4">
+            <a class="btn btn-primary" href="/installation/">Install Deku</a>
+            <a class="btn" href="/get-started/">Read the guide</a>
+          </div>
+        </div>
+
+        <figure class="terminal reveal" style="--i: 2" aria-label="A deploy from the CLI">
+          <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <pre><code><span class="t-line" style="--l: 0"><span class="t-prompt">$</span> deku apps create shop</span>
+<span class="t-line t-out" style="--l: 1">Created app 'shop'</span>
+<span class="t-line" style="--l: 2"><span class="t-prompt">$</span> deku postgres create shop-db</span>
+<span class="t-line" style="--l: 3"><span class="t-prompt">$</span> deku postgres link shop-db shop</span>
+<span class="t-line t-out" style="--l: 4">Linked 'shop-db' to 'shop'.</span>
+<span class="t-line" style="--l: 5"><span class="t-prompt">$</span> deku deploy run shop --path ./shop</span>
+<span class="t-line t-out" style="--l: 6">[deploy.release]</span>
+<span class="t-line t-out" style="--l: 7">[deploy.health_checking]</span>
+<span class="t-line t-out" style="--l: 8">[deploy.replica_ready]</span>
+<span class="t-line t-live" style="--l: 9">[deploy.live] https://shop.example.com</span></code></pre>
+        </figure>
+      </section>
+
+      <section class="shot frame" aria-label="The Deku dashboard">
+        <picture class="themed">
+          <source srcset="/images/dashboard-app-dark.webp" media="(prefers-color-scheme: dark)" />
+          <img
+            src="/images/dashboard-app-light.webp"
+            alt="The Deku dashboard app overview, showing the current release, process health, live output, domains, and linked services."
+            width="2400"
+            height="1500"
+            fetchpriority="high"
+            decoding="async"
+            data-light="/images/dashboard-app-light.webp"
+            data-dark="/images/dashboard-app-dark.webp"
+          />
+        </picture>
+      </section>
+
+      <section class="benefits frame" aria-labelledby="benefits-title">
+        <div class="section-head">
+          <p class="eyebrow">Why Deku</p>
+          <h2 id="benefits-title">What a hosting platform does, on a server you own.</h2>
+          <p class="section-copy">
+            Use whichever fits the moment: the CLI, the dashboard, or the HTTP API.
+          </p>
+        </div>
+        <ul class="benefit-grid">
+          {
+            benefits.map((benefit) => (
+              <li class="benefit">
+                <h3>{benefit.title}</h3>
+                <p>{benefit.copy}</p>
+                <code>{benefit.command}</code>
+              </li>
+            ))
+          }
+        </ul>
+      </section>
+
+      <section class="flow frame" aria-labelledby="flow-title">
+        <div class="section-head">
+          <p class="eyebrow">How a deploy works</p>
+          <h2 id="flow-title">A broken deploy never reaches your users.</h2>
+          <p class="section-copy">
+            Your current version keeps serving until the new one has passed every step. If any step
+            fails, nothing changes.
+          </p>
+        </div>
+        <ol class="steps">
+          {
+            steps.map((step, index) => (
+              <li class="step">
+                <span class="step-index">{String(index + 1).padStart(2, '0')}</span>
+                <code class="step-event">{step.event}</code>
+                <h3>{step.title}</h3>
+                <p>{step.copy}</p>
+              </li>
+            ))
+          }
+        </ol>
+      </section>
+
+      <section class="console frame" aria-labelledby="console-title">
+        <div class="section-head">
+          <p class="eyebrow">The dashboard</p>
+          <h2 id="console-title">Watch it go live from the browser.</h2>
+          <p class="section-copy">
+            Your apps, deploys, logs and services in the browser. It updates live, so a deploy you
+            start from your terminal plays out on screen.
+          </p>
+        </div>
+        <picture class="themed console-shot">
+          <source srcset="/images/dashboard-deploy-dark.webp" media="(prefers-color-scheme: dark)" />
+          <img
+            src="/images/dashboard-deploy-light.webp"
+            alt="A deploy in progress in the dashboard: build and release are done, the health check is running, and the build output streams below."
+            width="2400"
+            height="1500"
+            loading="lazy"
+            decoding="async"
+            data-light="/images/dashboard-deploy-light.webp"
+            data-dark="/images/dashboard-deploy-dark.webp"
+          />
+        </picture>
+        <ul class="console-notes">
+          {
+            consoleNotes.map(([title, copy]) => (
+              <li>
+                <strong>{title}</strong>
+                <p>{copy}</p>
+              </li>
+            ))
+          }
+        </ul>
+      </section>
+
+      <section class="defaults frame" aria-labelledby="defaults-title">
+        <div class="section-head">
+          <p class="eyebrow">Secure by default</p>
+          <h2 id="defaults-title">Locked down before you change a setting.</h2>
+        </div>
+        <ul class="default-list">
+          {
+            defaults.map(([title, copy]) => (
+              <li>
+                <span class="tick" aria-hidden="true" />
+                <div>
+                  <strong>{title}</strong>
+                  <p>{copy}</p>
+                </div>
+              </li>
+            ))
+          }
+        </ul>
+      </section>
+
+      <section class="start frame" aria-labelledby="start-title">
+        <div>
+          <p class="eyebrow">Requirements</p>
+          <h2 id="start-title">All you need is a Linux server.</h2>
+          <p class="section-copy">
+            Ubuntu 22.04 or later, or Debian 11 or later, with Docker Engine 24+, 512 MB of memory and
+            root access. One command installs everything else.
+          </p>
+        </div>
+        <div class="start-actions">
+          <a class="btn btn-primary" href="/installation/">Install Deku</a>
+          <a class="btn" href={github}>Source on GitHub</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="frame foot-inner">
+        <span class="wordmark wordmark-sm">deku</span>
+        <nav aria-label="Footer">
+          <a href="/get-started/">Get started</a>
+          <a href="/reference/api-reference/">API</a>
+          <a href="/architecture/">Architecture</a>
+          <a href="/agents/">AGENTS.md</a>
+          <a href={github}>GitHub</a>
+        </nav>
+        <span class="foot-note">MIT licensed</span>
+      </div>
+    </footer>
+
+    <script>
+      for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
+        button.addEventListener('click', async () => {
+          const source = document.getElementById(button.dataset.copy ?? '');
+          const status = button.parentElement?.querySelector('.copy-status');
+          if (!source) return;
+          try {
+            await navigator.clipboard.writeText(source.textContent ?? '');
+            button.textContent = 'Copied';
+            if (status) status.textContent = 'Install command copied';
+          } catch {
+            button.textContent = 'Select and copy';
+          }
+          window.setTimeout(() => {
+            button.textContent = 'Copy';
+            if (status) status.textContent = '';
+          }, 2000);
+        });
+      }
+
+      // An explicit theme from the docs overrides the system preference for the screenshots too.
+      const theme = document.documentElement.dataset.theme;
+      if (theme === 'light' || theme === 'dark') {
+        for (const picture of document.querySelectorAll('picture.themed')) {
+          const image = picture.querySelector<HTMLImageElement>('img');
+          picture.querySelector('source')?.remove();
+          if (image) image.src = image.dataset[theme] ?? image.src;
+        }
+      }
+    </script>
+  </body>
+</html>

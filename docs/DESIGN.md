@@ -1,80 +1,43 @@
-# Deku docs design contract
+# Deku site design
 
-Extracted from the shipped docs site before this pass, so changes stay inside the existing
-themed Starlight system instead of inventing a new one.
+The site has two surfaces that share one set of tokens:
 
-## Stack and ownership
-
-| Piece | Version / location | Notes |
+| Surface | Source | Notes |
 | --- | --- | --- |
-| Astro | `7.3.3` (`docs/package.json`) | static output into `docs/dist` |
-| Starlight | `0.42.1` | routing, sidebar data, search, TOC, content schema |
-| `@pelagornis/page` | `1.2.5` | theme plugin: component overrides + CSS |
-| Fonts | Rubik, IBM Plex Sans, IBM Plex Mono | loaded from Google Fonts in `src/styles/page-theme.css` |
-| Local styles | `src/styles/page-theme.css` | only local stylesheet; loads **before** theme CSS |
+| Landing page | `src/pages/index.astro`, `src/styles/landing.css` | Standalone Astro page at `/`. No Starlight layout. |
+| Docs | Starlight, `src/styles/docs.css` | Stock Starlight, themed through its CSS variables. No theme plugin, no component overrides. |
+| Tokens | `src/styles/tokens.css` | Colours and fonts for both. Change values here, not in the surface files. |
 
-The theme plugin registers its own component overrides (`Header`, `Footer`, `PageFrame`,
-`Sidebar`, `TwoColumnContent`, `ContentPanel`, `Search`, `ThemeSelect`, `LanguageSelect`,
-`SocialIcons`, `MarkdownContent`, `Hero`, `MobileMenuToggle`). A site override in
-`astro.config.mjs` `components` always wins, so local overrides are additive and reversible.
+## Direction
 
-## Tokens the pages actually use
+An operator's spec sheet. Ink on warm paper over a faint drafting grid, hairline rules instead of
+boxes, mono labels for anything the CLI prints. Warm neutrals use hue 95, matching the dashboard.
+One signal colour (vermilion) marks live state, the current page, and primary actions; nothing
+else is coloured.
 
-- Surfaces and text: `--page-bg`, `--page-bg-secondary`, `--page-bg-elevated`,
-  `--page-text`, `--page-text-secondary`, `--page-text-muted`, `--page-border`,
-  `--page-accent`, `--page-accent-light`.
-- Spacing: `--page-space-1 .. --page-space-32` (`0.25rem` steps up to `8rem`).
-- Type: `--page-font-family`, `--page-font-size-xs .. 6xl`, `--page-line-height-tight/normal`,
-  `--page-radius-sm .. 3xl`, `--page-shadow-xs .. 2xl`.
-- Starlight accents: `--sl-color-accent` (`#3d50f5` light / `#3369ff` dark),
-  `--sl-color-text-accent` (`#3d50f5` light / `#b3c7ff` dark), `--sl-color-accent-low/high`.
-- Fonts are re-pointed locally: headings `Rubik`, body `IBM Plex Sans`, code `IBM Plex Mono`.
+- Display: Archivo, using its width axis (`font-stretch` 104-125%) for headings and the wordmark.
+- Body: IBM Plex Sans. Code and labels: IBM Plex Mono.
+- Both themes come from the same token names; `tokens.css` switches the values on
+  `data-theme` (set by Starlight, and read from `starlight-theme` on the landing page) with the
+  system preference as the fallback.
 
-`public/fonts/*.woff2` are copied from `@refineui/web-icons@0.3.32` (MIT, author Pelagornis) so the
-theme's icon font URLs resolve; see `public/fonts/LICENSE-refineui-web-icons.txt` for the notice.
+## Layout rules
 
-## Layout system (as measured before this pass)
+- The landing page puts every section in one centred `.frame` (1240px, growing to 1440px on very
+  wide screens), so the composition holds from 390px to 2560px.
+- The docs keep Starlight's layout. `--sl-content-width` sets the reading measure; Starlight
+  centres the column beside the sidebar and shows the table of contents on wide screens.
+- Docs URLs stay at the site root (`/installation/`, `/reference/cli-reference/`), because the
+  README, the installer, and external guides link to them.
 
-- Header: fixed `--page-header-height` (`4rem`, `3.5rem` under `640px`).
-- Shell (`src/components/starlight/PageFrame.astro`): `.page` (100vh column) with a
-  non-scrolling header and a `.page-scroll-wrap` that owns page scrolling.
-- Desktop nav rail: `--page-sidebar-width: 320px` (`position: fixed` at `>= 769px`).
-- Reading column: `.page-content-wrapper`, `margin-left` = sidebar width,
-  `margin-right: 5rem`, `flex: 1`, **no measure cap**.
-- Right rail: `--page-toc-width: 320px` + `--page-toc-right-margin: 40px`; in flow at
-  `>= 1280px`, hidden below that.
-- Breakpoints in play: `640/641`, `768/769`, `1024/1025`, `1280`, `1440`.
+## Verification
 
-Measured at `1280x900` before this pass: nav rail `320`, article `~433` (`~40ch`), right
-rail `~308`. H2 `1. Get Dashboard Access Details` wrapped, and body text broke near 40
-characters per line.
+Run in `docs/`:
 
-## Improvement contract for this pass
+```bash
+bun run check
+bun run build
+```
 
-Goal: keep every route, anchor, search result and code sample, and make the docs readable
-and operable on narrow and wide screens.
-
-1. **Reading measure 65-75ch.** Cap the article column at `72ch`; keep code frames inside
-   the column with their own horizontal scrolling.
-2. **Column balance.** Desktop nav rail `240px`, right rail `200px`, tighter article gutter,
-   so the article reaches measure at `1280px` without squeezing. The right rail renders from
-   `1440px` up; below that the article takes the full column at 72ch.
-3. **Home hero.** Keep the existing gradient/radius language; cut vertical padding, cap the
-   tagline measure, drop the redundant third hero button.
-4. **Mobile header.** Keep a visible, named home link (wordmark) instead of a blank `<a>`;
-   comfortable touch targets for the header controls.
-5. **Mobile navigation.** Replace the class-toggled overlay with a native `<dialog>` menu:
-   labelled trigger with `aria-expanded`, focus moves in on open, `Escape` closes, focus
-   returns to the trigger.
-6. **Accessibility floor.** Visible `:focus-visible` rings, `prefers-reduced-motion` support,
-   a working skip-link target on the splash page, and links that are not signalled by color
-   alone.
-7. **Build hygiene.** No invalid `:global()` CSS in the emitted bundle and no unresolved
-   font asset URLs, without editing `node_modules` and without changing the pinned versions.
-
-## Out of scope
-
-- No new brand, palette, font, or component library.
-- No change to content facts, command surfaces, or route structure.
-- No `@pelagornis/page` version change, no fork of the theme's component tree beyond
-  `PageFrame` and `MobileMenuToggle`, no plugin authoring, no deploy.
+Then check `/` and one docs page at 390px, 1280px and 2560px in both themes. The landing page must
+not scroll horizontally at 390px.

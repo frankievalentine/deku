@@ -7,9 +7,12 @@ The dashboard is the main web interface for operating apps and host-level featur
 
 It is served directly by `dekud` from the configured dashboard directory. In the packaged install path, the installer stages the built dashboard assets for you from the release bundle.
 
-<figure class="page-theme-image">
-  <img class="page-theme-image-light" src="/images/deku-dashboard-light.webp" alt="The Deku dashboard host overview, showing app status, routing, and recent activity." width="1672" height="941" loading="lazy" decoding="async" />
-  <img class="page-theme-image-dark" src="/images/deku-dashboard-dark.webp" alt="The Deku dashboard host overview, showing app status, routing, and recent activity." width="1672" height="941" loading="lazy" decoding="async" />
+The screenshot shows the redesigned dashboard, which replaces the current one in an upcoming
+release. The pages below describe the dashboard that ships today.
+
+<figure>
+  <img class="dark:sl-hidden" src="/images/dashboard-apps-light.webp" alt="The Deku dashboard apps list, showing each app's status, current release, process health, and recent deploys." width="2400" height="1017" loading="lazy" decoding="async" />
+  <img class="light:sl-hidden" src="/images/dashboard-apps-dark.webp" alt="The Deku dashboard apps list, showing each app's status, current release, process health, and recent deploys." width="2400" height="1017" loading="lazy" decoding="async" />
 </figure>
 
 ## Accessing the Dashboard
@@ -28,30 +31,48 @@ That command prints:
 - SSH tunnel and firewall guidance for remote access
 - The reset command if a replacement token is needed
 
-If your browser is on another machine, either use the printed SSH tunnel command or make TCP port `2810` reachable through your firewall. Then open the dashboard URL in a browser and sign in with the one-time dashboard token shown during `deku setup` or a later `deku dashboard reset-token`.
+If your browser is on another machine, use the printed SSH tunnel command: the dashboard listens on loopback only by default (see [Installation](/installation/#dashboard-reachability)). Then open the dashboard URL in a browser and sign in with the one-time dashboard token shown during `deku setup` or a later `deku dashboard reset-token`.
 
-## Pages and Workflows
+## Pages
 
-- **Apps**: Review the app fleet, create new apps, remove old apps, and jump directly into app workspaces
-- **App detail**: Manage config vars, domains, ports, routing, TLS, scale, deployment history, and live logs for a single app
-- **Deployment detail**: Inspect rollout history, lifecycle events, builder details, and rollback targets
-- **Host overview**: Review platform-wide app status, routing state, TLS configuration, object store status, services, SSH keys, plugins, and recent events
-- **Routing**: Inspect the routing table — each app's domains, its environment and per-deployment (preview) hostnames, and its upstreams — validate proxy state, and manage the global Let’s Encrypt email setting
-- **Services**: Create and inspect Postgres, MySQL, MariaDB, Redis, and MongoDB services, link them to apps, and manage backups and restores
-- **Object Store**: Configure and test the S3-compatible object store used for host-level backups, deploy artifact retention, and app credential linking
-- **SSH Keys**: Add and remove trusted public keys for server access workflows
-- **Plugins**: Inspect loaded plugins and load or unload plugin libraries by path
-- **Settings**: Manage the dashboard access token, check for updates, set the Let’s Encrypt account email, review storage and services, and configure host-level settings
-- **API**: Open the interactive API reference, generated from the daemon's OpenAPI document
+The sidebar has these pages:
 
-## What You Can Manage Here
+- **Apps**: every app with its status. Create an app here, or open one.
+- **Services**: create Postgres, MySQL, MariaDB, Redis and MongoDB services, see their connection
+  values and container output, link them to apps, back them up, restore a backup, and set an
+  automatic backup schedule.
+- **Storage**: connect and test the S3-compatible object store used for backups.
+- **Routing**: the routing table for every app, the proxy configuration, automatic certificates,
+  and the Let's Encrypt account email.
+- **Overview**: host checks, active alerts, Docker networks, and the host event feed.
+- **SSH keys**: add and remove the public keys allowed to `git push` deploys.
+- **Settings**: the dashboard token (copy, rotate, or disconnect this browser) and the installed
+  and latest Deku versions.
+- **API**: the interactive API reference, generated from the daemon's OpenAPI document.
 
-- App creation, inspection, and deletion
-- Deploy history, image/archive deploy follow-up, and rollback review
-- Config vars, domains, ports, routing, and TLS
-- Process scale, live logs, and deployment events
-- Networks, storage mounts, and cron entries
-- Managed services and Postgres backup workflows
-- Object store, SSH keys, and plugin inventory
+## App pages
+
+Opening an app shows these tabs:
+
+- **Deploy**: deploy an image or upload an archive, roll back, browse deployments, run health
+  checks, manage environments, and create deploy tokens for CI.
+- **Domains**: domains and certificates, ports and upstreams, and the app's routing status and
+  proxy files.
+- **Traffic**: maintenance mode, redirects, and basic or forward auth.
+- **Processes**: scale each process type, set memory and CPU limits, and run a command in a fresh
+  or running container.
+- **Config**: config vars, app-wide or per environment, and object store credentials for the app.
+- **Infrastructure**: attached Docker networks, storage mounts, and scheduled commands.
+- **Logs**: live build and runtime output, with search.
+- **Settings**: app details and deleting the app.
+
+Selecting a deployment opens its detail page: each phase of the rollout, its source, the event
+stream, and rolling back to it.
+
+## Only in the CLI
+
+These are configured with the CLI or the config file rather than the dashboard: lifecycle hooks,
+the build host, the image registry, git remote settings, and `deku doctor` itself (the Overview page
+shows the same checks).
 
 For the underlying HTTP surface, read [API Reference](/reference/api-reference/). For the runtime model behind the dashboard, read [Architecture](/architecture/).

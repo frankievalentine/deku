@@ -7,8 +7,8 @@ Hooks let an external service react to what Deku is doing: notify chat, record a
 compliance check, or block a rollout that should not ship. Deku sends a JSON `POST` to each
 configured URL when a lifecycle event fires.
 
-This is the supported integration point. The in-process plugin runtime is off by default and
-experimental — see [In-process plugins](#in-process-plugins) below.
+Hooks are Deku's integration point: they are language-agnostic, cannot crash the daemon, and
+survive a `dekud` upgrade.
 
 ## Configure a hook
 
@@ -101,17 +101,3 @@ def hook(request):
         return Response(status_code=409)
     return Response(status_code=204)
 ```
-
-## In-process plugins
-
-Deku can also load `.so`/`.dylib` plugins into the daemon. That runtime is **compiled out by
-default**, because a plugin built against a different Rust toolchain can abort the process. Build
-with `--features dynamic-plugins` to enable it:
-
-```bash
-cargo build -p dekud --features dynamic-plugins
-```
-
-`deku plugins list` reports whether the running daemon has the runtime, and
-`deku plugins install <path>` returns a clear error when it does not. Prefer hooks: they are
-language-agnostic, cannot crash the daemon, and survive a `dekud` upgrade.

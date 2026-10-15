@@ -51,6 +51,12 @@ object store, and config var values stored in the state database. Both are seale
 before they are written, so the object store only ever holds ciphertext and a copy of the database
 does not leak your API keys.
 
+`deku setup` generates the key for a new install and writes it to `encryption.key` beside the
+config (`/etc/deku/encryption.key` on a system install), readable by root only. Back it up
+separately from the database: without it, encrypted values and backups cannot be read.
+
+Installs set up before key generation have no key until you add one:
+
 ```toml
 [encryption]
 # 64 hex characters or base64-encoded 32 bytes

@@ -31,7 +31,6 @@ Supported today:
 Out of scope today:
 
 - Full autonomous platform administration
-- Dynamic plugin authoring
 - MCP implementation
 
 ## Why CLI + API First
@@ -263,7 +262,6 @@ If a service dependency is missing:
 The current product shape still has important constraints:
 
 - The dashboard is useful, but the agent contract is CLI/API-first
-- Dynamic plugin support exists, but it is not the primary first-party integration model
 - Installation and packaging are still maturing
 
 ## MCP Later
@@ -284,8 +282,6 @@ If Deku adds MCP later, the first MCP server should expose only stable platform 
 - Domains
 - Logs
 - Deployments
-
-The first MCP design should not include dynamic plugin surfaces.
 
 Start MCP-later work only after the CLI/API workflow documented on this page is stable and verified.
 

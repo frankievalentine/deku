@@ -49,7 +49,19 @@ The install and setup flow gives you the dashboard access details you need:
 - The `deku dashboard` command you can run later for non-secret access details
 - The `deku dashboard reset-token` command to mint a new token if the original is lost
 
-If `~/.deku/config.toml` already exists, the installer keeps the current config instead of rerunning setup.
+If a config already exists, the installer keeps it instead of rerunning setup.
+
+## File Locations
+
+New installs keep config and state apart:
+
+| Path | Contents |
+| --- | --- |
+| `/etc/deku/config.toml` | Daemon config, including the dashboard token hash. Mode `0600`. |
+| `/var/lib/deku/` | SQLite database, logs, dashboard assets, the CLI socket, and git repositories. |
+
+Installs from before this layout keep both under `~/.deku/` (usually `/root/.deku/`), and `deku`
+and `dekud` keep finding them there. Set `DEKU_CONFIG_DIR` to use any other directory.
 
 After install, use:
 
@@ -78,22 +90,48 @@ deku apps info <app>
 
 ## Dashboard Reachability
 
-The dashboard and authenticated HTTP API are served on TCP port `2810` by default.
+The dashboard and authenticated HTTP API are served on TCP port `2810`. New installs listen on
+loopback only (`api_bind = "127.0.0.1"` in `/etc/deku/config.toml`), because the dashboard is plain
+HTTP and the token would otherwise cross the network unencrypted.
 
-If your browser is running on the Deku host itself, use the local URL printed by `deku dashboard`, usually `http://127.0.0.1:2810`.
+If your browser is running on the Deku host itself, open `http://127.0.0.1:2810`.
 
-If your browser is running on another machine, either:
+If your browser is running on another machine, open an SSH tunnel and then open
+`http://127.0.0.1:2810` locally:
 
-- Use an SSH tunnel, which is the recommended default:
-  `ssh -L 2810:127.0.0.1:2810 root@YOUR_SERVER_IP`
-- Or allow TCP `2810` through your firewall for direct browser access:
-  `sudo ufw allow 2810/tcp`
+```bash
+ssh -L 2810:127.0.0.1:2810 root@YOUR_SERVER_IP
+```
 
-If you expose `2810` directly, prefer restricting it to your own public IP instead of opening it to the world:
+To listen on every interface instead, install with `DEKU_API_BIND=0.0.0.0`, pass
+`--api-bind 0.0.0.0` to `deku setup`, or change `api_bind` and restart `dekud`. Then restrict the
+port to your own address rather than opening it to the world:
 
 ```bash
 sudo ufw allow from YOUR_PUBLIC_IP to any port 2810 proto tcp
 ```
+
+Installs from before `api_bind` existed have no such line and keep listening on every interface.
+`deku doctor` warns about it.
+
+### Publish the dashboard through Angie
+
+To reach the dashboard at a hostname without a tunnel, set `dashboard_domain` and restart `dekud`:
+
+```toml
+global_domain = "apps.example.com"
+dashboard_domain = "deku.apps.example.com"
+```
+
+Angie then serves the dashboard over HTTPS at that hostname and redirects HTTP to it. It is only
+ever published over HTTPS, with the global domain's [wildcard certificate](/certificates/), so:
+
+- `dashboard_domain` must be one label below `global_domain`
+- the wildcard certificate must be enabled; the dashboard is published once Angie has issued it
+- the hostname must not be one of your apps' domains
+
+`deku doctor` reports whether the dashboard is published and, if not, why. Sign-in attempts through
+the published hostname are rate-limited per client address.
 
 If you lost the original one-time token:
 

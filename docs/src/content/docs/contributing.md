@@ -24,7 +24,6 @@ Use the GitHub repository for issues, pull requests, and release history.
 - `crates/deku-core`: Shared types and auth utilities
 - `dashboard/`: Astro + React dashboard
 - `docs/`: Starlight documentation site
-- `plugins/`: First-party plugin crates
 - `scripts/`: Installer, release packaging, smoke tests, and local CI helpers
 
 ## Recommended Workflow

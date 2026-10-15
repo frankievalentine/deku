@@ -30,7 +30,7 @@ deku registry setup --server ghcr.io/acme --username acme
 # prompts for a password or scoped token; use --password for automation
 
 deku build-host setup --host ssh://deku@builder.internal
-# optional: --identity-file ~/.deku/build_key
+# optional: --identity-file /etc/deku/build_key
 # optional: --name builder (the value accepted by --build-host)
 # optional: --buildkit-host docker-container://deku-buildkit
 ```
@@ -98,7 +98,7 @@ namespace = "deku"           # produces ghcr.io/acme/deku/<app>:<deploy-id>
 [build_host]
 name          = "builder"
 host          = "ssh://deku@builder.internal"
-identity_file = "/root/.deku/build_key"                 # optional
+identity_file = "/etc/deku/build_key"                   # optional
 buildkit_host = "docker-container://deku-buildkit"      # railpack's BuildKit
 ```
 

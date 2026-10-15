@@ -1,0 +1,692 @@
+/* Landing page. An operator's spec sheet: ink on warm paper over a faint drafting grid, hairline
+   rules instead of boxes, mono labels for anything the CLI would print. Every section sits in one
+   centred frame, so the page holds its composition from a phone to a 2560px display. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background-color: var(--deku-paper);
+  background-image:
+    linear-gradient(var(--deku-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--deku-grid-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: center top;
+  color: var(--deku-ink);
+  font-family: var(--deku-font-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.frame {
+  width: min(clamp(1240px, 66vw, 1440px), 100% - 2 * clamp(16px, 4vw, 48px));
+  margin-inline: auto;
+}
+
+.skip {
+  position: absolute;
+  left: 16px;
+  top: -48px;
+  padding: 8px 12px;
+  background: var(--deku-ink);
+  color: var(--deku-paper);
+  z-index: 10;
+}
+
+.skip:focus {
+  top: 12px;
+}
+
+:where(a, button):focus-visible {
+  outline: 2px solid var(--deku-signal);
+  outline-offset: 3px;
+}
+
+/* ── Bar ─────────────────────────────────────────────────────────────────── */
+
+.bar {
+  border-bottom: 1px solid var(--deku-rule);
+  background: color-mix(in oklch, var(--deku-paper) 88%, transparent);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.bar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 60px;
+}
+
+.wordmark {
+  font-family: var(--deku-font-display);
+  font-stretch: 118%;
+  font-weight: 800;
+  font-size: 1.375rem;
+  letter-spacing: -0.03em;
+  text-decoration: none;
+}
+
+.wordmark::after {
+  content: "";
+  display: inline-block;
+  width: 0.36em;
+  height: 0.36em;
+  margin-left: 0.12em;
+  border-radius: 50%;
+  background: var(--deku-signal);
+}
+
+.wordmark-sm {
+  font-size: 1.125rem;
+}
+
+.bar nav,
+.foot nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  font-size: 0.9375rem;
+}
+
+.bar nav a,
+.foot nav a {
+  color: var(--deku-ink-soft);
+  text-decoration: none;
+  padding-block: 8px;
+}
+
+.bar nav a:hover,
+.foot nav a:hover {
+  color: var(--deku-ink);
+}
+
+/* ── Type ────────────────────────────────────────────────────────────────── */
+
+h1,
+h2,
+h3 {
+  font-family: var(--deku-font-display);
+  margin: 0;
+  color: var(--deku-ink);
+}
+
+h1 {
+  font-size: clamp(2.75rem, 7.2vw, 6rem);
+  font-stretch: 112%;
+  font-weight: 800;
+  line-height: 0.94;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+h2 {
+  font-size: clamp(1.875rem, 3.6vw, 2.75rem);
+  font-stretch: 106%;
+  font-weight: 750;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+h3 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.eyebrow {
+  margin: 0 0 16px;
+  font-family: var(--deku-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--deku-ink-faint);
+}
+
+.lede,
+.section-copy {
+  color: var(--deku-ink-soft);
+  font-size: 1.125rem;
+  max-width: 58ch;
+  text-wrap: pretty;
+}
+
+.lede {
+  margin: 28px 0 0;
+  font-size: clamp(1.0625rem, 1.4vw, 1.25rem);
+}
+
+.section-copy {
+  margin: 16px 0 0;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.actions,
+.start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.actions {
+  margin-top: 28px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid var(--deku-rule-strong);
+  border-radius: 999px;
+  background: var(--deku-paper-raised);
+  color: var(--deku-ink);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  text-decoration: none;
+  transition: border-color 150ms ease, transform 150ms ease, background-color 150ms ease;
+}
+
+.btn:hover {
+  border-color: var(--deku-ink);
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--deku-ink);
+  border-color: var(--deku-ink);
+  color: var(--deku-paper);
+}
+
+.btn-primary:hover {
+  background: var(--deku-signal-ink);
+  border-color: var(--deku-signal-ink);
+  color: oklch(0.99 0 0);
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────────── */
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 48px;
+  padding-block: clamp(48px, 9vw, 120px) clamp(40px, 6vw, 80px);
+}
+
+@media (min-width: 1000px) {
+  .hero {
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+    align-items: center;
+    gap: 64px;
+  }
+}
+
+.install {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 32px;
+  padding: 10px 10px 10px 18px;
+  max-width: 100%;
+  border: 1px solid var(--deku-rule-strong);
+  border-radius: 12px;
+  background: var(--deku-paper-raised);
+  box-shadow: 0 1px 0 var(--deku-rule);
+}
+
+.install code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-family: var(--deku-font-mono);
+  font-size: 0.875rem;
+  scrollbar-width: thin;
+}
+
+.install code::before {
+  content: "$ ";
+  color: var(--deku-signal-ink);
+}
+
+.copy {
+  flex: none;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--deku-rule-strong);
+  border-radius: 8px;
+  background: var(--deku-paper);
+  color: var(--deku-ink);
+  font: 600 0.8125rem var(--deku-font-body);
+  cursor: pointer;
+}
+
+.copy:hover {
+  border-color: var(--deku-ink);
+}
+
+.copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* ── Terminal ────────────────────────────────────────────────────────────── */
+
+.terminal {
+  margin: 0;
+  border-radius: 14px;
+  background: var(--deku-terminal);
+  color: var(--deku-terminal-ink);
+  box-shadow:
+    0 0 0 1px oklch(0.2 0.01 95 / 0.25),
+    0 30px 60px -30px oklch(0.2 0.02 95 / 0.55);
+  overflow: hidden;
+  transform: rotate(-0.6deg);
+}
+
+.terminal-bar {
+  display: flex;
+  gap: 7px;
+  padding: 14px 16px;
+  border-bottom: 1px solid oklch(1 0 0 / 0.07);
+}
+
+.terminal-bar span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: oklch(1 0 0 / 0.16);
+}
+
+.terminal pre {
+  margin: 0;
+  padding: 20px 22px 24px;
+  overflow-x: auto;
+  font-family: var(--deku-font-mono);
+  font-size: clamp(0.78rem, 1vw, 0.875rem);
+  line-height: 1.75;
+}
+
+.t-prompt {
+  color: var(--deku-signal);
+  user-select: none;
+}
+
+.t-out {
+  color: var(--deku-terminal-dim);
+}
+
+.t-live {
+  color: var(--deku-live);
+}
+
+.t-live::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--deku-live);
+  vertical-align: 1px;
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--deku-live) 25%, transparent);
+}
+
+/* ── Screenshot ──────────────────────────────────────────────────────────── */
+
+.shot {
+  padding-block: 8px clamp(56px, 8vw, 112px);
+}
+
+.shot picture,
+.console-shot {
+  display: block;
+  padding: clamp(8px, 1.2vw, 14px);
+  border: 1px solid var(--deku-rule);
+  border-radius: 18px;
+  background: var(--deku-paper-sunk);
+}
+
+.shot img,
+.console-shot img {
+  border-radius: 10px;
+  border: 1px solid var(--deku-rule);
+}
+
+/* ── Dashboard ───────────────────────────────────────────────────────────── */
+
+.console-notes {
+  list-style: none;
+  margin: clamp(28px, 3vw, 40px) 0 0;
+  padding: 0;
+  display: grid;
+  gap: 24px 40px;
+}
+
+@media (min-width: 900px) {
+  .console-notes {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.console-notes strong {
+  display: block;
+  font-family: var(--deku-font-display);
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.console-notes p {
+  margin: 6px 0 0;
+  color: var(--deku-ink-soft);
+}
+
+/* ── Sections ────────────────────────────────────────────────────────────── */
+
+.console,
+.flow,
+.benefits,
+.defaults,
+.start {
+  padding-block: clamp(56px, 8vw, 104px);
+  border-top: 1px solid var(--deku-rule);
+}
+
+.section-head {
+  margin-bottom: clamp(32px, 4vw, 56px);
+  max-width: 760px;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  counter-reset: step;
+}
+
+@media (min-width: 760px) {
+  .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .steps {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.step {
+  position: relative;
+  padding: 28px 28px 28px 0;
+  border-top: 2px solid var(--deku-ink);
+}
+
+.step + .step {
+  padding-left: 0;
+}
+
+@media (min-width: 1100px) {
+  .step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: -6px;
+    right: 18px;
+    width: 10px;
+    height: 10px;
+    border-top: 2px solid var(--deku-ink);
+    border-right: 2px solid var(--deku-ink);
+    transform: rotate(45deg);
+    background: var(--deku-paper);
+  }
+}
+
+.step:last-child {
+  border-top-color: var(--deku-signal);
+}
+
+.step-index {
+  display: block;
+  font-family: var(--deku-font-display);
+  font-stretch: 125%;
+  font-weight: 800;
+  font-size: 2.5rem;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--deku-rule-strong);
+}
+
+.step-event {
+  display: inline-block;
+  margin: 18px 0 10px;
+  font-family: var(--deku-font-mono);
+  font-size: 0.8125rem;
+  color: var(--deku-signal-ink);
+}
+
+.step p {
+  margin: 8px 0 0;
+  color: var(--deku-ink-soft);
+  max-width: 34ch;
+}
+
+/* Benefits: an outcome, one sentence, and the command that does it. */
+.benefit-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 40px 48px;
+}
+
+@media (min-width: 720px) {
+  .benefit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .benefit-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.benefit {
+  display: flex;
+  flex-direction: column;
+  padding-top: 20px;
+  border-top: 2px solid var(--deku-ink);
+}
+
+.benefit p {
+  margin: 10px 0 18px;
+  color: var(--deku-ink-soft);
+  text-wrap: pretty;
+}
+
+.benefit code {
+  margin-top: auto;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 6px 10px;
+  border: 1px dashed var(--deku-rule-strong);
+  border-radius: 6px;
+  font-family: var(--deku-font-mono);
+  font-size: 0.8125rem;
+  color: var(--deku-ink-soft);
+  white-space: nowrap;
+}
+
+.default-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 64px;
+}
+
+@media (min-width: 900px) {
+  .default-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.default-list li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 16px;
+  padding-block: 20px;
+  border-bottom: 1px solid var(--deku-rule);
+}
+
+.default-list strong {
+  font-family: var(--deku-font-display);
+  font-weight: 700;
+  font-size: 1.0625rem;
+}
+
+.default-list p {
+  margin: 4px 0 0;
+  color: var(--deku-ink-soft);
+}
+
+.tick {
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--deku-live);
+  position: relative;
+}
+
+.tick::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 3px;
+  width: 5px;
+  height: 10px;
+  border-right: 1.5px solid var(--deku-live);
+  border-bottom: 1.5px solid var(--deku-live);
+  transform: rotate(45deg);
+}
+
+.start {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px;
+  align-items: end;
+}
+
+@media (min-width: 900px) {
+  .start {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+
+.foot {
+  border-top: 1px solid var(--deku-rule);
+  background: var(--deku-paper);
+}
+
+.foot-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 32px;
+  padding-block: 28px;
+}
+
+.foot-note {
+  color: var(--deku-ink-faint);
+  font-size: 0.875rem;
+}
+
+/* ── Motion ──────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    animation: rise 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation-delay: calc(var(--i) * 90ms);
+  }
+
+  .t-line {
+    animation: type-in 280ms ease-out both;
+    animation-delay: calc(500ms + var(--l) * 160ms);
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+  }
+
+  @keyframes type-in {
+    from {
+      opacity: 0;
+      transform: translateX(-6px);
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .bar nav a:nth-child(3) {
+    display: none;
+  }
+
+  .terminal {
+    transform: none;
+  }
+}
+
+/* Inline-block so the per-line entrance can move each line; the newlines between spans still
+   break the lines. */
+.t-line {
+  display: inline-block;
+}

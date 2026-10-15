@@ -1,0 +1,64 @@
+/* Deku site tokens, shared by the docs (through Starlight's variables) and the landing page.
+   Warm neutrals on the same hue as the dashboard (95), one vermilion signal colour for live
+   state and primary actions. Starlight sets data-theme on <html>; the landing page follows the
+   same attribute, falling back to the system preference before the theme script runs. */
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+:root {
+  --deku-font-display: "Archivo", "IBM Plex Sans", sans-serif;
+  --deku-font-body: "IBM Plex Sans", ui-sans-serif, sans-serif;
+  --deku-font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --deku-paper: oklch(0.975 0.006 95);
+  --deku-paper-raised: oklch(0.995 0.003 95);
+  --deku-paper-sunk: oklch(0.945 0.008 95);
+  --deku-ink: oklch(0.2 0.01 95);
+  --deku-ink-soft: oklch(0.42 0.01 95);
+  --deku-ink-faint: oklch(0.58 0.01 95);
+  --deku-rule: oklch(0.86 0.008 95);
+  --deku-rule-strong: oklch(0.74 0.01 95);
+  --deku-signal: oklch(0.58 0.19 35);
+  --deku-signal-ink: oklch(0.5 0.18 35);
+  --deku-signal-wash: oklch(0.93 0.04 40);
+  --deku-live: oklch(0.6 0.15 150);
+  --deku-terminal: oklch(0.2 0.008 95);
+  --deku-terminal-ink: oklch(0.9 0.006 95);
+  --deku-terminal-dim: oklch(0.62 0.01 95);
+  --deku-grid-line: oklch(0.2 0.01 95 / 0.045);
+}
+
+:root[data-theme="dark"] {
+  --deku-paper: oklch(0.17 0.006 95);
+  --deku-paper-raised: oklch(0.205 0.007 95);
+  --deku-paper-sunk: oklch(0.145 0.006 95);
+  --deku-ink: oklch(0.94 0.006 95);
+  --deku-ink-soft: oklch(0.76 0.008 95);
+  --deku-ink-faint: oklch(0.6 0.008 95);
+  --deku-rule: oklch(0.3 0.007 95);
+  --deku-rule-strong: oklch(0.42 0.008 95);
+  --deku-signal: oklch(0.7 0.17 40);
+  --deku-signal-ink: oklch(0.76 0.15 42);
+  --deku-signal-wash: oklch(0.3 0.06 40);
+  --deku-live: oklch(0.74 0.15 150);
+  --deku-terminal: oklch(0.13 0.006 95);
+  --deku-grid-line: oklch(0.94 0.006 95 / 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --deku-paper: oklch(0.17 0.006 95);
+    --deku-paper-raised: oklch(0.205 0.007 95);
+    --deku-paper-sunk: oklch(0.145 0.006 95);
+    --deku-ink: oklch(0.94 0.006 95);
+    --deku-ink-soft: oklch(0.76 0.008 95);
+    --deku-ink-faint: oklch(0.6 0.008 95);
+    --deku-rule: oklch(0.3 0.007 95);
+    --deku-rule-strong: oklch(0.42 0.008 95);
+    --deku-signal: oklch(0.7 0.17 40);
+    --deku-signal-ink: oklch(0.76 0.15 42);
+    --deku-signal-wash: oklch(0.3 0.06 40);
+    --deku-live: oklch(0.74 0.15 150);
+    --deku-terminal: oklch(0.13 0.006 95);
+    --deku-grid-line: oklch(0.94 0.006 95 / 0.04);
+  }
+}

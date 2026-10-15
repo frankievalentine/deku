@@ -99,13 +99,10 @@ parameters, request bodies, and status codes. The lists below are a curated tour
 - `DELETE /api/mysql/services/:name/link/:app`
 - `GET /api/mysql/services/:name/logs`
 
-## Access and Extensions
+## Access
 
 - `GET /api/ssh-keys`
 - `POST /api/ssh-keys`
 - `DELETE /api/ssh-keys/:name`
-- `GET /api/plugins`
-- `POST /api/plugins`
-- `DELETE /api/plugins/:name`
 
 For end-user workflows, see [Get Started](/get-started/) and [Dashboard Overview](/dashboard-overview/).

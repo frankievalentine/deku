@@ -32,7 +32,6 @@ Current release-facing `deku` command surface.
 - `deku registry setup|info|unset`
 - `deku run <app> <command>...`
 - `deku ssh add|list|remove`
-- `deku plugins list|install|uninstall`
 - `deku objectstore setup|info|test|unset|status|link|unlink`
 - `deku postgres create|destroy|link|unlink|list|info|connect|logs|backup|backups|restore`
 - `deku redis create|destroy|link|unlink|list|info|connect|logs|backup|backups|restore`
@@ -180,15 +179,6 @@ See [Resource limits](/resource-limits/) for accepted formats.
 - `ssh add <name> <key-or-path>` — reads `.pub` file if path given
 - `ssh list` — name + fingerprint table
 - `ssh remove <name>`
-
-### `deku plugins`
-
-- `plugins list` — reports whether the running daemon includes the dynamic plugin runtime
-- `plugins install <path-to-.so>` — fails with an explanation on builds without the runtime
-- `plugins uninstall <name>`
-
-The in-process runtime is compiled out by default. Rebuild with `--features dynamic-plugins` to
-enable it, or use [lifecycle hooks](/hooks/) instead.
 
 ### `deku letsencrypt`
 

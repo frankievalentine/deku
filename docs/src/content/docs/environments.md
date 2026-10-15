@@ -127,7 +127,7 @@ deku config unset demo GREETING --environment staging   # removes the override, 
 
 `config list` without `--environment` shows the app-wide values. With it, each row reports where its
 value came from: an inherited app-wide value or an environment override. Overrides are encrypted at
-rest exactly like app-wide values when an encryption key is configured.
+rest exactly like app-wide values.
 
 Overrides reach the container on the next deploy: config vars are injected when the environment's
 deployment starts, so a redeploy is needed for a change to take effect.

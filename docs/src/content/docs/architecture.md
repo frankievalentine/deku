@@ -9,7 +9,7 @@ Runtime view of how the CLI, daemon, dashboard, and host services fit together.
 
 Deku is built from a small Rust-first platform stack:
 
-- [Rust](https://www.rust-lang.org/) for the `deku` CLI, the `dekud` daemon, shared core types, and plugin interfaces
+- [Rust](https://www.rust-lang.org/) for the `deku` CLI, the `dekud` daemon, and shared core types
 - [Astro](https://astro.build/) for the dashboard and documentation frontends
 - [Docker Engine](https://www.docker.com/) for app builds, app containers, and managed service containers
 - [BuildKit](https://github.com/moby/buildkit) as the build engine for Railpack language builds
@@ -32,14 +32,14 @@ Deku currently consists of two binaries:
 - The dashboard stores the token in the browser after the first sign-in
 - `deku dashboard reset-token` rotates the token and invalidates previous browser sessions
 - Dashboard tokens expire 30 days after they are issued; rotate with `deku dashboard reset-token`
-- The dashboard is served over plain HTTP, so put TLS in front of the API port before exposing it
-  beyond a trusted network
+- The dashboard is served over plain HTTP, so new installs listen on loopback only and remote
+  access goes through an SSH tunnel
 
 ## API and Event Model
 
 `dekud` exposes:
 
-- Authenticated HTTP API routes for apps, deploys, config, domains, routing, services, storage, object store, SSH keys, plugins, and related host operations
+- Authenticated HTTP API routes for apps, deploys, config, domains, routing, services, storage, object store, SSH keys, and related host operations
 - Server-sent event streams for deploy and runtime event output
 - Log endpoints for apps and managed services
 
@@ -55,6 +55,24 @@ The current server runtime includes:
 - Angie for routing and TLS
 - SQLite for persisted platform state
 - The packaged dashboard bundle served by the daemon
+
+## Container Networking
+
+Every app and managed service container joins one Docker bridge network named `deku`.
+
+- Linked apps reach a managed service by its container name, for example
+  `postgres://deku:…@deku-postgres-app-db:5432/app-db`. Services publish no host port, so a
+  database is never reachable from outside the host.
+- Each web replica publishes one port bound to `127.0.0.1`, which Angie proxies to. Traffic can
+  only reach an app through Angie, so app authentication, maintenance mode, and redirects always
+  apply. Docker writes its own firewall rules, which is why a port bound to every interface would
+  be reachable even behind UFW.
+- Release tasks and `deku run` containers join the same network, so migrations reach linked
+  services.
+
+Services created by an earlier release are moved onto the network when `dekud` starts. Each one
+is recreated on its existing data volume, and linked apps get the new URL on their next deploy.
+`deku doctor` reports any container that still publishes a port beyond loopback.
 
 ## Source Checkout Workflow
 

@@ -3,41 +3,35 @@
 <p><sub>Linux amd64 release artifacts: <code>deku</code> 11.4 MB, <code>dekud</code> 20.5 MB, dashboard bundle 1.3 MB</sub></p>
 
 <p align="center">
-  <img src="docs/public/images/deku-dashboard-dark.webp" alt="The Deku dashboard host overview, showing app status, routing, and recent activity." width="1672" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/public/images/dashboard-app-dark.webp" />
+    <img src="docs/public/images/dashboard-app-light.webp" alt="The Deku dashboard app overview, showing the current release, process health, live output, domains, and linked services." width="1200" />
+  </picture>
 </p>
 
-Deku is a lightweight self-hosted PaaS for deploying and operating applications on your own server.
+Deku turns a Linux server into your own hosting platform. Deploy with one command and get databases, backups, rollbacks and HTTPS on your domain, without paying per app.
 
-It combines:
+## Why Deku
 
-- A Rust CLI: `deku`
-- A Rust daemon: `dekud`
-- Docker for app and service containers
-- Angie for routing and TLS
-- A built-in dashboard served directly by the daemon
+- **Deploy the way you already work.** Send a project folder, a Docker image, or `git push`. Deku builds it with your Dockerfile, or works out how to build it when there is none, then starts it and serves it on your domain.
+- **A broken deploy never reaches your users.** Your release command runs migrations first, and every new replica must pass its health check before it gets traffic. If any step fails, the current version keeps serving.
+- **Undo a bad release with one command.** Every deploy is kept, and `deku deploy rollback` puts the previous version back.
+- **HTTPS on your domain.** With the domain on Cloudflare, every app gets an HTTPS address under it, and Deku keeps one wildcard certificate renewed. For other domains, install your own certificate and Deku serves it. Redirects, maintenance pages, and password or forward auth are settings, not config files.
+- **Databases in one command.** Run Postgres, MySQL, MariaDB, Redis or MongoDB next to your app. Linking one gives the app its connection URL.
+- **Backups you do not have to remember.** Schedule encrypted backups to any S3-compatible storage, and restore one when you need it.
+- **Room to grow.** Scale each process type, set memory and CPU limits, run scheduled jobs, give staging and previews their own config, and offload builds to another machine.
+- **Secure by default.** The dashboard listens on the server only, databases publish no port, apps are reachable only through the proxy, and config values are encrypted at rest.
 
-## Features
+## What You Get
 
-- **Deploy any source**: a source directory, a pre-built image, or a `git push` over SSH
-- **Starter templates**: local framework templates adapted for Deku deploys
-- **Rollback**: every deployment is retained and can be restored
-- **Environments**: staging, preview, and other targets with their own config overrides
-- **Readiness gating**: a web replica must pass its health check before it receives traffic, and every ready replica serves
-- **Remote builds**: offload image builds to a separate host, or force a local build for one deploy
-- **Config vars**: app-wide or per-environment, encrypted at rest
-- **Domains and TLS**: attach hostnames and get certificates automatically
-- **Process management**: set replica counts, memory, and CPU limits per process type
-- **Runtime access**: run a one-off command in a fresh container, or inspect a running one
-- **Logs**: stream and search build and runtime output
-- **Scheduled jobs**: run commands on a cron schedule
-- **Networks and storage**: attach shared Docker networks and persistent mounts
-- **Traffic control**: serve a maintenance page, redirect individual paths, and put HTTP basic auth or forward auth in front of an app
-- **Managed services**: provision Postgres, MySQL, MariaDB, Redis, and MongoDB, link them to apps, and back them up on demand or on a schedule
-- **Dashboard**: the whole surface above is available in the browser, served by the daemon itself
-- **Diagnostics**: check host health with `deku doctor`
-- **Alerts and metrics**: active alerts and daemon metrics, exposed as a Prometheus endpoint
-- **Lifecycle hooks**: post build, deploy, and app events to an HTTP endpoint, and gate a deploy on the response
-- **CLI and API**: the full `deku` command surface, an HTTP API, and an OpenAPI 3.1 reference at `/api/docs`
+- **A CLI and a daemon**: `dekud` runs the platform and `deku` drives it on the server. Both are Rust binaries.
+- **Docker** runs your apps and services; **Angie** routes traffic and serves TLS.
+- **A dashboard** for apps, deploys, logs, services, routing, backups and host checks, served by the daemon itself.
+- **An HTTP API** with an OpenAPI 3.1 reference at `/api/docs`, and app-scoped deploy tokens for CI.
+- **Lifecycle hooks** that post build, deploy and app events to an HTTP endpoint and can gate a deploy.
+- **Diagnostics**: `deku doctor`, searchable build and runtime logs, alerts, and a Prometheus metrics endpoint.
+- **Runtime access**: `deku run` for one-off commands in a fresh container, `deku exec` to inspect a running one.
+- **Starter templates** in [`templates/`](templates/) for common frameworks.
 
 ## Quick Start
 
@@ -87,15 +81,15 @@ deku dashboard
 
 That prints the server-reachable URL, the loopback URL for on-host access, the config path, the token status, SSH tunnel and firewall guidance for remote access, and the command to mint a replacement token. The initial token is shown once during `deku setup`.
 
-The dashboard and the authenticated HTTP API listen on TCP port `2810` by default. If your browser is on another machine, use the printed SSH tunnel command or allow `2810/tcp` through your firewall.
+The dashboard and the authenticated HTTP API listen on TCP port `2810`, on loopback only for new installs. If your browser is on another machine, use the printed SSH tunnel command.
 
 ## Managed Services
 
 Deku includes first-party workflows for Postgres, MySQL, MariaDB, Redis, and MongoDB. You can create, link, inspect, back up, and tail each one from the CLI or the dashboard.
 
-All three support backups through the configured object store:
+Every service type supports backups through the configured object store:
 
-- On demand, with `deku postgres backup`, `deku redis backup`, or `deku mysql backup`
+- On demand, with `deku <type> backup <service>`, for example `deku postgres backup shop-db`
 - On a schedule, with retention applied automatically: `deku backup schedule <service> --interval-hours 24 --keep 7`
 
 Run `deku objectstore test` first. Backups fail without a working object store.
@@ -128,6 +122,7 @@ retire = 60
 The documentation is published at <https://get-deku.vercel.app/>:
 
 - [Installation and uninstall](https://get-deku.vercel.app/installation/)
+- [Production checklist](https://get-deku.vercel.app/production/) for firewall, dashboard access, keys, and upgrades
 - [Get started](https://get-deku.vercel.app/get-started/) with the first app and deploy
 - [Traffic control](https://get-deku.vercel.app/traffic-control/) for maintenance mode and redirects
 - [Deploy tokens](https://get-deku.vercel.app/deploy-tokens/) for deploying from CI without the dashboard token
@@ -145,16 +140,16 @@ The documentation is published at <https://get-deku.vercel.app/>:
 
 - `crates/deku`: CLI
 - `crates/dekud`: daemon and HTTP API
-- `crates/deku-core`: shared types and auth utilities
-- `dashboard/`: Astro + React dashboard
+- `crates/deku-core`: shared types, auth utilities and file locations
+- `dashboard/`: the shipped Astro + React dashboard
+- `dashboard-next/`: the replacement dashboard (Vite, React, TanStack Router), running on mock data until it is wired to the API
 - `docs/`: Starlight documentation site
-- `plugins/`: first-party plugin crates and the dynamic plugin loader
 - `scripts/`: installer, release packaging, and smoke tests
 - `templates/`: local starter app catalog for common framework deploys
 
 ## Development
 
-Rust 1.94 or newer is required. The floor is declared once as `rust-version` in the workspace manifest and inherited by every member crate. CI pins Rust 1.98.1.
+Rust 1.94 or newer is required. The floor is declared once as `rust-version` in the workspace manifest and inherited by every member crate. CI builds with Rust 1.98.1, checks the 1.94 floor separately, and audits dependencies with `cargo audit`. Set `DEKU_DOCKER_IT=1` to also run the tests that start real containers.
 
 Common verification commands:
 

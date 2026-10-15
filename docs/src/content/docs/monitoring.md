@@ -10,7 +10,9 @@ graphs, and an alert watcher for conditions that need a human.
 
 `GET /api/metrics` renders daemon state in the Prometheus text exposition format
 (`text/plain; version=0.0.4`). Scrape it over the daemon socket or the dashboard port; when you use
-the HTTP port, send a dashboard token as a bearer token like any other API call.
+the HTTP port, send a dashboard token as a bearer token like any other API call. A Prometheus on
+another machine needs the port reachable: set `api_bind` to an address on your private network
+rather than `0.0.0.0`, since new installs listen on loopback only.
 
 ```yaml
 scrape_configs:
@@ -31,7 +33,7 @@ Exposed series:
 | `deku_apps_deployed` | Apps whose status is `deployed` |
 | `deku_apps_tls_enabled` | Apps with TLS enabled |
 | `deku_services_total` | Managed services |
-| `deku_services_by_plugin{plugin}` | Managed services per plugin |
+| `deku_services_by_plugin{plugin}` | Managed services per type (`postgres`, `redis`, …) |
 | `deku_containers_running` | Running containers across all apps |
 | `deku_deployments_live` | Deployments currently serving traffic |
 | `deku_service_backups_total` | Stored service backups |

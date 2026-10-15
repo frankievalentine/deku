@@ -47,7 +47,7 @@ curl -X POST \
   "http://deploy.example.com:2810/api/apps/my-app/deploy/archive"
 ```
 
-A `?token=…` query parameter is also accepted, which is convenient for provider webhooks that cannot set headers. Prefer the header where you control the request: query strings are more likely to end up in logs and proxy access records.
+A deploy token is also accepted as a `?token=…` query parameter, which is convenient for provider webhooks that cannot set headers. Prefer the header where you control the request: query strings are more likely to end up in logs and proxy access records. The dashboard token is never accepted in the query string.
 
 ## What a token cannot do
 

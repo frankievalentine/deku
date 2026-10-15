@@ -1,0 +1,116 @@
+/* Starlight, themed with the site tokens. Starlight's own styles sit in cascade layers, so these
+   unlayered rules apply without raising specificity. The token values already switch with the
+   theme, which is why one mapping serves both light and dark. */
+
+:root,
+:root[data-theme="light"] {
+  --sl-font: var(--deku-font-body);
+  --sl-font-mono: var(--deku-font-mono);
+
+  --sl-color-white: var(--deku-ink);
+  --sl-color-gray-1: var(--deku-ink);
+  --sl-color-gray-2: var(--deku-ink-soft);
+  --sl-color-gray-3: var(--deku-ink-faint);
+  --sl-color-gray-4: var(--deku-rule-strong);
+  --sl-color-gray-5: var(--deku-rule);
+  --sl-color-gray-6: var(--deku-paper-sunk);
+  --sl-color-gray-7: var(--deku-paper-raised);
+  --sl-color-black: var(--deku-paper);
+
+  --sl-color-accent-low: var(--deku-signal-wash);
+  --sl-color-accent: var(--deku-signal);
+  --sl-color-accent-high: var(--deku-signal-ink);
+  --sl-color-text-accent: var(--deku-signal-ink);
+
+  --sl-color-bg-nav: var(--deku-paper);
+  --sl-color-bg-sidebar: var(--deku-paper);
+  --sl-color-hairline-light: var(--deku-rule);
+  --sl-color-hairline: var(--deku-rule);
+  --sl-color-hairline-shade: var(--deku-rule-strong);
+
+  /* A comfortable reading measure; Starlight centres the column in the space beside the
+     sidebar, so wide screens balance instead of leaving one side empty. */
+  --sl-content-width: 46rem;
+}
+
+body {
+  background: var(--deku-paper);
+}
+
+.site-title {
+  font-family: var(--deku-font-display);
+  font-stretch: 112%;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-transform: lowercase;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4),
+h1#_top {
+  font-family: var(--deku-font-display);
+  font-stretch: 104%;
+  letter-spacing: -0.015em;
+}
+
+h1#_top {
+  font-weight: 800;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: color-mix(in oklch, currentColor 45%, transparent);
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-color: currentColor;
+}
+
+/* Sidebar group labels read as small caps section markers. */
+nav.sidebar .group-label .large {
+  font-family: var(--deku-font-mono);
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--deku-ink-faint);
+}
+
+.sl-markdown-content table {
+  font-size: var(--sl-text-sm);
+}
+
+:where(a, button, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--deku-signal);
+  outline-offset: 2px;
+}
+
+.site-title {
+  color: var(--deku-ink);
+}
+
+.site-title span::after {
+  content: "";
+  display: inline-block;
+  width: 0.34em;
+  height: 0.34em;
+  margin-left: 0.1em;
+  border-radius: 50%;
+  background: var(--deku-signal);
+}
+
+/* The current page is marked with a quiet wash and a signal edge rather than a solid fill. */
+nav.sidebar a[aria-current="page"],
+nav.sidebar a[aria-current="page"]:hover,
+nav.sidebar a[aria-current="page"]:focus {
+  background: var(--deku-signal-wash);
+  color: var(--deku-ink);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--deku-signal);
+}
+
+/* Screenshots sit in a hairline frame so a light capture does not dissolve into the page. */
+.sl-markdown-content figure img {
+  border: 1px solid var(--deku-rule);
+  border-radius: 10px;
+}
