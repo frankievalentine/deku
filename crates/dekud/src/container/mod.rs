@@ -87,6 +87,14 @@ pub struct ContainerSpec<'a> {
     pub cmd: Option<Vec<String>>,
 }
 
+/// The environment an app process starts with: the app's own variables, plus
+/// the setting that makes Docker's init signal the whole process group.
+fn process_env(app_env: &[String]) -> Vec<String> {
+    let mut env = app_env.to_vec();
+    env.push("TINI_KILL_PROCESS_GROUP=1".to_string());
+    env
+}
+
 /// Create and start a container. Returns the container ID.
 pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyhow::Result<String> {
     let port_bindings: PortMap = spec
@@ -117,6 +125,13 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
 
     let host_config = HostConfig {
         network_mode: Some(DEKU_NETWORK.to_string()),
+        // A Procfile command runs as `sh -c <command>`, and sh does not pass
+        // SIGTERM on to what it started, so a stop would wait out its whole
+        // timeout and then kill the app mid-request or mid-job. Docker's init
+        // runs as PID 1 instead and, with TINI_KILL_PROCESS_GROUP, signals the
+        // shell's whole process group, which reaches every process of a
+        // compound command such as `cd app && node server.js`.
+        init: Some(true),
         port_bindings: Some(port_bindings),
         mounts: Some(mounts),
         memory: spec.memory,
@@ -130,7 +145,7 @@ pub async fn start_container(docker: &Docker, spec: &ContainerSpec<'_>) -> anyho
 
     let config = bollard::models::ContainerCreateBody {
         image: Some(spec.image.to_string()),
-        env: Some(spec.env.clone()),
+        env: Some(process_env(&spec.env)),
         host_config: Some(host_config),
         cmd: spec.cmd.clone(),
         labels: Some(HashMap::from([(
@@ -280,5 +295,49 @@ mod tests {
         assert!(!is_port_conflict(&anyhow::anyhow!(
             "No such image: app:latest"
         )));
+    }
+
+    #[tokio::test]
+    async fn a_compound_command_stops_on_sigterm() {
+        if std::env::var("DEKU_DOCKER_IT").is_err() {
+            return;
+        }
+        let docker = super::connect().expect("docker");
+        super::ensure_deku_network(&docker).await.expect("network");
+        super::pull_image(&docker, "alpine:3.22", |_| {})
+            .await
+            .expect("pull alpine");
+
+        let name = format!(
+            "deku.it.sigterm.{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
+        // The shell runs `sleep` as a child, so SIGTERM only reaches it when the
+        // whole process group is signaled.
+        let spec = super::ContainerSpec {
+            image: "alpine:3.22",
+            name: &name,
+            env: Vec::new(),
+            port_bindings: std::collections::HashMap::new(),
+            volumes: Vec::new(),
+            memory: None,
+            cpu_quota: None,
+            cmd: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "cd /tmp && sleep 600".to_string(),
+            ]),
+        };
+        let id = super::start_container(&docker, &spec).await.expect("start");
+
+        let started = std::time::Instant::now();
+        super::stop_container(&docker, &id, 20).await.expect("stop");
+        let took = started.elapsed();
+        super::remove_container(&docker, &id).await.expect("remove");
+
+        assert!(
+            took < std::time::Duration::from_secs(10),
+            "stopping took {took:?}, so SIGTERM never reached the command"
+        );
     }
 }

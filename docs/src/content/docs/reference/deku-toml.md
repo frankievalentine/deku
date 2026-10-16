@@ -64,7 +64,11 @@ previous version serving, and the failure names the replicas that did not become
 Only the current deployment's replicas serve traffic. After a switchover the previous containers stay
 alive for `retire` seconds so anything already in flight can finish, but they are removed from the
 upstream pool at the moment the new version goes live, so nothing new is sent to the replaced
-version.
+version. Processes other than `web` stop as soon as the new version is live, without waiting.
+
+Stopping a container sends `SIGTERM` to every process its command started, including each part of
+a compound command such as `cd app && node server.js`, and kills whatever is still running 30
+seconds later. Handle `SIGTERM` to finish the current request or job and exit cleanly.
 
 ## Processes
 
