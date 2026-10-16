@@ -469,7 +469,7 @@ export interface LogLine {
   app_id: string;
   deployment_id: string | null;
   environment_id: string | null;
-  source: 'build' | 'runtime' | string;
+  source: 'build' | 'release' | 'runtime' | string;
   stream: 'stdout' | 'stderr' | string;
   level: string;
   message: string;

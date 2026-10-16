@@ -3074,7 +3074,7 @@ struct EventStreamQuery {
     logs: Option<String>,
     /// Only log lines from this deployment.
     deployment: Option<String>,
-    /// `build` or `runtime`.
+    /// `build`, `release` or `runtime`, or several separated by commas.
     source: Option<String>,
     /// `stdout` or `stderr`.
     stream: Option<String>,
@@ -3089,7 +3089,7 @@ struct EventStreamQuery {
     params(
         ("logs" = Option<String>, Query, description = "Also stream this app's log lines, as `event: log` frames"),
         ("deployment" = Option<String>, Query, description = "Only log lines from this deployment"),
-        ("source" = Option<String>, Query, description = "Only log lines from build or runtime"),
+        ("source" = Option<String>, Query, description = "Only log lines from these sources: build, release or runtime, separated by commas"),
         ("stream" = Option<String>, Query, description = "Only log lines from stdout or stderr"),
         ("level" = Option<String>, Query, description = "Only log lines with this inferred level")
     ),
@@ -3158,7 +3158,7 @@ fn log_line_matches(
     };
     line.app_id == app_id
         && wants(&filter.deployment, line.deployment_id.as_deref())
-        && wants(&filter.source, Some(&line.source))
+        && filter.wants_source(&line.source)
         && wants(&filter.stream, Some(&line.stream))
         && wants(&filter.level, Some(&line.level))
 }
@@ -4238,7 +4238,7 @@ struct LogsQuery {
     deployment: Option<String>,
     /// Only lines from this environment.
     environment: Option<String>,
-    /// `build` or `runtime`.
+    /// `build`, `release` or `runtime`, or several separated by commas.
     source: Option<String>,
     /// `stdout` or `stderr`.
     stream: Option<String>,
@@ -4319,7 +4319,7 @@ struct AppChecksResponse {
     get,
     path = "/api/apps/{name}/logs",
     tag = "logs",
-    params(("name" = String, Path, description = "App name"), ("n" = usize, Query, description = "Number of log lines"), ("search" = Option<String>, Query, description = "Full-text search over stored lines"), ("deployment" = Option<String>, Query, description = "Filter by deployment id"), ("environment" = Option<String>, Query, description = "Filter by environment slug"), ("source" = Option<String>, Query, description = "build or runtime"), ("stream" = Option<String>, Query, description = "stdout or stderr"), ("level" = Option<String>, Query, description = "Inferred log level")),
+    params(("name" = String, Path, description = "App name"), ("n" = usize, Query, description = "Number of log lines"), ("search" = Option<String>, Query, description = "Full-text search over stored lines"), ("deployment" = Option<String>, Query, description = "Filter by deployment id"), ("environment" = Option<String>, Query, description = "Filter by environment slug"), ("source" = Option<String>, Query, description = "build, release or runtime, or several separated by commas"), ("stream" = Option<String>, Query, description = "stdout or stderr"), ("level" = Option<String>, Query, description = "Inferred log level")),
     responses((status = 200, description = "Stored log lines for an app, most recent last"))
 )]
 async fn get_logs(
@@ -4359,7 +4359,7 @@ async fn get_logs(
     get,
     path = "/api/apps/{name}/logs/stream",
     tag = "logs",
-    params(("name" = String, Path, description = "App name"), ("source" = Option<String>, Query, description = "build or runtime"), ("stream" = Option<String>, Query, description = "stdout or stderr"), ("level" = Option<String>, Query, description = "Inferred log level")),
+    params(("name" = String, Path, description = "App name"), ("source" = Option<String>, Query, description = "build, release or runtime, or several separated by commas"), ("stream" = Option<String>, Query, description = "stdout or stderr"), ("level" = Option<String>, Query, description = "Inferred log level")),
     responses((status = 200, description = "Stream stored log lines as SSE"))
 )]
 async fn stream_app_logs(

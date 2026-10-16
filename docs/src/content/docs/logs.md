@@ -13,7 +13,7 @@ Every line is tagged with:
 
 | Field | Meaning |
 | --- | --- |
-| `source` | `build` (image build and rollout output) or `runtime` (container stdout/stderr) |
+| `source` | `build` (image build and rollout output), `release` (the release command's output), or `runtime` (container stdout/stderr) |
 | `stream` | `stdout` or `stderr` |
 | `level` | Best-effort level inferred from the line: `INFO`, `WARNING`, `ERROR`, `DEBUG`, `CRITICAL` |
 | `deployment` | The deployment that produced the line |
@@ -36,6 +36,7 @@ Filtering:
 
 ```bash
 deku logs <app> --source build       # only build output
+deku logs <app> --source release --deployment <id>   # a deploy's release command, such as a migration
 deku logs <app> --stream stderr      # only stderr
 deku logs <app> --level ERROR        # only lines that look like errors
 deku logs <app> --deployment <id>    # one deployment, including retired ones

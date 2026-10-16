@@ -28,6 +28,8 @@ use crate::db::queries;
 
 /// Where a line came from.
 pub const SOURCE_BUILD: &str = "build";
+/// Output of the release command a deploy runs before starting new replicas.
+pub const SOURCE_RELEASE: &str = "release";
 /// Runtime container output.
 pub const SOURCE_RUNTIME: &str = "runtime";
 
@@ -92,6 +94,23 @@ impl LogQuery {
 
     fn non_empty(value: &Option<String>) -> Option<&str> {
         value.as_deref().map(str::trim).filter(|v| !v.is_empty())
+    }
+
+    /// The sources asked for, comma-separated with no spaces, or `None` for all.
+    fn sources(&self) -> Option<String> {
+        let sources: Vec<&str> = Self::non_empty(&self.source)?
+            .split(',')
+            .map(str::trim)
+            .filter(|source| !source.is_empty())
+            .collect();
+        (!sources.is_empty()).then(|| sources.join(","))
+    }
+
+    /// Whether a line from `source` passes the source filter. The filter names
+    /// one source or several separated by commas, such as `build,release`.
+    pub fn wants_source(&self, source: &str) -> bool {
+        self.sources()
+            .is_none_or(|sources| sources.split(',').any(|wanted| wanted == source))
     }
 }
 
@@ -458,7 +477,7 @@ pub async fn query(
     let limit = filter.bounds();
     let deployment = LogQuery::non_empty(&filter.deployment);
     let environment = LogQuery::non_empty(&filter.environment);
-    let source = LogQuery::non_empty(&filter.source);
+    let sources = filter.sources();
     let stream = LogQuery::non_empty(&filter.stream);
     let level = LogQuery::non_empty(&filter.level);
 
@@ -475,7 +494,7 @@ pub async fn query(
                AND l.app_id = ?2 \
                AND (?3 IS NULL OR l.deployment_id = ?3) \
                AND (?4 IS NULL OR l.environment_id = ?4) \
-               AND (?5 IS NULL OR l.source = ?5) \
+               AND (?5 IS NULL OR instr(',' || ?5 || ',', ',' || l.source || ',') > 0) \
                AND (?6 IS NULL OR l.stream = ?6) \
                AND (?7 IS NULL OR l.level = ?7) \
              ORDER BY l.created_at DESC, l.rowid DESC LIMIT ?8",
@@ -484,7 +503,7 @@ pub async fn query(
         .bind(app_id)
         .bind(deployment)
         .bind(environment)
-        .bind(source)
+        .bind(sources.as_deref())
         .bind(stream)
         .bind(level)
         .bind(limit)
@@ -498,7 +517,7 @@ pub async fn query(
              WHERE l.app_id = ?1 \
                AND (?2 IS NULL OR l.deployment_id = ?2) \
                AND (?3 IS NULL OR l.environment_id = ?3) \
-               AND (?4 IS NULL OR l.source = ?4) \
+               AND (?4 IS NULL OR instr(',' || ?4 || ',', ',' || l.source || ',') > 0) \
                AND (?5 IS NULL OR l.stream = ?5) \
                AND (?6 IS NULL OR l.level = ?6) \
              ORDER BY l.created_at DESC, l.rowid DESC LIMIT ?7",
@@ -506,7 +525,7 @@ pub async fn query(
         .bind(app_id)
         .bind(deployment)
         .bind(environment)
-        .bind(source)
+        .bind(sources.as_deref())
         .bind(stream)
         .bind(level)
         .bind(limit)
@@ -846,6 +865,68 @@ mod tests {
         .await
         .expect("stderr");
         assert_eq!(stderr.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_source_filter_can_name_several_sources() {
+        let (pool, app_id) = pool_with_app("five").await;
+        let logs = LogBus::new(pool.clone());
+        for (source, message) in [
+            ("build", "compiling"),
+            ("release", "Applying 0002_add_notes.sql"),
+            ("runtime", "serving"),
+        ] {
+            logs.append(&app_id, Some("dep-1"), None, source, "stdout", message)
+                .await
+                .expect("append");
+        }
+        logs.flush().await.expect("flush");
+
+        let deploy_output = query(
+            &pool,
+            &app_id,
+            &LogQuery {
+                deployment: Some("dep-1".to_string()),
+                source: Some(" build , release ".to_string()),
+                ..LogQuery::default()
+            },
+        )
+        .await
+        .expect("build and release");
+        let messages: Vec<&str> = deploy_output
+            .iter()
+            .map(|record| record.line.message.as_str())
+            .collect();
+        assert_eq!(messages, vec!["compiling", "Applying 0002_add_notes.sql"]);
+
+        let searched = query(
+            &pool,
+            &app_id,
+            &LogQuery {
+                search: Some("notes".to_string()),
+                source: Some("build,release".to_string()),
+                ..LogQuery::default()
+            },
+        )
+        .await
+        .expect("search");
+        assert_eq!(searched.len(), 1, "search applies the same source list");
+    }
+
+    #[test]
+    fn wants_source_matches_whole_names_from_the_list() {
+        let filter = |source: Option<&str>| LogQuery {
+            source: source.map(str::to_string),
+            ..LogQuery::default()
+        };
+        assert!(filter(None).wants_source("runtime"));
+        assert!(filter(Some("  ")).wants_source("runtime"));
+        assert!(filter(Some("build, release")).wants_source("release"));
+        assert!(!filter(Some("build,release")).wants_source("runtime"));
+        assert!(
+            !filter(Some("build")).wants_source("buil"),
+            "a prefix is not a match"
+        );
     }
 
     #[tokio::test]

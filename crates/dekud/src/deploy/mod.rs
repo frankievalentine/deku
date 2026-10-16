@@ -706,11 +706,15 @@ async fn do_deploy(
             pool,
             docker,
             events,
+            logs,
             cfg,
-            app_id,
-            environment_id,
-            &built.tag,
-            &release.command,
+            ReleaseRun {
+                app_id,
+                deployment_id: deploy_id.as_str(),
+                environment_id,
+                image_tag: &built.tag,
+                command: &release.command,
+            },
         )
         .await?;
     }
@@ -1309,16 +1313,35 @@ pub async fn recover_interrupted_deploys(
 // ── Release phase ─────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
+/// A release command to run, and the deployment its output is stored under.
+struct ReleaseRun<'a> {
+    app_id: &'a str,
+    deployment_id: &'a str,
+    environment_id: &'a str,
+    image_tag: &'a str,
+    command: &'a str,
+}
+
+/// Run the release command in a fresh container and fail the deploy if it fails.
+///
+/// Its output is followed while it runs: each line is emitted for the CLI and
+/// stored as a `release` log line of the deployment, so a failed migration's
+/// error is still there to read after the deploy has ended.
 async fn run_release_phase(
     pool: &SqlitePool,
     docker: &DockerClient,
     events: &EventSender,
+    logs: &std::sync::Arc<crate::logs::LogBus>,
     cfg: &DekuConfig,
-    app_id: &str,
-    environment_id: &str,
-    image_tag: &str,
-    command: &str,
+    run: ReleaseRun<'_>,
 ) -> anyhow::Result<()> {
+    let ReleaseRun {
+        app_id,
+        deployment_id,
+        environment_id,
+        image_tag,
+        command,
+    } = run;
     use bollard::container::LogOutput;
     use bollard::models::ContainerCreateBody;
     use bollard::query_parameters::{
@@ -1368,29 +1391,46 @@ async fn run_release_phase(
         )
         .await?;
 
-    let wait_opts = WaitContainerOptionsBuilder::default().build();
-    let mut wait_stream = docker.wait_container(&resp.id, Some(wait_opts));
-    let wait_result = wait_stream.next().await;
-
-    // Stream logs
+    // Following ends when the container exits, so every line is read before
+    // the exit code is.
     let log_opts = LogsOptionsBuilder::default()
         .stdout(true)
         .stderr(true)
+        .follow(true)
         .build();
     let mut log_stream = docker.logs(&resp.id, Some(log_opts));
     while let Some(Ok(log)) = log_stream.next().await {
-        let line = match log {
-            LogOutput::StdOut { message } | LogOutput::StdErr { message } => {
-                String::from_utf8_lossy(&message).trim_end().to_string()
-            }
+        let (stream, message) = match log {
+            LogOutput::StdOut { message } => ("stdout", message),
+            LogOutput::StdErr { message } => ("stderr", message),
             _ => continue,
         };
-        events.emit(
-            Some(app_id.to_string()),
-            "deploy.release.log",
-            Some(serde_json::json!({ "line": line })),
-        );
+        let text = String::from_utf8_lossy(&message);
+        for line in text.trim_end().lines() {
+            events.emit(
+                Some(app_id.to_string()),
+                "deploy.release.log",
+                Some(serde_json::json!({ "line": line })),
+            );
+            if let Err(error) = logs
+                .append(
+                    app_id,
+                    Some(deployment_id),
+                    Some(environment_id),
+                    crate::logs::SOURCE_RELEASE,
+                    stream,
+                    line,
+                )
+                .await
+            {
+                tracing::warn!(error = %error, "failed to store release log line");
+            }
+        }
     }
+
+    let wait_opts = WaitContainerOptionsBuilder::default().build();
+    let mut wait_stream = docker.wait_container(&resp.id, Some(wait_opts));
+    let wait_result = wait_stream.next().await;
 
     // Check exit code
     let exit_code = wait_result

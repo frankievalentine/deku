@@ -159,7 +159,7 @@ export interface LogLine {
   id: string;
   app: string;
   deployment_id: string | null;
-  source: 'build' | 'runtime';
+  source: 'build' | 'release' | 'runtime';
   stream: LogStream;
   process: string;
   message: string;

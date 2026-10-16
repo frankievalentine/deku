@@ -26,7 +26,10 @@ pub struct LogsArgs {
     deployment: Option<String>,
     #[arg(long, help = "Only lines from this environment slug")]
     environment: Option<String>,
-    #[arg(long, help = "build or runtime (default: both)")]
+    #[arg(
+        long,
+        help = "build, release or runtime, or several separated by commas (default: all)"
+    )]
     source: Option<String>,
     #[arg(long, help = "stdout or stderr")]
     stream: Option<String>,

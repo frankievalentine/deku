@@ -256,7 +256,7 @@ function toLogLine(app: string, raw: api.LogLine): LogLine {
     id: raw.id,
     app,
     deployment_id: raw.deployment_id,
-    source: raw.source === 'build' ? 'build' : 'runtime',
+    source: raw.source === 'build' || raw.source === 'release' ? raw.source : 'runtime',
     stream: raw.stream === 'stderr' ? 'stderr' : 'stdout',
     process: raw.source,
     message: raw.message,
@@ -329,13 +329,16 @@ function setLive(next: boolean): void {
   for (const watcher of liveWatchers) watcher();
 }
 
+/** The log sources a deploy's own output is made of: its build, then its release command. */
+const DEPLOY_OUTPUT = 'build,release';
+
 /** The screen shown last decides whose log lines the stream carries. */
 function streamPath(logs: LogSubscription | undefined): string {
   if (!logs) return '/api/events/stream';
   const params = new URLSearchParams({ logs: logs.app });
   if (logs.deployment) {
     params.set('deployment', logs.deployment);
-    params.set('source', 'build');
+    params.set('source', DEPLOY_OUTPUT);
   } else {
     params.set('source', 'runtime');
   }
@@ -598,7 +601,7 @@ export const client = {
   },
 
   async deploymentLogs(name: string, id: string): Promise<LogLine[]> {
-    const lines = await api.fetchLogs(name, 1000, { deployment: id, source: 'build' });
+    const lines = await api.fetchLogs(name, 1000, { deployment: id, source: DEPLOY_OUTPUT });
     return lines.map((line) => toLogLine(name, line));
   },
 

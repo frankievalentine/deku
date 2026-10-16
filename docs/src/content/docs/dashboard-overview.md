@@ -69,8 +69,8 @@ Opening an app shows five tabs:
 - **Overview**: the live release, processes, recent output, domains, linked services, recent deploys,
   a health check, and a box to run a command in a fresh or the running container.
 - **Deploys**: deploy an image or upload a source archive, browse every deploy, and roll back. A
-  deploy's page shows each step (build, release, health check, live) with its timing, and the build
-  output as it streams.
+  deploy's page shows each step (build, release, health check, live) with its timing, and the output
+  of the build and the release command as it streams.
 - **Logs**: live runtime output. Filter the lines, or narrow to one stream or process.
 - **Config**: config vars, app-wide or overridden per environment, plus the values Deku sets for
   linked services and the object store.
