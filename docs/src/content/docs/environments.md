@@ -90,19 +90,26 @@ until the deployment falls out of the retention window.
 
 ### Retention
 
-An environment's recent deployments stay running so their URLs keep working:
+An environment's recent deployments keep serving their URLs:
 
 ```toml
 [previews]
 keep_deployments = 3   # per environment, counting the live one
 ```
 
-A deploy keeps the live deployment plus the newest `keep_deployments - 1` before it, and retires
-anything older after the `retire` grace period. Set it to `1` to keep only the live deployment, whose
-URL then goes dark when the next deploy replaces it.
+A deploy keeps the live deployment plus the newest `keep_deployments - 1` before it. When the new
+deployment goes live:
 
-Each retained deployment holds its own containers, so raising this number costs memory and ports per
-environment. Lowering it takes effect on the next deploy.
+- Every process other than `web` of the deployments it replaces stops at once, so a worker never
+  keeps taking jobs with the old code.
+- A retained deployment keeps one web replica for its URL. Its other web replicas stop after the
+  `retire` grace period, so requests in flight finish.
+- Anything older than the retention window stops after the same grace period.
+
+Set it to `1` to keep only the live deployment, whose URL then goes dark when the next deploy
+replaces it. Each retained deployment holds one container and one port, and lowering the number
+takes effect on the next deploy. A rollback starts a fresh deployment from the retained image, with
+the full process scale.
 
 Hostnames are derived, not stored: a URL resolves only while its containers are retained, and its
 vhost is removed when they are retired, so an expired URL stops resolving rather than failing

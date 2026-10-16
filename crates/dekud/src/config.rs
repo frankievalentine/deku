@@ -181,9 +181,10 @@ fn default_acme_client_path() -> PathBuf {
 
 /// How many deployments per environment stay reachable at their own URL.
 ///
-/// A replaced deployment's containers are kept running so its per-deployment
-/// URL keeps serving the build it named. Only deployments beyond this count are
-/// retired, and lowering it retires the excess on the next deploy.
+/// A replaced deployment keeps one web replica running so its per-deployment
+/// URL keeps serving the build it named; its other processes stop when the new
+/// deployment goes live. Deployments beyond this count are retired entirely,
+/// and lowering it retires the excess on the next deploy.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PreviewsConfig {
     /// Deployments kept per environment, counting the live one. A value below 1

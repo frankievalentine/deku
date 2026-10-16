@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use deku_core::types::{
-    AppStatus, BuilderType, DekuToml, DeployStatus, ObjectStoreConfig, ProcfileEntry,
+    AppStatus, BuilderType, ContainerRecord, DekuToml, DeployStatus, ObjectStoreConfig,
+    ProcfileEntry,
 };
 use sqlx::SqlitePool;
 
@@ -733,10 +734,9 @@ async fn do_deploy(
     .await?;
 
     // Which of this environment's deployments stay reachable at their own URL:
-    // the new one plus the newest (keep - 1) previous ones. Their containers are
-    // left running; everything older is retired after the usual grace period, so
-    // a per-deployment URL keeps serving the build it named for as long as the
-    // deployment is retained.
+    // the new one plus the newest (keep - 1) previous ones. A retained
+    // deployment keeps one web replica for its URL; everything else it ran is
+    // retired, as is everything older (see `plan_retirement`).
     //
     // Scoping to the environment matters: an app-wide list would include the
     // containers of every other environment, and retiring them would take those
@@ -752,12 +752,10 @@ async fn do_deploy(
     )
     .await?;
 
-    let previous_containers: Vec<_> =
-        queries::list_containers_for_environment(pool, app_id, environment_id)
-            .await?
-            .into_iter()
-            .filter(|container| !retained_previous.contains(&container.deployment_id))
-            .collect();
+    let retirement = plan_retirement(
+        &queries::list_containers_for_environment(pool, app_id, environment_id).await?,
+        &retained_previous,
+    );
 
     // Load per-environment config: app-wide values with this environment's
     // overrides applied.
@@ -1118,7 +1116,16 @@ async fn do_deploy(
 
     // ── Retire old containers ─────────────────────────────────────────────────
 
-    let old_ids: Vec<String> = previous_containers.iter().map(|c| c.id.clone()).collect();
+    if !retirement.now.is_empty() {
+        let docker_clone = docker.clone();
+        let pool_clone = pool.clone();
+        let ids = retirement.now;
+        tokio::spawn(async move {
+            retire_containers(&docker_clone, &pool_clone, ids).await;
+        });
+    }
+
+    let old_ids = retirement.after_grace;
 
     if !old_ids.is_empty() {
         let docker_clone = docker.clone();
@@ -1128,11 +1135,7 @@ async fn do_deploy(
         let app_name_clone = app_name.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(retire_secs)).await;
-            for id in old_ids {
-                let _ = container::stop_container(&docker_clone, &id, 30).await;
-                let _ = container::remove_container(&docker_clone, &id).await;
-                let _ = queries::update_container_status(&pool_clone, &id, "removed").await;
-            }
+            retire_containers(&docker_clone, &pool_clone, old_ids).await;
 
             // A retired deployment's vhost would otherwise keep pointing at a
             // port nothing listens on, so its URL would fail with a proxy error
@@ -1154,6 +1157,69 @@ async fn do_deploy(
     }
 
     Ok(built.tag)
+}
+
+/// Stop and remove `ids` all at once. Each stop can wait out its whole timeout
+/// for a process that ignores SIGTERM, so stopping them in turn would keep the
+/// last one running for that timeout times the number before it.
+async fn retire_containers(docker: &DockerClient, pool: &SqlitePool, ids: Vec<String>) {
+    futures::future::join_all(ids.iter().map(|id| async move {
+        let _ = container::stop_container(docker, id, 30).await;
+        let _ = container::remove_container(docker, id).await;
+        let _ = queries::update_container_status(pool, id, "removed").await;
+    }))
+    .await;
+}
+
+/// Which of an environment's running containers a new deployment retires, and when.
+#[derive(Debug, Default, PartialEq)]
+struct Retirement {
+    /// Stopped as soon as the new deployment is live: every process other than
+    /// web of the deployments it replaces. A worker left running would keep
+    /// taking jobs with the old code, even after a migration changed the schema
+    /// under it.
+    now: Vec<String>,
+    /// Stopped after the retire grace period, so requests in flight finish: the
+    /// web replicas of deployments outside the retention window, and every web
+    /// replica of a retained deployment beyond the one its URL is served from.
+    after_grace: Vec<String>,
+}
+
+/// Plan the retirement of `containers`, an environment's running containers
+/// collected before the new deployment started any, given the previous
+/// deployments that stay `retained`.
+///
+/// A retained deployment keeps its first web replica, the one started first,
+/// so its own URL keeps serving the build it names. Nothing else of it keeps
+/// running: a per-deployment URL is for looking at a build, not for taking
+/// production load, and a rollback starts a fresh deployment rather than
+/// reusing these containers.
+fn plan_retirement(containers: &[ContainerRecord], retained: &[String]) -> Retirement {
+    let mut kept: HashMap<&str, &ContainerRecord> = HashMap::new();
+    for container in containers
+        .iter()
+        .filter(|c| c.process_type == "web" && retained.contains(&c.deployment_id))
+    {
+        let first = kept
+            .entry(container.deployment_id.as_str())
+            .or_insert(container);
+        if container.created_at < first.created_at {
+            *first = container;
+        }
+    }
+
+    let mut retirement = Retirement::default();
+    for container in containers {
+        if container.process_type != "web" {
+            retirement.now.push(container.id.clone());
+        } else if kept
+            .get(container.deployment_id.as_str())
+            .is_none_or(|first| first.id != container.id)
+        {
+            retirement.after_grace.push(container.id.clone());
+        }
+    }
+    retirement
 }
 
 // ── Restart recovery ──────────────────────────────────────────────────────────
@@ -1482,6 +1548,62 @@ pub(crate) fn parse_cpu_quota(cpu: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use deku_core::types::NewApp;
+
+    fn running(id: &str, deployment: &str, process: &str, started_secs: i64) -> ContainerRecord {
+        ContainerRecord {
+            id: id.to_string(),
+            app_id: "app-1".to_string(),
+            deployment_id: deployment.to_string(),
+            process_type: process.to_string(),
+            status: "running".to_string(),
+            host_port: (process == "web").then_some(30000 + started_secs),
+            created_at: chrono::DateTime::from_timestamp(started_secs, 0).expect("timestamp"),
+        }
+    }
+
+    #[test]
+    fn a_retained_deployment_keeps_only_its_first_web_replica() {
+        // Listed newest first, as the query returns them.
+        let containers = vec![
+            running("live-worker", "live", "worker", 12),
+            running("live-web-1", "live", "web", 11),
+            running("live-web-0", "live", "web", 10),
+        ];
+        let plan = super::plan_retirement(&containers, &["live".to_string()]);
+        assert_eq!(
+            plan.now,
+            vec!["live-worker"],
+            "the old worker stops at once"
+        );
+        assert_eq!(
+            plan.after_grace,
+            vec!["live-web-1"],
+            "extra web replicas drain, and the first one keeps the URL serving"
+        );
+    }
+
+    #[test]
+    fn a_deployment_outside_the_window_is_retired_entirely() {
+        let containers = vec![
+            running("kept-web-0", "kept", "web", 20),
+            running("old-worker", "old", "worker", 2),
+            running("old-web-0", "old", "web", 1),
+        ];
+        let plan = super::plan_retirement(&containers, &["kept".to_string()]);
+        assert_eq!(plan.now, vec!["old-worker"]);
+        assert_eq!(plan.after_grace, vec!["old-web-0"]);
+    }
+
+    #[test]
+    fn keeping_only_the_live_deployment_retires_everything_before_it() {
+        let containers = vec![
+            running("prev-scheduler", "prev", "scheduler", 3),
+            running("prev-web-0", "prev", "web", 1),
+        ];
+        let plan = super::plan_retirement(&containers, &[]);
+        assert_eq!(plan.now, vec!["prev-scheduler"]);
+        assert_eq!(plan.after_grace, vec!["prev-web-0"]);
+    }
 
     #[test]
     fn unready_replicas_reports_every_failing_index() {
