@@ -72,7 +72,7 @@ build_dashboard() {
   (
     cd "${ROOT_DIR}/dashboard"
     bun install --frozen-lockfile
-    PUBLIC_DEKU_RELEASE_VERSION="$(resolve_release_version)" bun run build
+    bun run build
   )
 
   tar -czf "${DIST_DIR}/deku-dashboard.tar.gz" \
