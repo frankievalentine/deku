@@ -2004,6 +2004,11 @@ mod tests {
         let password = "legacy-secret";
         let volume = format!("deku-redis-{name}-data");
         let container_name = super::service_container_name("redis", name);
+        // Created directly rather than through service creation, so nothing
+        // else pulls the image on a host that has never run redis.
+        crate::container::pull_image(docker, spec.image, |_| {})
+            .await
+            .expect("pull redis image");
         let body = ContainerCreateBody {
             image: Some(spec.image.to_string()),
             cmd: (spec.make_cmd)(name, password),
