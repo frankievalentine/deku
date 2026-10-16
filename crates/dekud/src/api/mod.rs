@@ -12,7 +12,6 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use futures::Stream;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::io::AsyncWriteExt;
@@ -20,7 +19,7 @@ use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::RwLock;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -42,6 +41,7 @@ pub mod auth;
 mod console;
 pub mod openapi;
 mod services;
+pub mod session;
 
 const ARCHIVE_UPLOAD_LIMIT: usize = 512 * 1024 * 1024;
 
@@ -200,7 +200,12 @@ fn build_api_router(state: SharedState) -> Router {
             get(get_registry).post(set_registry).delete(unset_registry),
         )
         // Dashboard auth
-        .route("/api/dashboard/session", post(verify_dashboard_session))
+        .route(
+            "/api/dashboard/session",
+            get(get_dashboard_session)
+                .post(verify_dashboard_session)
+                .delete(end_dashboard_session),
+        )
         .route("/api/dashboard/token", post(rotate_dashboard_token))
         .route("/api/version", get(get_version_status))
         // Archive deploy
@@ -359,19 +364,54 @@ fn build_api_router(state: SharedState) -> Router {
 }
 
 fn build_public_router(state: SharedState) -> Router {
-    let dashboard_dir = state.config.dashboard_dir.clone();
     let router = Router::new()
         .route("/healthz", get(health_check))
         .route("/api/openapi.json", get(openapi::spec))
         .route("/api/docs", get(openapi::docs));
 
     if crate::config::dashboard_assets_available(&state.config) {
-        router
-            .fallback_service(ServeDir::new(dashboard_dir).append_index_html_on_directories(true))
-            .with_state(state)
+        router.fallback(serve_dashboard).with_state(state)
     } else {
         router.fallback(missing_dashboard_page).with_state(state)
     }
+}
+
+/// Serve the dashboard's files, and its `index.html` for any other path.
+///
+/// The dashboard routes in the browser, so a reload on `/apps/shop/logs` asks
+/// for a path no file has; it gets `index.html` and the app takes over. Paths
+/// under `/api/` are never the dashboard's, so an unknown one stays a 404.
+async fn serve_dashboard(
+    State(state): State<SharedState>,
+    request: axum::extract::Request,
+) -> Response {
+    use tower::ServiceExt;
+
+    let path = request.uri().path().to_owned();
+    if path.starts_with("/api/") {
+        return not_found(format!("no API route at {path}")).into_response();
+    }
+    let dir = &state.config.dashboard_dir;
+    let files = ServeDir::new(dir)
+        .append_index_html_on_directories(true)
+        .fallback(ServeFile::new(dir.join("index.html")));
+    let mut response = match files.oneshot(request).await {
+        Ok(response) => response.map(axum::body::Body::new),
+        Err(never) => match never {},
+    };
+    // Built assets carry a content hash in their names, so they never change;
+    // everything else, index.html above all, is checked on every load so a
+    // new release is picked up.
+    let cache = if path.starts_with("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static(cache),
+    );
+    response
 }
 
 /// Routes only reachable over the daemon's Unix socket.
@@ -575,16 +615,8 @@ pub async fn serve(state: SharedState) -> anyhow::Result<()> {
         .merge(build_public_router(state.clone()))
         .layer(TraceLayer::new_for_http().make_span_with(make_span));
 
-    // TCP router — dashboard/static assets are public, API routes require dashboard auth.
-    let tcp_api = build_api_router(state.clone())
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_auth,
-        ))
-        .layer(middleware::from_fn(security_headers));
-    let tcp_app = build_public_router(state.clone())
-        .merge(tcp_api)
-        .layer(TraceLayer::new_for_http().make_span_with(make_span));
+    let tcp_app =
+        build_tcp_app(state.clone()).layer(TraceLayer::new_for_http().make_span_with(make_span));
 
     let tcp_addr = state.config.api_listen_addr();
     let tcp_listener = TcpListener::bind(tcp_addr).await?;
@@ -608,6 +640,18 @@ pub async fn serve(state: SharedState) -> anyhow::Result<()> {
     )?;
 
     Ok(())
+}
+
+/// The router served over TCP: the dashboard and static assets are public, and
+/// every API route requires the dashboard token, a session, or a deploy token.
+fn build_tcp_app(state: SharedState) -> Router {
+    let tcp_api = build_api_router(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ))
+        .layer(middleware::from_fn(security_headers));
+    build_public_router(state).merge(tcp_api)
 }
 
 /// Force no-referrer and no-store on API responses so a deploy token carried in
@@ -690,22 +734,140 @@ async fn health_check() -> impl IntoResponse {
     tag = "dashboard",
     responses((status = 200, description = "Rotate the dashboard token"))
 )]
-async fn rotate_dashboard_token(State(state): State<SharedState>) -> impl IntoResponse {
-    match rotate_dashboard_token_inner(&state).await {
-        Ok(token) => (StatusCode::OK, Json(serde_json::json!({ "token": token }))).into_response(),
-        Err(e) => internal_error(e).into_response(),
+async fn rotate_dashboard_token(
+    State(state): State<SharedState>,
+    authenticated: Option<axum::Extension<session::AuthenticatedBy>>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let token = match rotate_dashboard_token_inner(&state).await {
+        Ok(token) => token,
+        Err(e) => return internal_error(e).into_response(),
+    };
+    // Every session belonged to the old token. The browser that asked for the
+    // rotation stays signed in under the new one; every other browser is out.
+    if let Err(e) = session::delete_all(&state.pool).await {
+        return internal_error(e).into_response();
     }
+    let body = Json(serde_json::json!({ "token": token }));
+    if matches!(
+        authenticated,
+        Some(axum::Extension(session::AuthenticatedBy::Session(_)))
+    ) {
+        match start_session(&state, browser_is_https(peer.as_ref(), &headers)).await {
+            Ok(started) => {
+                let mut response = (StatusCode::OK, body).into_response();
+                if let Some(cookie) = started.headers().get(axum::http::header::SET_COOKIE) {
+                    response
+                        .headers_mut()
+                        .insert(axum::http::header::SET_COOKIE, cookie.clone());
+                }
+                response
+            }
+            Err(error) => error.into_response(),
+        }
+    } else {
+        (StatusCode::OK, body).into_response()
+    }
+}
+
+/// Whether the browser reached this request over HTTPS, for the cookie's
+/// `Secure` flag.
+fn browser_is_https(
+    peer: Option<&axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    session::request_is_https(peer.map(|connect| connect.0 .0.ip()), headers)
+}
+
+/// A 204 that starts a session for the current token.
+async fn start_session(
+    state: &AppState,
+    secure: bool,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let Some(auth) = state.dashboard_auth.read().await.clone() else {
+        return Err(internal_error("dashboard auth is not configured"));
+    };
+    let now = Utc::now();
+    let expires_at = session::session_expiry(auth.expires_at, now);
+    let id = session::create(&state.pool, &auth.token_hash, expires_at)
+        .await
+        .map_err(internal_error)?;
+    let cookie = session::set_cookie(&id, expires_at, secure, now);
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(axum::http::header::SET_COOKIE, cookie)],
+    )
+        .into_response())
 }
 
 #[utoipa::path(
     post,
     path = "/api/dashboard/session",
     tag = "dashboard",
-    responses((status = 204, description = "No content"))
+    responses((status = 204, description = "Signed in: the response sets an HttpOnly session cookie"))
 )]
-async fn verify_dashboard_session() -> impl IntoResponse {
-    auth::log_dashboard_session_verified();
-    StatusCode::NO_CONTENT
+async fn verify_dashboard_session(
+    State(state): State<SharedState>,
+    authenticated: Option<axum::Extension<session::AuthenticatedBy>>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    // Only the token itself starts a session; a browser already in one is done.
+    match authenticated.map(|axum::Extension(by)| by) {
+        Some(session::AuthenticatedBy::Bearer) => {
+            auth::log_dashboard_session_verified();
+            match start_session(&state, browser_is_https(peer.as_ref(), &headers)).await {
+                Ok(response) => response,
+                Err(error) => error.into_response(),
+            }
+        }
+        _ => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/dashboard/session",
+    tag = "dashboard",
+    responses((status = 200, description = "The browser is signed in"))
+)]
+async fn get_dashboard_session(State(state): State<SharedState>) -> impl IntoResponse {
+    let expires_at = state
+        .dashboard_auth
+        .read()
+        .await
+        .as_ref()
+        .and_then(|auth| auth.expires_at);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "signed_in": true, "token_expires_at": expires_at })),
+    )
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/dashboard/session",
+    tag = "dashboard",
+    responses((status = 204, description = "Signed out: the session is ended and its cookie removed"))
+)]
+async fn end_dashboard_session(
+    State(state): State<SharedState>,
+    authenticated: Option<axum::Extension<session::AuthenticatedBy>>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if let Some(axum::Extension(session::AuthenticatedBy::Session(id))) = authenticated {
+        if let Err(error) = session::delete(&state.pool, &id).await {
+            return internal_error(error).into_response();
+        }
+    }
+    let cookie = session::clear_cookie(browser_is_https(peer.as_ref(), &headers));
+    (
+        StatusCode::NO_CONTENT,
+        [(axum::http::header::SET_COOKIE, cookie)],
+    )
+        .into_response()
 }
 
 #[utoipa::path(
@@ -2904,23 +3066,101 @@ async fn list_events(
     }
 }
 
+/// Filters for the event stream. With `logs`, the stream also carries that
+/// app's log lines, so a browser needs one connection instead of two.
+#[derive(Debug, Default, Deserialize)]
+struct EventStreamQuery {
+    /// Also stream this app's log lines, as `event: log` frames.
+    logs: Option<String>,
+    /// Only log lines from this deployment.
+    deployment: Option<String>,
+    /// `build` or `runtime`.
+    source: Option<String>,
+    /// `stdout` or `stderr`.
+    stream: Option<String>,
+    /// Inferred level, for example `ERROR`.
+    level: Option<String>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/events/stream",
     tag = "events",
-    responses((status = 200, description = "Stream all events as SSE"))
+    params(
+        ("logs" = Option<String>, Query, description = "Also stream this app's log lines, as `event: log` frames"),
+        ("deployment" = Option<String>, Query, description = "Only log lines from this deployment"),
+        ("source" = Option<String>, Query, description = "Only log lines from build or runtime"),
+        ("stream" = Option<String>, Query, description = "Only log lines from stdout or stderr"),
+        ("level" = Option<String>, Query, description = "Only log lines with this inferred level")
+    ),
+    responses(
+        (status = 200, description = "Stream all events as SSE, and an app's log lines when `logs` is set"),
+        (status = 404, description = "The app named by `logs` does not exist")
+    )
 )]
 async fn stream_events(
     State(state): State<SharedState>,
-) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
-    let rx = state.events.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|result| match result {
-        Ok(event) => serde_json::to_string(&event)
+    Query(params): Query<EventStreamQuery>,
+) -> Response {
+    let events = BroadcastStream::new(state.events.subscribe()).filter_map(|result| {
+        let event = result.ok()?;
+        serde_json::to_string(&event)
             .ok()
-            .map(|data| Ok(SseEvent::default().data(data))),
-        Err(_) => None,
+            .map(|data| Ok::<SseEvent, Infallible>(SseEvent::default().data(data)))
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+
+    let Some(name) = params.logs.as_deref() else {
+        return Sse::new(events)
+            .keep_alive(KeepAlive::default())
+            .into_response();
+    };
+    let app = match queries::get_app(&state.pool, name).await {
+        Ok(app) => app,
+        Err(deku_core::error::DekuError::AppNotFound(_)) => {
+            return not_found(format!("app '{name}' not found")).into_response();
+        }
+        Err(e) => return internal_error(e).into_response(),
+    };
+
+    let filter = crate::logs::LogQuery {
+        deployment: params.deployment,
+        source: params.source,
+        stream: params.stream,
+        level: params.level,
+        ..Default::default()
+    };
+    let logs = BroadcastStream::new(state.logs.subscribe()).filter_map(move |result| {
+        let line = result.ok()?;
+        if !log_line_matches(&app.id, &filter, &line) {
+            return None;
+        }
+        serde_json::to_string(&line)
+            .ok()
+            .map(|data| Ok::<SseEvent, Infallible>(SseEvent::default().event("log").data(data)))
+    });
+
+    Sse::new(events.merge(logs))
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// Whether a live log line belongs to `app_id` and passes the in-memory parts of
+/// `filter`: deployment, source, stream, and level. Search and environment
+/// apply to stored lines only.
+fn log_line_matches(
+    app_id: &str,
+    filter: &crate::logs::LogQuery,
+    line: &crate::logs::LogLine,
+) -> bool {
+    let wants = |wanted: &Option<String>, actual: Option<&str>| match wanted.as_deref() {
+        Some(wanted) if !wanted.trim().is_empty() => actual == Some(wanted.trim()),
+        _ => true,
+    };
+    line.app_id == app_id
+        && wants(&filter.deployment, line.deployment_id.as_deref())
+        && wants(&filter.source, Some(&line.source))
+        && wants(&filter.stream, Some(&line.stream))
+        && wants(&filter.level, Some(&line.level))
 }
 
 #[derive(Debug, Deserialize)]
@@ -4142,18 +4382,7 @@ async fn stream_app_logs(
     // A plain closure: every filter is in memory, so there is nothing to await.
     let stream = BroadcastStream::new(receiver).filter_map(move |result| {
         let line = result.ok()?;
-        if line.app_id != app_id {
-            return None;
-        }
-
-        let wants = |wanted: &Option<String>, actual: &str| match wanted.as_deref() {
-            Some(wanted) if !wanted.trim().is_empty() => wanted.trim() == actual,
-            _ => true,
-        };
-        if !wants(&filter.source, &line.source)
-            || !wants(&filter.stream, &line.stream)
-            || !wants(&filter.level, &line.level)
-        {
+        if !log_line_matches(&app_id, &filter, &line) {
             return None;
         }
 
@@ -5260,5 +5489,364 @@ mod routing_inputs_tests {
     fn an_app_with_domains_is_incomplete_without_upstreams() {
         assert!(!inputs_for(&["example.com"], None, false));
         assert!(inputs_for(&["example.com"], None, true));
+    }
+}
+
+#[cfg(test)]
+mod session_flow_tests {
+    use super::{build_tcp_app, AppState, SharedState};
+    use axum::body::Body;
+    use axum::extract::connect_info::MockConnectInfo;
+    use axum::http::{header, Request, StatusCode};
+    use std::net::SocketAddr;
+    use tower::ServiceExt;
+
+    async fn state() -> (SharedState, String, tempfile::TempDir) {
+        let dashboard = tempfile::tempdir().expect("dashboard dir");
+        std::fs::write(
+            dashboard.path().join("index.html"),
+            "<!doctype html><div id=root></div>",
+        )
+        .expect("index");
+        std::fs::create_dir_all(dashboard.path().join("assets")).expect("assets");
+        std::fs::write(
+            dashboard.path().join("assets/app-1a2b3c.js"),
+            "console.log(1)",
+        )
+        .expect("asset");
+
+        let cfg = crate::config::DekuConfig {
+            dashboard_dir: dashboard.path().to_path_buf(),
+            ..crate::config::DekuConfig::default()
+        };
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("pool");
+        crate::db::migrate(&pool).await.expect("migrate");
+        let events = crate::events::EventBus::new(pool.clone());
+        let logs = crate::logs::LogBus::new(pool.clone());
+        let docker = crate::container::connect().expect("docker client");
+        let state = AppState::new(cfg, pool, events, logs, docker);
+
+        let (token, auth) =
+            deku_core::auth::issue_dashboard_token(chrono::Utc::now(), None).expect("token");
+        *state.dashboard_auth.write().await = Some(auth);
+        (state, token, dashboard)
+    }
+
+    async fn send(
+        state: &SharedState,
+        peer: [u8; 4],
+        request: Request<Body>,
+    ) -> axum::response::Response {
+        build_tcp_app(state.clone())
+            .layer(MockConnectInfo(SocketAddr::from((peer, 40000))))
+            .oneshot(request)
+            .await
+            .expect("response")
+    }
+
+    fn session_cookie(response: &axum::response::Response) -> String {
+        let set = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("a session cookie is set")
+            .to_str()
+            .expect("ascii");
+        set.split(';').next().expect("name=value").to_string()
+    }
+
+    #[tokio::test]
+    async fn the_event_stream_carries_one_apps_filtered_log_lines() {
+        use futures::StreamExt as _;
+
+        let (state, token, _dashboard) = state().await;
+        let app = crate::db::queries::create_app(
+            &state.pool,
+            &deku_core::types::NewApp { name: "web".into() },
+        )
+        .await
+        .expect("app");
+
+        let response = send(
+            &state,
+            [127, 0, 0, 1],
+            Request::get("/api/events/stream?logs=web&deployment=d1&source=build")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // The handler subscribed before answering, so these all reach the stream;
+        // only the first passes the filter.
+        for (deployment, source, message) in [
+            (Some("d2"), "build", "another deploy's build"),
+            (Some("d1"), "runtime", "this deploy's runtime"),
+            (Some("d1"), "build", "this deploy's build"),
+        ] {
+            state
+                .logs
+                .append(&app.id, deployment, None, source, "stdout", message)
+                .await
+                .expect("append");
+        }
+
+        let mut body = response.into_body().into_data_stream();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+            .await
+            .expect("a frame arrives")
+            .expect("the stream is open")
+            .expect("frame bytes");
+        let frame = String::from_utf8(frame.to_vec()).expect("utf-8");
+        assert!(frame.starts_with("event: log\n"), "{frame}");
+        assert!(frame.contains("this deploy's build"), "{frame}");
+    }
+
+    #[tokio::test]
+    async fn the_event_stream_rejects_logs_for_an_unknown_app() {
+        let (state, token, _dashboard) = state().await;
+        let response = send(
+            &state,
+            [127, 0, 0, 1],
+            Request::get("/api/events/stream?logs=missing")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_browser_signs_in_once_and_then_uses_its_cookie() {
+        let (state, token, _dashboard) = state().await;
+        let peer = [203, 0, 113, 21];
+
+        let signed_in = send(
+            &state,
+            peer,
+            Request::post("/api/dashboard/session")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(signed_in.status(), StatusCode::NO_CONTENT);
+        let set = signed_in.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("ascii")
+            .to_string();
+        assert!(
+            set.contains("HttpOnly") && set.contains("SameSite=Strict"),
+            "{set}"
+        );
+        assert!(
+            !set.contains("Secure"),
+            "plain HTTP over a tunnel cannot use a Secure cookie"
+        );
+        let cookie = session_cookie(&signed_in);
+
+        let read = send(
+            &state,
+            peer,
+            Request::get("/api/apps")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(
+            read.status(),
+            StatusCode::OK,
+            "a read needs only the cookie"
+        );
+
+        let forged = send(
+            &state,
+            peer,
+            Request::post("/api/apps")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"evil"}"#))
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(
+            forged.status(),
+            StatusCode::FORBIDDEN,
+            "a write without the CSRF header is refused"
+        );
+
+        let cross_site = send(
+            &state,
+            peer,
+            Request::post("/api/apps")
+                .header(header::COOKIE, &cookie)
+                .header("x-deku-csrf", "1")
+                .header(header::HOST, "127.0.0.1:2810")
+                .header(header::ORIGIN, "https://evil.example")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"evil"}"#))
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(
+            cross_site.status(),
+            StatusCode::FORBIDDEN,
+            "another origin is refused"
+        );
+
+        let from_dashboard = send(
+            &state,
+            peer,
+            Request::post("/api/apps")
+                .header(header::COOKIE, &cookie)
+                .header("x-deku-csrf", "1")
+                .header(header::HOST, "127.0.0.1:2810")
+                .header(header::ORIGIN, "http://127.0.0.1:2810")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"shop"}"#))
+                .expect("request"),
+        )
+        .await;
+        assert!(
+            !matches!(
+                from_dashboard.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ),
+            "the dashboard's own write is let through: {}",
+            from_dashboard.status()
+        );
+
+        let signed_out = send(
+            &state,
+            peer,
+            Request::delete("/api/dashboard/session")
+                .header(header::COOKIE, &cookie)
+                .header("x-deku-csrf", "1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(signed_out.status(), StatusCode::NO_CONTENT);
+        let after = send(
+            &state,
+            peer,
+            Request::get("/api/apps")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(
+            after.status(),
+            StatusCode::UNAUTHORIZED,
+            "signing out ends the session"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotating_the_token_ends_other_sessions_and_keeps_the_rotating_one() {
+        let (state, token, _dashboard) = state().await;
+        let peer = [203, 0, 113, 22];
+        let sign_in = || {
+            Request::post("/api/dashboard/session")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request")
+        };
+        let other = session_cookie(&send(&state, peer, sign_in()).await);
+        let mine = session_cookie(&send(&state, peer, sign_in()).await);
+
+        let rotated = send(
+            &state,
+            peer,
+            Request::post("/api/dashboard/token")
+                .header(header::COOKIE, &mine)
+                .header("x-deku-csrf", "1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(rotated.status(), StatusCode::OK);
+        let renewed = session_cookie(&rotated);
+
+        let read = |cookie: String| {
+            Request::get("/api/apps")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .expect("request")
+        };
+        assert_eq!(
+            send(&state, peer, read(other)).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&state, peer, read(mine)).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(&state, peer, read(renewed)).await.status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn dashboard_routes_load_the_app_and_unknown_api_routes_stay_404() {
+        let (state, _token, _dashboard) = state().await;
+        let peer = [203, 0, 113, 23];
+
+        let deep = send(
+            &state,
+            peer,
+            Request::get("/apps/shop/logs")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(deep.status(), StatusCode::OK);
+        assert_eq!(deep.headers()[header::CACHE_CONTROL], "no-cache");
+        let body = axum::body::to_bytes(deep.into_body(), 1 << 16)
+            .await
+            .expect("body");
+        assert!(
+            String::from_utf8_lossy(&body).contains("id=root"),
+            "a client route is served index.html"
+        );
+
+        let asset = send(
+            &state,
+            peer,
+            Request::get("/assets/app-1a2b3c.js")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert_eq!(asset.status(), StatusCode::OK);
+        assert_eq!(
+            asset.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+
+        let missing = send(
+            &state,
+            peer,
+            Request::get("/api/nope")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+        assert!(
+            matches!(
+                missing.status(),
+                StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED
+            ),
+            "an unknown API path is never the dashboard: {}",
+            missing.status()
+        );
     }
 }

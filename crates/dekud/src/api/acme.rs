@@ -29,6 +29,9 @@ fn settings_json(
         "provider": cfg.acme.provider,
         "wildcard": cfg.acme.wildcard,
         "custom_domains": cfg.acme.custom_domains,
+        // Read-only here: it is set in the daemon config, and apps' generated
+        // hostnames and the wildcard are named after it.
+        "global_domain": cfg.global_domain,
         "client_path": cfg.acme.client_path,
         "api_token_file": cfg.acme.api_token_file,
         "token_configured": token_configured,

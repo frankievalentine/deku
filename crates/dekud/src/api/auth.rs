@@ -192,7 +192,7 @@ fn query_deploy_token(query: Option<&str>) -> Option<String> {
 /// Apply only to the TCP router — the Unix socket router is trusted local access.
 pub async fn require_auth(
     axum::extract::State(state): axum::extract::State<SharedState>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> impl IntoResponse {
     let method = request.method().clone();
@@ -248,6 +248,9 @@ pub async fn require_auth(
                 return unauthorized();
             }
             if verify_token(token, auth_state.token_hash).await {
+                request
+                    .extensions_mut()
+                    .insert(super::session::AuthenticatedBy::Bearer);
                 next.run(request).await
             } else {
                 warn!(%method, %path, "dashboard auth rejected request with invalid token");
@@ -262,7 +265,37 @@ pub async fn require_auth(
             )
                 .into_response()
         }
-        (None, _) => {
+        (None, Some(auth_state)) => {
+            // A browser that signed in sends its session cookie instead.
+            let Some(id) = super::session::cookie_value(request.headers()) else {
+                warn!(%method, %path, "dashboard auth rejected request without token");
+                return unauthorized();
+            };
+            let now = Utc::now();
+            if auth_state.is_expired(now) {
+                return unauthorized();
+            }
+            match super::session::lookup(&state.pool, &id).await {
+                Ok(Some(session))
+                    if super::session::is_valid(&session, &auth_state.token_hash, now) =>
+                {
+                    if !super::session::csrf_allows(&method, request.headers()) {
+                        warn!(%method, %path, "refused a cookie-authenticated request without the CSRF header");
+                        return forbidden("this request must come from the dashboard");
+                    }
+                    request
+                        .extensions_mut()
+                        .insert(super::session::AuthenticatedBy::Session(id));
+                    next.run(request).await
+                }
+                Ok(_) => unauthorized(),
+                Err(error) => {
+                    warn!(%method, %path, "could not read a dashboard session: {error}");
+                    unauthorized()
+                }
+            }
+        }
+        (None, None) => {
             warn!(%method, %path, "dashboard auth rejected request without token");
             unauthorized()
         }
