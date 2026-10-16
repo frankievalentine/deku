@@ -30,8 +30,9 @@ Deku currently consists of two binaries:
 - Local `deku` CLI commands prefer the trusted Unix socket and do not depend on a plaintext token file
 - Dashboard and direct TCP API access use the same opaque dashboard token
 - The token is shown once during setup or reset, then stored only as an Argon2id hash in config
-- The dashboard stores the token in the browser after the first sign-in
-- `deku dashboard reset-token` rotates the token and invalidates previous browser sessions
+- The dashboard sends the token once at sign-in and gets an `HttpOnly` session cookie back; the
+  token itself is not kept in the browser
+- `deku dashboard reset-token` rotates the token and ends every other browser session
 - Dashboard tokens expire 30 days after they are issued; rotate with `deku dashboard reset-token`
 - The dashboard is served over plain HTTP, so new installs listen on loopback only and remote
   access goes through an SSH tunnel
@@ -44,7 +45,7 @@ Deku currently consists of two binaries:
 - Server-sent event streams for deploy and runtime event output
 - Log endpoints for apps and managed services
 
-The dashboard consumes those APIs directly over TCP bearer auth. The CLI uses the same API surface locally over the trusted Unix socket.
+The dashboard calls those APIs over TCP with its session cookie, and keeps one event stream open per tab. Scripts use the same routes with the token as a bearer header. The CLI uses the same API surface locally over the trusted Unix socket.
 
 ## Runtime Components
 

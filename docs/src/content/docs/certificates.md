@@ -174,10 +174,9 @@ Angie will re-request it and nothing is being served meanwhile.
   accepts the write, and Angie asks the certificate authority to validate immediately after. If the
   record has not reached the provider's nameservers, that attempt fails and is retried later. A first
   attempt that fails and a later one that succeeds is the expected shape of that race.
-- **The wildcard covers generated hostnames only.** An app's own domains use a certificate you
-  install at `/etc/angie/ssl/deku_<app>.crt` and `.key`; `deku letsencrypt enable <app>` turns HTTPS on
-  once both files exist. Deku does not issue or renew that certificate. See
-  [Certificate expiry](/diagnostics/#certificate-expiry) for how Deku warns before it expires.
+- **The wildcard covers generated hostnames only.** An app's own domains each get their own
+  certificate (see [App domains](#app-domains)), or serve one you install (see
+  [Installed certificates](#installed-certificates)).
 
 ## Installed certificates
 
