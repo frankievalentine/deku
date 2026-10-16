@@ -105,10 +105,6 @@ function upsertDeployment(
 }
 
 /**
- * Applies the host event stream to the query cache. Log lines and deploy progress are written
- * straight into the cache; anything coarser invalidates the queries it touches.
- */
-/**
  * Follow an app's log lines into the cache while a screen shows them: runtime
  * output, or one deploy's build output when `deployment` is set.
  */
@@ -125,6 +121,10 @@ export function useLogStream(app: string, deployment: string | null = null): voi
   }, [app, deployment, cache]);
 }
 
+/**
+ * Applies the host event stream to the query cache. Log lines and deploy progress are written
+ * straight into the cache; anything coarser invalidates the queries it touches.
+ */
 export function useHostEvents(): void {
   const cache = useQueryClient();
   useEffect(() => {

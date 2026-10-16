@@ -177,9 +177,7 @@ export function AppOverview() {
                     <Link to="/services" className="font-mono hover:underline">
                       {name}
                     </Link>
-                    <span className="ml-auto text-[12px] text-ink-3">
-                      {service ? `${service.kind} ${service.version}` : ''}
-                    </span>
+                    <span className="ml-auto text-[12px] text-ink-3">{service?.kind ?? ''}</span>
                   </li>
                 );
               })}

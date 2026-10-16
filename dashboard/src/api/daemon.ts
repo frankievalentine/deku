@@ -904,7 +904,8 @@ export interface RedirectRecord {
 }
 
 export interface AppLimit {
-  process_type: string | null;
+  /** `_all_` for a limit that applies to every process type. */
+  process_type: string;
   memory: string | null;
   cpu: string | null;
 }

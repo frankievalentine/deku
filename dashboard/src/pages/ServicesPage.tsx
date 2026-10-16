@@ -145,7 +145,7 @@ function ServiceRow({ service }: { service: ManagedService }) {
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="grid w-full grid-cols-[1fr_auto] items-center gap-x-5 gap-y-1 px-2 py-3 text-left hover:bg-sunk/60 md:grid-cols-[minmax(200px,1.2fr)_120px_minmax(140px,1fr)_minmax(160px,1fr)_20px]"
+        className="grid w-full grid-cols-[1fr_auto] items-center gap-x-5 gap-y-1 px-2 py-3 text-left hover:bg-sunk/60 md:grid-cols-[minmax(200px,1.2fr)_minmax(140px,1fr)_minmax(160px,1fr)_20px]"
       >
         <span className="flex min-w-0 items-center gap-3">
           <Dot
@@ -155,13 +155,8 @@ function ServiceRow({ service }: { service: ManagedService }) {
             <span className="block truncate font-mono text-[13.5px] font-medium">
               {service.name}
             </span>
-            <span className="block text-[12.5px] text-ink-3">
-              {KIND_LABEL[service.kind]} {service.version}
-            </span>
+            <span className="block text-[12.5px] text-ink-3">{KIND_LABEL[service.kind]}</span>
           </span>
-        </span>
-        <span className="hidden font-mono text-[12px] text-ink-2 md:block">
-          {service.volume_size}
         </span>
         <span className="hidden min-w-0 truncate text-[12.5px] text-ink-2 md:block">
           {service.linked_apps.length === 0 ? (

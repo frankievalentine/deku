@@ -165,16 +165,24 @@ function toDeployment(
   };
 }
 
+/** The process type the daemon stores an app-wide limit under. */
+const APP_WIDE_LIMIT = '_all_';
+
 function toProcesses(
   scale: api.ScaleMap,
-  ps: api.ProcessRecord[],
-  limits: api.AppLimit[]
+  all: api.ProcessRecord[],
+  limits: api.AppLimit[],
+  current: string | null
 ): ProcessRecord[] {
+  // Retained deployments keep their containers running for their own URLs; only the
+  // current release's containers count toward its health.
+  const ps = current ? all.filter((p) => p.deployment_id === current) : all;
   const types = new Set<string>([...Object.keys(scale), ...ps.map((p) => p.process_type)]);
   return [...types].sort().map((type) => {
     const running = ps.filter((p) => p.process_type === type);
     const limit =
-      limits.find((l) => l.process_type === type) ?? limits.find((l) => l.process_type === null);
+      limits.find((l) => l.process_type === type) ??
+      limits.find((l) => l.process_type === APP_WIDE_LIMIT);
     return {
       process_type: type,
       scale: scale[type] ?? Math.max(running.length, 1),
@@ -448,11 +456,12 @@ export const client = {
           api.fetchScale(app.name).catch(() => ({})),
         ]);
         const mapped = deployments.map((d) => toDeployment(d));
+        const current = mapped.find((d) => d.status === 'live') ?? null;
         return {
           app,
           domain: domains[0]?.domain ?? null,
-          processes: toProcesses(scale, ps, []),
-          current: mapped.find((d) => d.status === 'live') ?? null,
+          processes: toProcesses(scale, ps, [], current?.id ?? null),
+          current,
           active: mapped.find((d) => IN_PROGRESS.has(d.status)) ?? null,
           recent: mapped.slice(0, 12).map((d) => d.status),
         };
@@ -520,7 +529,7 @@ export const client = {
     return {
       app,
       domains: domains.map(toDomain),
-      processes: toProcesses(scale, ps, limits),
+      processes: toProcesses(scale, ps, limits, live?.id ?? null),
       linked_services: services
         .filter(({ detail }) => detail.links.some((link) => link.name === name))
         .map(({ detail }) => detail.name),
@@ -590,12 +599,12 @@ export const client = {
 
   async deploymentLogs(name: string, id: string): Promise<LogLine[]> {
     const lines = await api.fetchLogs(name, 1000, { deployment: id, source: 'build' });
-    return lines.map((line) => toLogLine(name, line)).reverse();
+    return lines.map((line) => toLogLine(name, line));
   },
 
   async recentLogs(name: string): Promise<LogLine[]> {
     const lines = await api.fetchLogs(name, 400, { source: 'runtime' });
-    return lines.map((line) => toLogLine(name, line)).reverse();
+    return lines.map((line) => toLogLine(name, line));
   },
 
   /** Deploy `image`, or redeploy the image the app is serving. */

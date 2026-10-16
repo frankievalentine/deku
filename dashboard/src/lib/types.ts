@@ -147,10 +147,8 @@ export type ServiceKind = 'postgres' | 'mysql' | 'mariadb' | 'redis' | 'mongodb'
 export interface ManagedService {
   name: string;
   kind: ServiceKind;
-  version?: string;
   status: string;
   linked_apps: string[];
-  volume_size?: string;
   last_backup_at: string | null;
   backup_schedule: { interval_hours: number; keep: number } | null;
 }
