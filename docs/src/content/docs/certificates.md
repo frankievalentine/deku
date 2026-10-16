@@ -84,8 +84,9 @@ every app.
 
 ### Enabling it
 
-In the dashboard, **Routing → Automatic certificates**: turn it on, switch the wildcard on, paste
-the token, and save. Or write the daemon config directly:
+In the dashboard, open **Settings → Certificates**, paste the token under **Wildcard certificate**,
+and choose **Verify and save**. Deku checks the token against Cloudflare before storing it, then
+turns the wildcard on. Or write the daemon config directly:
 
 ```toml
 [acme]
@@ -98,9 +99,12 @@ api_token_file = "/var/lib/deku/acme-api-token"
 client_path = "/var/lib/angie/acme"
 ```
 
-The token itself is written with mode `0600` and only its path is recorded in the config. `Use
-staging` in the dashboard points `directory` at Let's Encrypt's staging environment, which issues
-untrusted certificates with much higher rate limits — the right thing to test with.
+The token itself is written with mode `0600` and only its path is recorded in the config.
+
+To test a new setup, set **Certificate authority** to **Let's Encrypt staging** in the same section.
+That points `directory` at Let's Encrypt's staging environment, which issues certificates browsers do
+not trust, with much higher rate limits. It applies to app-domain certificates and the wildcard
+alike; switch back once issuance works.
 
 The ACME account's contact address is the host's certificate email, the same setting an app's own
 certificate uses:

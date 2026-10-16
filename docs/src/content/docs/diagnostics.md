@@ -56,7 +56,8 @@ visibility:
   raw payload, including `lifecycle`, `expires_at`, and `days_remaining`.
 - `deku doctor` reports a `tls_certificates` check across every TLS-enabled app and fails when any
   certificate is missing or expired.
-- The dashboard's routing panel shows how long the certificate is valid for, with a warning callout.
+- In the dashboard, the app's **Settings → Domains and HTTPS** shows the days left on the installed
+  certificate, turns amber inside 14 days, and says so when it is missing or expired.
 - The alert watcher raises `certificate_expiring`, `certificate_expired`, and `certificate_missing`
   alerts, delivered over the hook surface like any other event.
 

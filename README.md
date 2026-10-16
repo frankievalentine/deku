@@ -141,8 +141,7 @@ The documentation is published at <https://get-deku.vercel.app/>:
 - `crates/deku`: CLI
 - `crates/dekud`: daemon and HTTP API
 - `crates/deku-core`: shared types, auth utilities and file locations
-- `dashboard/`: the shipped Astro + React dashboard
-- `dashboard-next/`: the replacement dashboard (Vite, React, TanStack Router), running on mock data until it is wired to the API
+- `dashboard/`: the web dashboard, a Vite + React single-page app that `dekud` serves
 - `docs/`: Starlight documentation site
 - `scripts/`: installer, release packaging, and smoke tests
 - `templates/`: local starter app catalog for common framework deploys

@@ -10,7 +10,8 @@ Runtime view of how the CLI, daemon, dashboard, and host services fit together.
 Deku is built from a small Rust-first platform stack:
 
 - [Rust](https://www.rust-lang.org/) for the `deku` CLI, the `dekud` daemon, and shared core types
-- [Astro](https://astro.build/) for the dashboard and documentation frontends
+- [React](https://react.dev/) and [Vite](https://vite.dev/) for the dashboard, a single-page app `dekud` serves
+- [Astro](https://astro.build/) with Starlight for the documentation site
 - [Docker Engine](https://www.docker.com/) for app builds, app containers, and managed service containers
 - [BuildKit](https://github.com/moby/buildkit) as the build engine for Railpack language builds
 - [Angie](https://angie.software/) for HTTP routing, reverse proxying, and TLS termination
@@ -78,6 +79,6 @@ is recreated on its existing data volume, and linked apps get the new URL on the
 
 Running Deku directly from a source checkout is a contributor or local-testing workflow, not the main packaged user flow.
 
-If you are working from the repo, build fresh dashboard assets with `cd dashboard && bun run build`. That writes the static site to `dashboard/dist`.
+If you are working from the repo, build fresh dashboard assets with `cd dashboard && bun run build`. That writes the single-page app to `dashboard/dist`; `dekud` serves its files and answers any other non-API path with `index.html`, so a reload on a dashboard URL loads the app.
 
 `dekud` does not embed a compiled dashboard snapshot anymore. If the configured dashboard directory is missing or empty, the daemon stays online and serves a small fallback page that explains how to stage the dashboard bundle.

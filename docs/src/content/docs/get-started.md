@@ -59,11 +59,11 @@ If your browser is on another machine, use the SSH tunnel command printed by `de
 
 After the first deploy, open the app in the dashboard and continue there for day-to-day operations:
 
-- Inspect deployment history and open a deployment detail view
-- Manage config vars, domains, ports, routing, and TLS
-- Adjust scale and review live logs and events
-- Manage networks, storage mounts, and cron entries
-- Review host routing, services, object store, and SSH keys
+- Follow each deploy's steps and build output live, and roll back
+- Read live logs, run a health check, and run one-off commands
+- Manage config vars, domains and certificates, ports, redirects, and access
+- Adjust scale and limits, networks, storage mounts, and scheduled jobs
+- Create services and link them, and review host checks, routing, and settings
 
 If you want to use `git push` deploys later, Deku's embedded SSH endpoint defaults to port `2222` on new installs.
 

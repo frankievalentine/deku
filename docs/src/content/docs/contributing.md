@@ -22,7 +22,7 @@ Use the GitHub repository for issues, pull requests, and release history.
 - `crates/deku`: CLI commands and client behavior
 - `crates/dekud`: Daemon, HTTP API, deploy pipeline, routing, and host integration
 - `crates/deku-core`: Shared types and auth utilities
-- `dashboard/`: Astro + React dashboard
+- `dashboard/`: web dashboard (Vite, React, TanStack Router and Query), served by `dekud`
 - `docs/`: Starlight documentation site
 - `scripts/`: Installer, release packaging, smoke tests, and local CI helpers
 
@@ -53,6 +53,15 @@ bun install --frozen-lockfile
 bun run lint
 bun run check
 bun run build
+```
+
+To work on it against a running daemon, start the Vite dev server. It proxies `/api` to
+`http://127.0.0.1:2810`, or to `DEKU_DAEMON_URL` when set, so the session cookie works as it does in
+production; sign in with the daemon's dashboard token.
+
+```bash
+cd dashboard
+DEKU_DAEMON_URL=http://127.0.0.1:2810 bun run dev
 ```
 
 Docs changes:
